@@ -1,5 +1,7 @@
 # Ordo — autonomous manufacturing orchestration
 
+**Documentation:** read and edit it in [`docs/`](docs/README.md). Start with [architecture](docs/architecture.md) and [product overview](docs/product.md).
+
 Open the `.dc.html` files directly in a browser (keep `support.js`, `doc-page.js` and `_ds/` next to them).
 
 | File | What it is |
@@ -8,7 +10,7 @@ Open the `.dc.html` files directly in a browser (keep `support.js`, `doc-page.js
 | `Ordo Documentation.dc.html` | Product, architecture and validation documentation (printable; File → Print → Save as PDF) |
 | `Ordo Architecture.dc.html` | System architecture diagram (1600 px wide) |
 | `mockups/` | PNG exports of every screen and the architecture diagram |
-| `Data sources.md` | Real-time industrial data providers, endpoints and datasets for building and demoing Ordo |
+| `docs/` | **Editable Markdown documentation**: architecture, product, validation, data model, API, templates, data sources ([start here](docs/README.md)) |
 
 ## Mockups
 - `00-architecture.png` — system architecture
