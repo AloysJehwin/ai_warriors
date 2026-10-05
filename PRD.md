@@ -22,7 +22,246 @@
 
 Modern manufacturing environments (pharmaceutical, electronics, discrete assembly) are crippled by micro-stoppages and manual gate approvals. When operational parameters drift—such as bearing vibration spikes, temperature spikes, or vision quality defects—legacy SCADA/MES applications flag $▲$ out-of-target warnings, pause production, and await human engineering intervention.
 
-**Ordo** addresses this bottleneck by bridging enterprise-grade GxP/21 CFR Part 11 validation workflows with an autonomous agent grid powered by **Google Cloud Vertex AI** and **Gemini 2.0/1.5 Pro**. When line anomalies occur, Ordo’s specialized domain agents negotiate across safety, routing, process, and regulatory constraints to execute real-time line speed adjustments, batch re-routing, automated root cause analysis (RCA), and digital audit sign-offs—resolving up to 80% of line stoppages autonomously while keeping human supervisors in the loop for high-risk decisions.
+**Ordo** addresses this bottleneck by bridging enterprise-grade validation workflows with an AI-assisted agent grid powered by **Google Cloud Vertex AI** and **Gemini 2.0/1.5 Pro**. When operational anomalies occur, Ordo’s specialized agents analyze sensor drift, forecast failure risk, suggest safe interventions, and generate an evidence-backed audit trail. The system is designed to reduce downtime, shorten manual investigation time, and provide a governed path from anomaly detection to corrective action while keeping human operators in the loop for high-risk decisions.
+
+### Why this is the right scope for a hackathon
+
+This project aims to demonstrate a clear and compelling operational loop rather than a fully autonomous factory control platform. The product is intentionally scoped around a single high-value use case: detecting a line anomaly, explaining the likely root cause, recommending a safe action, and recording the decision trail. This approach delivers a realistic demo path while staying technically achievable within a short hackathon timeline.
+
+### Hackathon MVP Scope
+
+The Minimum Viable Product for the challenge will center on the following user journey:
+
+1. A simulated production line experiences a threshold breach or quality defect.
+2. The system detects the issue using live telemetry and rules-based monitoring.
+3. A predictive model estimates failure risk and time-to-failure.
+4. Gemini explains the likely root cause in natural language.
+5. The platform recommends a limited safe action such as rerouting a batch, slowing the line, or holding a gate.
+6. The policy guard checks whether the action is low-risk or requires human approval.
+7. The user approves, overrides, or rejects the action.
+8. The system records the decision and produces an audit summary for operators or validators.
+
+This flow is the core value proposition and the main story for the live demo.
+
+### Product scope boundaries and trade-offs
+
+To maximize competitiveness, Ordo will intentionally prioritize the following over broad platform ambition:
+
+- Live anomaly detection and response workflow
+- AI root cause analysis and recommendation engine
+- Human-in-the-loop decision approval
+- Audit/evidence ledger for governance and transparency
+- Clear, responsive dashboard for operations teams
+
+The following items are intentionally secondary for the hackathon and should be treated as stretch goals if delivery risk is low:
+
+- Full enterprise ERP or MES integration
+- Large-scale multi-plant orchestration
+- Multi-line production optimization beyond a single demo line
+- Exhaustive regulatory certification claims
+- Full fleet logistics optimization at scale
+
+### Safety, governance, and policy guardrails
+
+A critical requirement for the platform is safe operation in industrial settings. Because manufacturing environments are sensitive to false positives and unsafe interventions, Ordo implements a policy guard that restricts autonomous behavior by risk level.
+
+- L1: Assist — AI flags anomalies and suggests fixes; the operator executes the action.
+- L2: Advisory — AI drafts recommended actions and shows approval logic; the user clicks to approve.
+- L3: Conditional — AI can execute only low-risk, predefined workflows, and it immediately escalates if threshold confidence or risk is high.
+- L4: Autonomous — Reserved for limited, highly constrained scenarios and only when the policy guard deems the action safe and traceable.
+
+This approach reduces over-claiming and creates a more credible product story. It also makes the live demo safer and more realistic, especially when the judges ask how the system avoids harmful automation.
+
+### Compliance framing
+
+The PRD uses compliance terminology to signal enterprise relevance; however, the hackathon implementation is best framed as a regulatory-aware workflow and evidence-generation system rather than a fully compliant production system. The intent is to mirror how industrial quality and safety teams operate:
+
+- evidence capture
+- decision logging
+- operator signoff
+- traceable root cause explanation
+- structured summary for audits and handoff
+
+This preserves the strategic value of GxP-inspired governance while staying honest about the prototype context.
+
+### Target users and user value
+
+Primary users:
+
+- Plant engineers responsible for line health and availability
+- Operations managers monitoring throughput and quality risk
+- Maintenance teams prioritizing interventions
+- QA and compliance stakeholders reviewing evidence and handoff summaries
+
+Primary value delivered:
+
+- Faster anomaly detection and lower mean time to diagnosis
+- Better prioritization of intervention decisions
+- Reduced manual investigation and approval friction
+- Increased confidence in recovery actions through recorded rationale
+- Reduced production downtime from fast, guided action
+
+### KPI and success measures
+
+To make the project measurable and judge-friendly, Ordo will define success based on practical operational outcomes rather than abstract AI claims. Potential KPIs include:
+
+- Time to detect line anomaly
+- Time to root-cause diagnosis
+- Downtime avoided during simulated incidents
+- Percentage of low-risk actions executed without human intervention
+- Percentage of actions requiring operator approval
+- Confidence score and explanation quality for AI recommendations
+- Audit trail completeness and traceability
+
+These metrics will provide clear evidence of usefulness during the showcase and help turn the demo into a product story rather than a feature list.
+
+### Core demo flow and event narrative
+
+The primary live demonstration should follow a single, polished scenario:
+
+1. A simulated line fault is injected into the operator dashboard.
+2. The system recognises the threshold breach and highlights the affected machine.
+3. The predictive maintenance module estimates imminent failure risk.
+4. Gemini synthesizes a concise root-cause explanation using telemetry and quality signals.
+5. The healer agent recommends a safe intervention such as rerouting a batch or slowing production.
+6. The policy guard validates action safety and displays human approval requirements.
+7. The operator approves or overrides the action.
+8. The UI updates in real time to reflect the new machine state and downtime avoided.
+9. The compliance ledger stores the evidence and creates a short shift summary.
+
+This should be the central storyline of the demo video and product walk-through.
+
+### Judge-facing demo story (2–3 minute narrative)
+
+The demo should be narrated as follows:
+
+> A production line begins drifting outside safe operating thresholds. Ordo detects the anomaly, predicts a likely equipment failure horizon, and explains the root cause in plain language. It recommends a low-risk intervention, checks the action against a policy guard, and asks the operator to approve or override. Once confirmed, the system updates the line state, documents the reasoning and evidence in an audit trail, and shows the impact in downtime avoided and production recovery.
+
+This storyline is short, clear, and directly aligned with the value proposition. It also helps judges understand the impact quickly without needing to navigate the entire architecture.
+
+### Out-of-scope items for this hackathon
+
+The following are intentionally out of scope for the first implementation to keep the project feasible and high-impact:
+
+- enterprise-wide MES deployment
+- multi-plant fleet optimization
+- large-scale supply chain orchestration
+- formal certification or regulatory signoff beyond prototype workflows
+- deep ERP system integration
+- broad microservice platform complexity without direct demo benefit
+
+### User personas and pain points
+
+**Plant Engineer**
+- Pain: limited visibility into line drift; manual triage of inspection alerts; delayed decisions during micro-stoppages.
+- Need: a single operational view with root-cause explanation and recommended action.
+
+**Maintenance Lead**
+- Pain: cannot predict which machine is likely to fail next; manual review of noisy sensor streams.
+- Need: risk forecasting and intervention prioritization with clear evidence.
+
+**Operations Manager**
+- Pain: downtime reduces throughput and schedule adherence; decisions often rely on fragmented dashboards.
+- Need: a real-time advisory layer that reduces downtime and supports faster recovery.
+
+**QA / Compliance Stakeholder**
+- Pain: quality deviations and interventions are difficult to explain or audit after the fact.
+- Need: traceable decisions and summarized evidence packages for shift handoff and review.
+
+### Allowed vs blocked autonomous actions
+
+To make the governance model explicit, the system should distinguish between actions that are safe to automate and actions that require operator review.
+
+| Action Type | Risk Level | Auto-Execute? | Approval Required? |
+| --- | --- | --- | --- |
+| Slow line by 5–10% within predefined range | Low | Yes | No |
+| Hold production gate for a single batch | Low to Medium | Yes, if within guardrail | Optional |
+| Reroute a batch to alternate line | Medium | Conditional | Yes for high-priority or high-volume reroutes |
+| Trigger machine maintenance work order | Medium | Conditional | Usually yes |
+| Increase line speed beyond safe threshold | High | No | Yes |
+| Unbounded process parameter change | High | No | Mandatory |
+
+This explicit matrix helps show that the product is not just “AI doing random actions”; it is a policy-enabled operational assistant with safety boundaries.
+
+### Realism, data, and simulation model
+
+To remain credible and robust within a hackathon, the system will clearly distinguish between real implementation and simulated industrial context:
+
+- Real: AI orchestration, telemetry processing, recommendation logic, dashboard interactions, policies, audit records
+- Simulated: production line faults, machine health, batch flows, shop floor actions, some operational signals
+- Mocked: ERP or MES datastores, extended supplier/inventory flows, broad fleet logistics
+
+This level of transparency reduces over-claiming and gives the team space to focus on the most impactful demonstration rather than full production realism.
+
+### Example anomaly payload (mock data)
+
+```json
+{
+  "machine_id": "CNC-05",
+  "line_id": "LINE-02",
+  "timestamp": "2026-10-05T10:42:17Z",
+  "sensor_readings": {
+    "vibration": 8.7,
+    "temperature": 88,
+    "runtime_hours": 1840,
+    "cycle_time_ms": 1800
+  },
+  "quality_signal": "minor surface deviation",
+  "severity": "warning",
+  "predicted_failure_time_hours": 12,
+  "confidence": 0.82
+}
+```
+
+This simplified example helps the team explain the data flow clearly during the demo and gives judges a concrete signal of what the system is analyzing.
+
+### Risks and mitigations
+
+#### 1. Scope creep
+Risk: Too many features dilute implementation quality.
+Mitigation: Keep the MVP focused on one or two line-failure scenarios with a polished end-to-end demo.
+
+#### 2. Overstated autonomy
+Risk: The project appears unrealistic or unsafe.
+Mitigation: Present the system as AI-assisted decision support with explicit guardrails and human approvals.
+
+#### 3. Compliance overclaiming
+Risk: Regulatory language makes the product seem more mature than it is.
+Mitigation: Frame compliance features as governance-ready artifacts and audit evidence generation rather than formal certification.
+
+#### 4. Weak demo loop
+Risk: AI outputs are not visible or compelling in a live setting.
+Mitigation: Build a clear event-driven demo with visible KPI changes, recommended actions, and decision history.
+
+#### 5. Technical complexity
+Risk: Too many cloud services reduce reliability.
+Mitigation: Use a lean architecture that supports a working frontend, backend, AI calls, and a visible event stream without unnecessary complexity.
+
+### Feature prioritization for the hackathon
+
+Must-have features:
+
+- telemetry anomaly detection
+- predictive risk estimation
+- root cause explanation
+- safe intervention recommendation
+- human-in-the-loop approval flow
+- audit log and shift summary
+- real-time dashboard updates
+
+Stretch features:
+
+- multimodal defect analysis using uploaded images
+- advanced batch rerouting logic
+- richer compliance report generation
+- natural-language pipeline builder
+
+Future / not essential for hackathon core:
+
+- full logistics optimization
+- ERP/MES data synchronization
+- plant-wide fleet scheduling
+- end-to-end enterprise deployment maturity
 
 ---
 
