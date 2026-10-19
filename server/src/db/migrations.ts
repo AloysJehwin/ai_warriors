@@ -224,4 +224,14 @@ CREATE TABLE agent_nfts (site_id TEXT NOT NULL REFERENCES sites(id), agent TEXT 
 ALTER TABLE sites ADD COLUMN public_pipelines BOOLEAN NOT NULL DEFAULT true;
 `,
   },
+  {
+    version: 11,
+    name: "one World ID per validator",
+    sql: `
+ALTER TABLE onboarding_requests ADD COLUMN world_id_nullifier TEXT;
+CREATE TABLE validator_humans (site_id TEXT NOT NULL REFERENCES sites(id), nullifier TEXT NOT NULL, user_id TEXT NOT NULL REFERENCES users(id),
+  address TEXT NOT NULL, verified_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY (site_id, nullifier));
+CREATE UNIQUE INDEX validator_humans_user ON validator_humans (site_id, user_id);
+`,
+  },
 ];

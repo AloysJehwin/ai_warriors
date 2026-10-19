@@ -55,6 +55,8 @@ export interface Status {
   signatureChainId: number;
   restrictedSiteCreation: boolean;
   trust: TrustChainInfo | null;
+  /** set when validators must prove with World ID that they are one person */
+  worldId: { appId: string; action: string; environment: string } | null;
 }
 export interface TrustChainInfo {
   chainId: number;
@@ -105,8 +107,8 @@ export interface ChainStatus {
   registeredAt?: string | null;
 }
 export interface ValidatorsView {
-  validators: { userId: string; address: string; name: string | null; scope: string; scopeLabel: string; status: string; approvedAt: string; onchain: { stake: string; unlockAt: number; active: boolean } | null }[];
-  me: { ok: boolean; reason: string | null; row: { scope: string; status: string } | null };
+  validators: { userId: string; address: string; name: string | null; scope: string; scopeLabel: string; status: string; approvedAt: string; human: boolean; onchain: { stake: string; unlockAt: number; active: boolean } | null }[];
+  me: { ok: boolean; reason: string | null; row: { scope: string; status: string } | null; human: boolean };
   chain: ChainStatus;
   proposals: {
     id: string;
