@@ -16,7 +16,14 @@ pnpm --filter @ordo/contracts test     # compile with npm solc + 16 tests on an 
 
 ## Hedera testnet
 
-Live: `OrdoTrust` at [`0x608cba52976e34fa160fe64ff0499a8a5a4eb9e1`](https://hashscan.io/testnet/contract/0x608cba52976e34fa160fe64ff0499a8a5a4eb9e1).
+Live on Hedera testnet:
+
+| What | Where |
+| --- | --- |
+| `OrdoTrust` | [`0x608cba52976e34fa160fe64ff0499a8a5a4eb9e1`](https://hashscan.io/testnet/contract/0x608cba52976e34fa160fe64ff0499a8a5a4eb9e1) |
+| `OrdoWorkOrders` | [`0x600807998f50258bc0319afab3411225c51a993f`](https://hashscan.io/testnet/contract/0x600807998f50258bc0319afab3411225c51a993f) |
+| `OrdoPolicies` | [`0xfcde36a4668c18c219ba1f3696bb0d68b9babd43`](https://hashscan.io/testnet/contract/0xfcde36a4668c18c219ba1f3696bb0d68b9babd43) |
+| Ledger topic (HCS) | [`0.0.11087048`](https://hashscan.io/testnet/topic/0.0.11087048) |
 
 Deployments run in GitHub Actions with the operator account held in the `hedera-testnet` environment (`HEDERA_OPERATOR_ID`, `HEDERA_OPERATOR_KEY`, an **ECDSA** key):
 
