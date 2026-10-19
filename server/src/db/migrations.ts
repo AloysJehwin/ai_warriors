@@ -2,6 +2,7 @@
  * Versioned, forward-only migrations. Each runs once, in order, inside a transaction.
  * v1 = the original demo schema (kept so existing databases upgrade cleanly).
  * v2 = real accounts, sites, assets, telemetry, templates, runs, inbox, validation, signatures.
+ * v3 = validation workflow · v4 = onboarding and on-chain trust · v5 = agent work orders and autonomy proposals.
  */
 export const MIGRATIONS: { version: number; name: string; sql: string }[] = [
   {
@@ -150,6 +151,25 @@ CREATE TABLE slash_proposals (id TEXT PRIMARY KEY, site_id TEXT NOT NULL REFEREN
   status TEXT NOT NULL DEFAULT 'open', created_at TIMESTAMPTZ NOT NULL DEFAULT now(), executed_at TIMESTAMPTZ);
 CREATE TABLE slash_signatures (proposal_id TEXT NOT NULL REFERENCES slash_proposals(id), user_id TEXT NOT NULL, address TEXT NOT NULL,
   signature_id TEXT NOT NULL, capacity TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY (proposal_id, user_id));
+`,
+  },
+  {
+    version: 5,
+    name: "agent work orders, autonomy proposals",
+    sql: `
+CREATE TABLE site_agents (site_id TEXT PRIMARY KEY REFERENCES sites(id), address TEXT NOT NULL, per_order TEXT NOT NULL, per_day TEXT NOT NULL,
+  set_by TEXT NOT NULL, signature_id TEXT NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE TABLE work_orders (id TEXT PRIMARY KEY, site_id TEXT NOT NULL REFERENCES sites(id), asset_id TEXT, run_id TEXT, title TEXT NOT NULL,
+  priority TEXT NOT NULL, vendor_id TEXT, vendor_address TEXT, amount TEXT, incident_hash TEXT, status TEXT NOT NULL, payer TEXT,
+  escrow_tx TEXT, escrow_url TEXT, expires_at TIMESTAMPTZ, released_by TEXT, error TEXT, opened_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE INDEX work_orders_site ON work_orders (site_id, created_at DESC);
+ALTER TABLE lines ADD COLUMN policy_version INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE autonomy_proposals (id TEXT PRIMARY KEY, site_id TEXT NOT NULL REFERENCES sites(id), line_id TEXT NOT NULL REFERENCES lines(id),
+  from_level TEXT NOT NULL, to_level TEXT NOT NULL, policy_hash TEXT NOT NULL, version INTEGER NOT NULL, comment TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'open', created_by TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), decided_at TIMESTAMPTZ);
+CREATE TABLE autonomy_signatures (proposal_id TEXT NOT NULL REFERENCES autonomy_proposals(id), user_id TEXT NOT NULL, address TEXT NOT NULL,
+  signature_id TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY (proposal_id, user_id));
 `,
   },
 ];

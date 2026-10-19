@@ -9,6 +9,7 @@ import { newId, type PlantService } from "../plant/plant.js";
 import type { Recorder } from "./recorder.js";
 import type { Templates } from "./templates.js";
 import type { Trust } from "./trust.js";
+import type { WorkOrders } from "./workorders.js";
 
 export type RaiseInput = Omit<InboxItemView, "id" | "status" | "decidedBy" | "decidedOption" | "reason" | "signatureId" | "createdAt" | "decidedAt" | "incidentId"> & { incidentId?: string | null };
 export type ActionCall = InboxOption["action"];
@@ -73,6 +74,7 @@ export const REJECT = -1;
 export class Inbox {
   /** set after construction */
   trust!: Trust;
+  workOrders?: WorkOrders;
   constructor(
     private db: Db,
     private rec: Recorder,
@@ -248,7 +250,10 @@ export class Inbox {
         const due = new Date(Date.now() + (action.args.windowMinutes + 120) * 60_000).toISOString();
         const runId = await this.engine.start(siteId, actor, { templateVersionId: pm.versionId, orderRef: `WO · ${a.name} · ${action.args.priority}`, quantity: 1, dueAt: due });
         await this.rec.decide(siteId, { agent: actor, kind: "work_order.opened", assetId: a.id, runId, summary: `Work order for ${a.name} (${action.args.priority}) opened as ${runId}`, data: action.args });
-        return `Work order ${runId}`;
+        const wo = await this.workOrders?.open(siteId, actor, { assetId: a.id, assetName: a.name, assetKind: a.kind, runId, priority: action.args.priority, incidentHash: await this.rec.headHash() });
+        if (!wo) return `Work order ${runId}`;
+        const pay = wo.status === "escrowed" ? `, payment escrowed for ${wo.vendor!.company}` : wo.status === "escrow_failed" ? ", escrow failed" : wo.vendor ? `, assigned to ${wo.vendor.company}` : ", no vendor yet";
+        return `Work order ${wo.id} (run ${runId})${pay}`;
       }
     }
   }

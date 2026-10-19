@@ -2,18 +2,21 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { Config } from "./config.js";
 import { geminiProvider, OfflineLlm, openAiCompatProvider, type LlmProvider } from "./adapters/llm.js";
-import { LocalSignedAnchor, MockPayments, type AnchorAdapter, type PaymentRail } from "./adapters/rails.js";
+import { LocalSignedAnchor, type AnchorAdapter } from "./adapters/rails.js";
 import { Agents } from "./agents/agents.js";
 import { Auth, Signatures } from "./auth/auth.js";
+import { Autonomy } from "./core/autonomy.js";
 import { Inbox } from "./core/inbox.js";
 import { Monitor } from "./core/monitor.js";
 import { Proof } from "./core/proof.js";
 import { Recorder } from "./core/recorder.js";
 import { Templates } from "./core/templates.js";
 import { Validation } from "./core/validation.js";
+import { WorkOrders } from "./core/workorders.js";
 import { Trust } from "./core/trust.js";
+import { EvmAgentPayer, type AgentPayer } from "./chain/agent.js";
 import { TrustChain } from "./chain/trust.js";
-import type { Transport } from "viem";
+import type { Hex, Transport } from "viem";
 import { migrate, openDb, type Db } from "./db/db.js";
 import { LedgerStore } from "./db/ledger-store.js";
 import { loadPolicy } from "./domain/policy.js";
@@ -45,10 +48,10 @@ export interface System {
   validation: Validation;
   trust: Trust;
   agents: Agents;
-  payments: PaymentRail;
+  workOrders: WorkOrders;
+  autonomy: Autonomy;
   ensNames: { lookup(addresses: string[]): Promise<Record<string, string | null>> } | null;
-  policyCheck?: () => Promise<{ ok: boolean; detail: string }>;
-  /** One engine cycle: pull data, advance runs, watch for anomalies, anchor. Throttled and lease-guarded. */
+  /** One engine cycle: pull data, advance runs, watch for anomalies, refund expired escrows, anchor. Throttled and lease-guarded. */
   advance(force?: boolean): Promise<void>;
   close(): Promise<void>;
 }
@@ -88,15 +91,12 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
   let anchor: AnchorAdapter = new LocalSignedAnchor(cfg.LEDGER_SIGNING_KEY);
   if (anchor instanceof LocalSignedAnchor && anchor.ephemeral)
     warnings.push(cfg.VERCEL ? "LEDGER_SIGNING_KEY not set: each serverless instance signs with a different key." : "LEDGER_SIGNING_KEY not set; checkpoints use a key that changes on restart");
-  let payments: PaymentRail = new MockPayments();
-  let policyCheck: System["policyCheck"];
-  if (cfg.ANCHOR === "hedera" || cfg.PAYMENTS === "hedera") {
+  let hedera: Awaited<ReturnType<typeof import("./chain/hedera.js")["hederaFromConfig"]>> | null = null;
+  if (cfg.ANCHOR === "hedera") {
     try {
       const h = await import("./chain/hedera.js");
-      const hedera = h.hederaFromConfig(cfg);
-      if (cfg.ANCHOR === "hedera") anchor = hedera.anchor();
-      if (cfg.PAYMENTS === "hedera") payments = hedera.payments();
-      policyCheck = hedera.policyRegistryCheck(policy.policy.id, policy.hash);
+      hedera = h.hederaFromConfig(cfg);
+      anchor = hedera.anchor();
     } catch (e) {
       warnings.push(`Hedera not configured (${e instanceof Error ? e.message : e}); using the local signed anchor`);
     }
@@ -129,6 +129,8 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
         rpcUrl: cfg.TRUST_RPC_URL ?? "http://in-process",
         explorerUrl: cfg.TRUST_EXPLORER_URL ?? null,
         address: cfg.TRUST_CONTRACT_ADDRESS as `0x${string}`,
+        workOrders: (cfg.TRUST_WORKORDERS_ADDRESS as `0x${string}` | undefined) ?? null,
+        policies: (cfg.TRUST_POLICIES_ADDRESS as `0x${string}` | undefined) ?? null,
         relayerKey: cfg.TRUST_RELAYER_KEY as `0x${string}`,
         symbol: cfg.TRUST_SYMBOL,
         decimals: cfg.TRUST_DECIMALS,
@@ -142,6 +144,38 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
   inbox.trust = trust;
   const validation = new Validation(db, rec, ledger, sigs, engine, inbox, cfg.SIGNATURE_CHAIN_ID, trust);
 
+  // ---- The maintenance agent's own account: it escrows vendor payments in OrdoWorkOrders ----
+  let payer: AgentPayer | null = null;
+  // the Agent Kit policy reads work orders, which need the payer: bind it late
+  const checkEscrow = (p: { siteId: string; workOrderId: string; vendor: string; amount: string }) => workOrders.checkEscrow(p);
+  if (trustChain && cfg.TRUST_WORKORDERS_ADDRESS && cfg.HEDERA_AGENT_KEY) {
+    try {
+      const onHedera = [295, 296, 297].includes(trustChain.cfg.chainId);
+      if (onHedera && cfg.HEDERA_AGENT_ID) {
+        const { HederaAgentKitPayer } = await import("./chain/agent-kit.js");
+        payer = new HederaAgentKitPayer({
+          network: cfg.HEDERA_NETWORK,
+          agentId: cfg.HEDERA_AGENT_ID,
+          agentKey: cfg.HEDERA_AGENT_KEY,
+          workOrders: cfg.TRUST_WORKORDERS_ADDRESS as Hex,
+          check: checkEscrow,
+          audit: hedera && cfg.HEDERA_TOPIC_ID ? { topicId: cfg.HEDERA_TOPIC_ID, client: hedera.client } : undefined,
+        });
+      } else {
+        const raw = cfg.HEDERA_AGENT_KEY.trim();
+        const key = /^(0x)?[0-9a-fA-F]{64}$/.test(raw) ? raw.replace(/^(0x)?/, "0x") : `0x${(await import("./chain/hedera.js")).parseHederaKey(raw).toStringRaw()}`;
+        payer = new EvmAgentPayer({ ...trustChain.cfg, workOrders: cfg.TRUST_WORKORDERS_ADDRESS as Hex }, key as Hex, opts.trustTransport);
+      }
+    } catch (e) {
+      warnings.push(`Agent account unusable (${e instanceof Error ? e.message : e}); work orders assign vendors without escrow`);
+    }
+  } else if (cfg.TRUST_WORKORDERS_ADDRESS && !cfg.HEDERA_AGENT_KEY) {
+    warnings.push("TRUST_WORKORDERS_ADDRESS is set but HEDERA_AGENT_KEY is not: work orders assign vendors without escrow");
+  }
+  const workOrders = new WorkOrders(db, rec, sigs, trust, payer, now);
+  inbox.workOrders = workOrders;
+  const autonomy = new Autonomy(db, rec, sigs, plant, trust, policy, cfg.SIGNATURE_CHAIN_ID);
+
   const advance = async (force = false) => {
     // throttle: one cycle per 4 s across all instances (the lease is left to expire, not released)
     if (!force && !(await plant.tryLease("advance", 4_000))) return;
@@ -149,6 +183,7 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
     await engine.tick();
     const sites = await db.query<{ id: string }>("SELECT id FROM sites");
     for (const s of sites.rows) await monitor.scan(s.id);
+    await workOrders.refundExpired().catch((e) => console.error("[ordo] refunds", e));
     const head = await ledger.head();
     const last = (await proof.anchors(1))[0];
     if (head && (!last || head.seq - last.toSeq >= cfg.ANCHOR_EVERY || (head.seq > last.toSeq && now() - Date.parse(last.ts) > 30 * 60_000))) await proof.anchorHead(null, null).catch((e) => console.error("[ordo] anchor", e));
@@ -161,8 +196,12 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
     { rail: "trust contract", mode: trustChain ? `OrdoTrust ${cfg.TRUST_CONTRACT_ADDRESS} · ${cfg.TRUST_CHAIN_NAME} (${cfg.TRUST_CHAIN_ID})` : "off: validators approved in-app, no stakes", live: Boolean(trustChain) },
     { rail: "ai", mode: llm.name === "gemini" ? `gemini:${cfg.GEMINI_MODEL}` : llm.name, live: llm.name !== "offline" },
     { rail: "anchor", mode: anchor.kind, live: anchor.kind !== "local-signed" },
-    { rail: "payments", mode: payments.kind, live: payments.kind !== "mock" },
-    { rail: "policy registry", mode: policyCheck ? "OrdoPolicyRegistry" : "hash only", live: Boolean(policyCheck) },
+    {
+      rail: "agent payments",
+      mode: workOrders.live ? `${payer!.kind === "hedera-agent-kit" ? "Hedera Agent Kit" : "agent key"} → OrdoWorkOrders ${cfg.TRUST_WORKORDERS_ADDRESS}` : "off: work orders assign a vendor, no escrow",
+      live: workOrders.live,
+    },
+    { rail: "autonomy policies", mode: trustChain?.cfg.policies ? `OrdoPolicies ${cfg.TRUST_POLICIES_ADDRESS}` : "in-app signatures", live: Boolean(trustChain?.cfg.policies) },
   ];
 
   return {
@@ -184,9 +223,9 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
     validation,
     trust,
     agents,
-    payments,
+    workOrders,
+    autonomy,
     ensNames,
-    policyCheck,
     advance,
     close: () => db.close(),
   };

@@ -64,35 +64,45 @@ await check("ai: openai-compatible", cfg.LLM_PROVIDER === "openai_compat", async
 await check("ai: 0g compute", cfg.LLM_PROVIDER === "0g", async () => `RPC chain ${parseInt(await rpc(cfg.ZG_RPC_URL, "eth_chainId"), 16)}`);
 
 // ---- Hedera ----
-const hedera = cfg.ANCHOR === "hedera" || cfg.PAYMENTS === "hedera";
 const mirror = (cfg.HEDERA_MIRROR_URL ?? `https://${cfg.HEDERA_NETWORK}.mirrornode.hedera.com`).replace(/\/$/, "");
-await check("hedera: operator", hedera, async () => {
+const hbarOf = (a: any) => Number(a.balance?.balance ?? 0) / 1e8;
+await check("hedera: operator", cfg.ANCHOR === "hedera", async () => {
   const a = await json(`${mirror}/api/v1/accounts/${cfg.HEDERA_OPERATOR_ID}`);
-  const hbar = Number(a.balance?.balance ?? 0) / 1e8;
-  if (hbar < 20) throw new Error(`operator balance ${hbar} HBAR (top up from the faucet)`);
-  return `${cfg.HEDERA_OPERATOR_ID} · ${hbar.toFixed(1)} HBAR`;
+  if (hbarOf(a) < 5) throw new Error(`operator balance ${hbarOf(a)} HBAR (top up from the faucet)`);
+  return `${cfg.HEDERA_OPERATOR_ID} · ${hbarOf(a).toFixed(1)} HBAR`;
 });
 await check("hedera: ledger topic", cfg.ANCHOR === "hedera", async () => {
   const t = await json(`${mirror}/api/v1/topics/${cfg.HEDERA_TOPIC_ID}`);
   return `${cfg.HEDERA_TOPIC_ID} · memo "${t.memo}"`;
 });
-await check("hedera: json-rpc", Boolean(cfg.HEDERA_VAULT_ADDRESS || cfg.HEDERA_POLICY_REGISTRY_ADDRESS), async () => {
-  const id = parseInt(await rpc(cfg.HEDERA_JSON_RPC_URL, "eth_chainId"), 16);
-  if (cfg.HEDERA_NETWORK === "testnet" && id !== 296) throw new Error(`chain ${id}, expected 296`);
-  return `${cfg.HEDERA_JSON_RPC_URL} · chain ${id}`;
+await check("hedera: agent account", Boolean(cfg.HEDERA_AGENT_ID), async () => {
+  if (!cfg.HEDERA_AGENT_KEY) throw new Error("HEDERA_AGENT_KEY missing");
+  const a = await json(`${mirror}/api/v1/accounts/${cfg.HEDERA_AGENT_ID}`);
+  if (hbarOf(a) < 1) throw new Error(`agent balance ${hbarOf(a)} HBAR: it pays gas for escrows`);
+  return `${cfg.HEDERA_AGENT_ID} · ${a.evm_address} · ${hbarOf(a).toFixed(1)} HBAR`;
 });
-await check("hedera: AgentSpendVault", Boolean(cfg.HEDERA_VAULT_ADDRESS), async () => {
-  const code = await rpc(cfg.HEDERA_JSON_RPC_URL, "eth_getCode", [cfg.HEDERA_VAULT_ADDRESS, "latest"]);
-  if (!code || code === "0x") throw new Error("no contract at HEDERA_VAULT_ADDRESS");
-  const bal = BigInt(await rpc(cfg.HEDERA_JSON_RPC_URL, "eth_getBalance", [cfg.HEDERA_VAULT_ADDRESS, "latest"]));
-  return `deployed · balance ${(Number(bal) / 1e18).toFixed(2)} HBAR`;
+
+// ---- Contracts (OrdoTrust, OrdoWorkOrders, OrdoPolicies on the trust chain) ----
+for (const [name, address] of [
+  ["OrdoTrust", cfg.TRUST_CONTRACT_ADDRESS],
+  ["OrdoWorkOrders", cfg.TRUST_WORKORDERS_ADDRESS],
+  ["OrdoPolicies", cfg.TRUST_POLICIES_ADDRESS],
+] as const)
+  await check(`chain: ${name}`, Boolean(address && cfg.TRUST_RPC_URL), async () => {
+    const id = parseInt(await rpc(cfg.TRUST_RPC_URL!, "eth_chainId"), 16);
+    if (cfg.TRUST_CHAIN_ID && id !== cfg.TRUST_CHAIN_ID) throw new Error(`RPC is chain ${id}, TRUST_CHAIN_ID is ${cfg.TRUST_CHAIN_ID}`);
+    const code = await rpc(cfg.TRUST_RPC_URL!, "eth_getCode", [address, "latest"]);
+    if (!code || code === "0x") throw new Error(`no contract at ${address}`);
+    return `${address} · chain ${id}`;
+  });
+await check("chain: relayer", Boolean(cfg.TRUST_RELAYER_KEY && cfg.TRUST_RPC_URL), async () => {
+  const { privateKeyToAccount } = await import("viem/accounts");
+  const address = privateKeyToAccount(cfg.TRUST_RELAYER_KEY as `0x${string}`).address;
+  const balance = Number(BigInt(await rpc(cfg.TRUST_RPC_URL!, "eth_getBalance", [address, "latest"]))) / 1e18;
+  if (balance < 1) throw new Error(`relayer ${address} has ${balance.toFixed(3)} ${cfg.TRUST_SYMBOL}: it pays gas for every relay`);
+  return `${address} · ${balance.toFixed(2)} ${cfg.TRUST_SYMBOL}`;
 });
-await check("hedera: policy registry", Boolean(cfg.HEDERA_POLICY_REGISTRY_ADDRESS), async () => {
-  const { hederaFromConfig } = await import("../src/chain/hedera.js");
-  const r = await hederaFromConfig(cfg).policyRegistryCheck(policy.policy.id, policy.hash)!();
-  if (!r.ok) throw new Error(r.detail);
-  return r.detail;
-});
+if (cfg.TRUST_CONTRACT_ADDRESS && !cfg.TRUST_RELAYER_KEY) warn("chain: relayer", "TRUST_RELAYER_KEY not set: the contracts are configured but nothing can relay to them");
 
 // ---- ENS ----
 await check("ens", cfg.IDENTITY === "ens", async () => {

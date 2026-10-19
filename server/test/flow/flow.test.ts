@@ -203,14 +203,35 @@ describe("agents on real telemetry", () => {
     expect(r.status).toBe(200);
     const runs = (await admin.call("GET", `${S()}/runs`)).json;
     expect(runs.some((x: any) => x.templateName === "Predictive maintenance" && x.orderRef.includes("CNC-01"))).toBe(true);
+    // the work order is recorded; with no vendor onboarded and no contract it is unassigned, nothing is paid
+    const wo = (await admin.call("GET", `${S()}/work-orders`)).json;
+    expect(wo.setup.configured).toBe(false);
+    expect(wo.items[0]).toMatchObject({ status: "unassigned", vendor: null, escrow: null });
   });
 
-  it("autonomy changes need the plant manager's signature", async () => {
+  it("raising autonomy needs two plant managers' signatures, lowering one", async () => {
     const lineId = (await admin.call("GET", S())).json.lines[0].id;
+    const change = async (who: Client, level: string) => {
+      const typed = (await who.call("POST", `${S()}/lines/${lineId}/autonomy/sign-request`, { level })).json;
+      return who.call("PUT", `${S()}/lines/${lineId}/autonomy`, { level, nonce: typed.message.nonce, signature: await who.sign(typed) });
+    };
     expect((await operator.call("POST", `${S()}/lines/${lineId}/autonomy/sign-request`, { level: "L3" })).status).toBe(403);
-    const typed = (await pm.call("POST", `${S()}/lines/${lineId}/autonomy/sign-request`, { level: "L3" })).json;
-    const r = await pm.call("PUT", `${S()}/lines/${lineId}/autonomy`, { level: "L3", nonce: typed.message.nonce, signature: await pm.sign(typed) });
-    expect(r.json.lines[0].autonomy).toBe("L3");
+    // raise to L3: the first plant manager's signature opens a proposal, the line does not change yet
+    let r = await change(pm, "L3");
+    expect(r.json.proposal).toMatchObject({ status: "open", required: 2, from: "L2", to: "L3" });
+    expect(r.json.site.lines[0].autonomy).toBe("L2");
+    expect((await change(pm, "L3")).status).toBe(409); // the same person cannot sign twice
+    // the admin co-signs: applied, and the policy version moves on
+    r = await change(admin, "L3");
+    expect(r.json.proposal).toMatchObject({ status: "applied", version: 1 });
+    expect(r.json.proposal.signers).toHaveLength(2);
+    expect(r.json.site.lines[0].autonomy).toBe("L3");
+    // lowering is one signature, applied at once
+    r = await change(pm, "L2");
+    expect(r.json.proposal).toMatchObject({ status: "applied", required: 1, version: 2 });
+    expect(r.json.site.lines[0].autonomy).toBe("L2");
+    const decisions = (await admin.call("GET", `${S()}/decisions?limit=100`)).json;
+    expect(decisions.filter((d: any) => d.kind === "autonomy.set")).toHaveLength(2);
   });
 });
 

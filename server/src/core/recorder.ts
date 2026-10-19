@@ -62,6 +62,11 @@ export class Recorder {
     return this.ledger.append({ ts: new Date().toISOString(), actor, type, subject, payload });
   }
 
+  /** Hash of the newest ledger entry (what a payment cites as its justification). */
+  async headHash(): Promise<string | null> {
+    return (await this.ledger.head())?.entryHash ?? null;
+  }
+
   async decide(siteId: string, d: DecisionInput): Promise<DecisionView> {
     const subject = d.runId ? `${d.runId}${d.stageCode ? `/${d.stageCode}` : ""}` : d.incidentId ?? d.assetId ?? null;
     const entry = await this.event(d.agent, `decision.${d.kind}`, subject, { summary: d.summary, reason: d.reason ?? null, confidence: d.confidence ?? null, modelId: d.modelId ?? null, data: d.data ?? null });

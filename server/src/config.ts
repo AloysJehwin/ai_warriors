@@ -40,6 +40,10 @@ const Env = z.object({
   TRUST_SYMBOL: z.string().default("HBAR"),
   /** decimals of native value inside the contract: 8 on Hedera (tinybars), 18 on other EVM chains */
   TRUST_DECIMALS: z.coerce.number().int().min(0).max(18).default(8),
+  /** OrdoWorkOrders: the maintenance agent escrows vendor payments within caps an admin signed */
+  TRUST_WORKORDERS_ADDRESS: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
+  /** OrdoPolicies: raising a line's autonomy needs two plant managers' signatures */
+  TRUST_POLICIES_ADDRESS: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
 
   // ---- Agents ----
   LLM_PROVIDER: z.enum(["offline", "gemini", "openai_compat", "0g"]).default("offline"),
@@ -55,7 +59,6 @@ const Env = z.object({
   LEDGER_SIGNING_KEY: z.string().optional(),
   /** Anchor the ledger head after this many new entries (and at least every 30 minutes when there are any). */
   ANCHOR_EVERY: z.coerce.number().int().min(1).default(50),
-  PAYMENTS: z.enum(["mock", "hedera"]).default("mock"),
   IDENTITY: z.enum(["plain", "ens"]).default("plain"),
   EVIDENCE_STORE: z.enum(["local", "0g"]).default("local"),
   DEMO_TAMPER: bool,
@@ -64,14 +67,10 @@ const Env = z.object({
   HEDERA_OPERATOR_ID: z.string().optional(),
   HEDERA_OPERATOR_KEY: z.string().optional(),
   HEDERA_TOPIC_ID: z.string().optional(),
+  /** The maintenance agent's own account: it signs the escrow for a work order (with HEDERA_AGENT_ID, through Hedera Agent Kit) */
   HEDERA_AGENT_ID: z.string().optional(),
   HEDERA_AGENT_KEY: z.string().optional(),
-  HEDERA_VENDOR_ID: z.string().optional(),
-  HEDERA_VAULT_ADDRESS: z.string().optional(),
   HEDERA_MIRROR_URL: z.string().optional(),
-  HEDERA_POLICY_REGISTRY_ADDRESS: z.string().optional(),
-  HEDERA_JSON_RPC_URL: z.string().default("https://testnet.hashio.io/api"),
-  HEDERA_VENDOR_EVM: z.string().optional(),
 
   ENS_RPC_URL: z.string().optional(),
   ENS_PARENT_NAME: z.string().optional(),
