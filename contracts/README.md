@@ -1,41 +1,50 @@
 # Ordo contracts and chain setup
 
+Three contracts. Every authorisation in them is an Ordo EIP-712 signature (`OrdoSignature`, the typed data people sign in the console), so anyone can relay a transaction and the contract checks who signed, not who sent it.
+
 | Contract | Purpose |
 | --- | --- |
-| `AgentSpendVault` | The Healer agent pays maintenance vendors only within on-chain limits: allow-listed vendors, per-payment cap, per-day cap, escrow released by a human (`RELEASER_ROLE`), refund after expiry, admin pause. Each payment carries the hash of the Ordo ledger entry that justified it. |
-| `OrdoPolicyRegistry` | The plant manager publishes the hash and version of each line's autonomy policy. Ordo checks its local policy against it before trusting automation, and the Verify page shows the match. |
+| `OrdoTrust` | Role credentials per site, granted with a site admin's signature; validator stakes with an unstake cooldown; release records that need a staked reviewer and a staked plant manager; slashing by two other validators plus a plant manager into the site's quality fund. |
+| `OrdoWorkOrders` | The maintenance agent pays vendors within limits people set: a per-site fund, per-order and per-day caps an admin signs, escrow only to holders of the site's `VENDOR` credential, release on a supervisor's or plant manager's signature, refund after expiry, and a pause an admin or plant manager signs. |
+| `OrdoPolicies` | Each line's autonomy level and policy hash. Raising autonomy or changing the policy needs two different plant managers' signatures; lowering needs one. |
+
+`OrdoWorkOrders` and `OrdoPolicies` read credentials from the deployed `OrdoTrust` and share its signature scheme through `OrdoSigned`.
 
 ```bash
-pnpm --filter @ordo/contracts test     # compile with npm solc + 8 tests on an in-process EVM
+pnpm --filter @ordo/contracts test     # compile with npm solc + 16 tests on an in-process EVM
 ```
 
-## Hedera testnet, step by step
+## Hedera testnet
 
-You need a testnet account with an **ECDSA** key from [portal.hedera.com](https://portal.hedera.com) (about 100 testnet HBAR).
+Live: `OrdoTrust` at [`0x608cba52976e34fa160fe64ff0499a8a5a4eb9e1`](https://hashscan.io/testnet/contract/0x608cba52976e34fa160fe64ff0499a8a5a4eb9e1).
+
+Deployments run in GitHub Actions with the operator account held in the `hedera-testnet` environment (`HEDERA_OPERATOR_ID`, `HEDERA_OPERATOR_KEY`, an **ECDSA** key):
+
+- **Deploy OrdoTrust** (`.github/workflows/deploy-trust.yml`): push a change to `.github/deploy/trust.request`.
+- **Hedera setup** (`.github/workflows/hedera-setup.yml`): list what to create in `.github/deploy/hedera.request` and push it:
+  - `topic` creates the HCS topic the ledger is anchored to (`HEDERA_TOPIC_ID`),
+  - `contracts` deploys `OrdoWorkOrders` and `OrdoPolicies` against `OrdoTrust` (`TRUST_WORKORDERS_ADDRESS`, `TRUST_POLICIES_ADDRESS`),
+  - `agent` creates the maintenance agent's own account with 20 HBAR (`HEDERA_AGENT_ID`); its key goes straight to Vercel and is never printed, so this one needs `VERCEL_TOKEN` as a repository secret.
+
+The logs print only public values. The same scripts run locally:
 
 ```bash
 cd contracts
 export HEDERA_OPERATOR_ID=0.0.xxxx HEDERA_OPERATOR_KEY=0x<ecdsa hex>
-
-# 1. Accounts (operator, maintenance lead, plant manager, QE, agent, vendor) + HCS topics
-pnpm bootstrap:hedera            # prints the .env lines for the server
-
-# 2. Deploy AgentSpendVault + OrdoPolicyRegistry over JSON-RPC (Hashio, chain 296),
-#    allow-list the vendor, fund the vault with 40 HBAR, publish the LINE-02 policy hash
-pnpm deploy:hedera               # prints HEDERA_VAULT_ADDRESS and HEDERA_POLICY_REGISTRY_ADDRESS
-
-# 3. Paste both outputs into server/.env, then check every rail live
-cd ../server && pnpm smoke:hedera
+pnpm deploy:trust
+pnpm setup:hedera topic
+TRUST_CONTRACT_ADDRESS=0x… pnpm setup:hedera contracts
+SECRET_OUT=agent.env pnpm setup:hedera agent
+cd ../server && pnpm smoke:hedera      # posts an anchor to the topic and verifies it on the mirror node
 ```
 
-Then start the server with `ANCHOR=hedera PAYMENTS=hedera`. Ledger anchors become HCS messages on HashScan and agent payments go through the vault. Human approvals are EIP-712 signatures from each person's own wallet, so the server holds no role keys.
-
-Verify contract source on Sourcify for chain 296 (HashScan shows verified source); `artifacts/*.json` has the ABI and bytecode.
+Then, in Ordo: register the site on-chain (Team & validators → Validators), sign the agent's caps and add funds (Work orders), and onboard vendors. When the agent's work order is approved, or it acts on its own at L4, it escrows through Hedera Agent Kit; a maintenance lead's signature pays the vendor.
 
 Things to check on the day:
 
-- Inside the EVM Hedera counts HBAR in tinybars (8 decimals); JSON-RPC `value` uses 18 decimals. Caps are set in tinybars by the deploy script.
-- Deployments and testnet keys are written to `deployments/hedera-testnet.json`, which is git-ignored. Never reuse these keys on mainnet.
+- Inside the EVM Hedera counts HBAR in tinybars (8 decimals); JSON-RPC `value` uses 18 decimals. Caps and amounts in the contracts are tinybars.
+- The agent account is created with an ECDSA alias, so its EVM address (the one the caps are signed for) is derived from its key.
+- Verify contract source on Sourcify for chain 296 so HashScan shows it; `artifacts/*.json` has the ABI and bytecode.
 
 ## Proof of work
 

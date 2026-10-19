@@ -11,10 +11,11 @@ Ordo runs production pipelines across machines, robots, vehicles and people. Sof
 3. **Pick a pipeline.** Fifteen library templates (discrete assembly, batch chemical, SMT, pharma GMP, predictive maintenance…) or your own from the **builder**, with parallel branches, merges, a rework loop, per-stage agent, resource, mode (Auto / Approve / Manual), success criteria, timeout and escalation role. Publishing creates an immutable version.
 4. **Run it.** Stages are assigned to assets of the right kind. Progress comes from the machine's part counter or from what the operator records. Success criteria are evaluated on measured values; an unmeasured criterion is never assumed to pass, so a person confirms it at the gate.
 5. **Agents watch the telemetry** against the limits you set. On a threshold, drift or controller fault they open an incident, diagnose it (Gemini, 0G Compute, or a grounded offline model), and recommend allow-listed actions: hold or reassign a stage, open a work order (which starts a predictive-maintenance run), raise inspection, or instruct an operator. The **policy guard** allows the action at the line's autonomy level or sends it to the inbox for the right role.
-6. **People decide by signing.** Gate releases, inbox decisions, autonomy changes and validation sign-offs are EIP-712 typed-data signatures with single-use nonces bound to the action and entity. The server verifies them before acting and stores them with the decision.
-7. **Validators have skin in the game.** People join a site by application; administrators approve by signature. Only approved validators sign reviews, approvals and quality-gate releases. With the OrdoTrust contract configured, roles are on-chain credentials, a validator must hold an active stake to sign, every release is recorded on-chain, and two other validators plus a plant manager can slash a stake into the site's quality fund.
-8. **Validation packages** prove a stage or change works: agent pre-check from run data, hashed evidence files, and a three-signature chain (performed, reviewed, approved) where one person cannot sign twice.
-9. **Verify** re-walks the ledger from genesis and checks each anchor (Ed25519 checkpoint, or a Hedera Consensus Service message via the mirror node).
+6. **The maintenance agent pays the vendor.** A work order goes to an onboarded vendor. With `OrdoWorkOrders` configured, the agent escrows the vendor's rate from the site's fund, from its own account, through **Hedera Agent Kit**: an Agent Kit policy lets it escrow only work orders Ordo opened, the contract enforces caps an admin signed and the vendor's on-chain credential, and a maintenance lead's signature releases the money. An unreleased escrow returns to the fund after 72 hours; a plant manager can stop the agent at once.
+7. **People decide by signing.** Gate releases, inbox decisions, autonomy changes (raising a line's autonomy takes two plant managers) and validation sign-offs are EIP-712 typed-data signatures with single-use nonces bound to the action and entity. The server verifies them before acting and stores them with the decision.
+8. **Validators have skin in the game.** People join a site by application; administrators approve by signature. Only approved validators sign reviews, approvals and quality-gate releases. With the OrdoTrust contract configured, roles are on-chain credentials, a validator must hold an active stake to sign, every release is recorded on-chain, and two other validators plus a plant manager can slash a stake into the site's quality fund.
+9. **Validation packages** prove a stage or change works: agent pre-check from run data, hashed evidence files, and a three-signature chain (performed, reviewed, approved) where one person cannot sign twice.
+10. **Verify** re-walks the ledger from genesis and checks each anchor (Ed25519 checkpoint, or a Hedera Consensus Service message via the mirror node).
 
 ![Validation package](docs/img/validation.png)
 
@@ -32,8 +33,8 @@ Open the console with a browser wallet (MetaMask, Rabby…), sign in, and create
 
 | Command | What it covers |
 | --- | --- |
-| `pnpm --filter @ordo/server test` | 85 tests: migrations, SIWE sessions and EIP-712 signatures, MTConnect parsing and SSRF guard, metrics from measured data, CSV replay, pipeline graph rules and criteria, the policy matrix, the ledger, and an API flow with four wallets: site setup, invites, roles, a run advanced by part counts, a signed gate, a forged and a replayed signature rejected, an incident escalated and a signed work order, a signed autonomy change, a full validation chain with separation of duties, anchoring and verification; and the on-chain trust layer against an in-process EVM: site registration, signed role grants, validator staking, an on-chain release record and a slash |
-| `pnpm --filter @ordo/contracts test` | 16 tests on an in-process EVM: the agent spend vault (roles, vendor allow-list, caps, escrow, pause, reentrancy), policy versioning, and OrdoTrust (signed role grants, replay and cross-site protection, staking and cooldown, releases only by staked validators, slashing rules) |
+| `pnpm --filter @ordo/server test` | 96 tests: migrations, SIWE sessions and EIP-712 signatures, MTConnect parsing and SSRF guard, metrics from measured data, CSV replay, pipeline graph rules and criteria, the policy matrix, the ledger, and an API flow with four wallets: site setup, invites, roles, a run advanced by part counts, a signed gate, a forged and a replayed signature rejected, an incident escalated and a signed work order, autonomy raised by two plant managers and lowered by one, a full validation chain with separation of duties, anchoring and verification; the on-chain layer against an in-process EVM: site registration, signed role grants, validator staking, an on-chain release record, a slash, the agent escrowing for a credentialed vendor, a maintenance lead's signed release, a refund after expiry, the pause, and a policy published with two plant managers; and the Hedera Agent Kit tool, decoded from return-bytes mode, with its Ordo policy |
+| `pnpm --filter @ordo/contracts test` | 16 tests on an in-process EVM: OrdoTrust (signed role grants, replay and cross-site protection, staking and cooldown, releases only by staked validators, slashing rules), OrdoWorkOrders (admin-signed caps, credentialed vendors, per-order and daily caps, the site's fund, pause, signed release, refund, withdrawal, a re-entering vendor) and OrdoPolicies (two plant managers to raise, one to lower, increasing versions) |
 | `pnpm e2e` | Playwright with an injected test wallet drives the real console: sign in, create a site, register an asset, record readings, build and publish a pipeline, run it, sign two gates, verify the ledger |
 | `E2E_TARGET=vercel pnpm e2e` | The same flow against the Vercel build on real Postgres, with no background timer |
 
@@ -56,8 +57,8 @@ flowchart LR
     end
     ledger --> db[("Postgres / PGlite")]
     ledger --> anchor["Anchor: Ed25519 · Hedera HCS"]
-    guard -.-> reg["OrdoPolicyRegistry (Hedera EVM)"]
-    act -.-> vault["AgentSpendVault (Hedera EVM)"]
+    guard -.-> reg["OrdoPolicies (Hedera EVM)"]
+    act -.-> kit["Hedera Agent Kit"] -.-> vault["OrdoWorkOrders (Hedera EVM)"]
     mon -.-> og["0G Compute"]
     ui -.-> ens["ENS primary names"]
 ```
@@ -68,8 +69,8 @@ flowchart LR
 | Decisions | EIP-712 signatures verified server-side | ERC-1271 smart wallets via `AUTH_RPC_URL` |
 | Ledger anchor | Ed25519-signed checkpoint | Hedera Consensus Service topic, verified through the mirror node |
 | Roles and validators | Approved in-app by signed applications | `OrdoTrust`: credentials, validator stakes, release records, slashing (Hedera EVM or any EVM chain). Live on Hedera testnet at [`0x608c…b9e1`](https://hashscan.io/testnet/contract/0x608cba52976e34fa160fe64ff0499a8a5a4eb9e1) |
-| Policy provenance | Hash recorded with every decision | `OrdoPolicyRegistry` on Hedera |
-| Agent payments | Mock | `AgentSpendVault` on Hedera EVM: allow-listed vendors, caps, escrow, kill switch |
+| Autonomy policies | Two plant managers' signatures to raise, recorded in the ledger | `OrdoPolicies`: the same rule enforced on-chain, each change published with its signatures |
+| Agent payments | Work orders assign a vendor, no money moves | `OrdoWorkOrders` via Hedera Agent Kit: per-site fund, admin-signed caps, credentialed vendors, escrow released by a maintenance lead's signature, refunds, kill switch |
 | AI inference | Offline grounded model | Gemini, or 0G Compute (OpenAI-compatible) |
 
 ## Repository layout
@@ -77,7 +78,7 @@ flowchart LR
 ```
 server/      API, auth, plant data sources, run engine, agents, policy guard, validation, ledger
 web/         console (React + Vite) with its own Select, calendar, modal and drawer components
-contracts/   AgentSpendVault, OrdoPolicyRegistry, Hedera / ENS setup scripts
+contracts/   OrdoTrust, OrdoWorkOrders, OrdoPolicies; Hedera / ENS setup scripts
 policies/    versioned autonomy policy
 e2e/         Playwright flow with an injected test wallet
 docs/        product, pipeline templates, validation workflow, environments, plans

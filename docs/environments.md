@@ -88,10 +88,12 @@ It validates every variable and checks each configured rail against the real ser
 | `AUTH_RPC_URL` | – | optional | optional | Lets smart-contract wallets (ERC-1271) sign in and sign decisions |
 | `SIGNATURE_CHAIN_ID` | 296 | 296 | 296 | Chain id in EIP-712 signatures when the wallet does not report one |
 | `ANCHOR_EVERY` | 50 | 50 | 50 | Anchor the ledger head after this many new entries (and every 30 min) |
-| `TRUST_RPC_URL`, `TRUST_CHAIN_ID`, `TRUST_CONTRACT_ADDRESS`, `TRUST_RELAYER_KEY` (+ `TRUST_CHAIN_NAME`, `TRUST_EXPLORER_URL`, `TRUST_SYMBOL`, `TRUST_DECIMALS`) | – | Hedera testnet | Hedera testnet | OrdoTrust: on-chain role credentials, validator stakes, release records, slashing. From `pnpm --filter @ordo/contracts deploy:trust`. Without them validators are approved in-app only |
+| `TRUST_RPC_URL`, `TRUST_CHAIN_ID`, `TRUST_CONTRACT_ADDRESS`, `TRUST_RELAYER_KEY` (+ `TRUST_CHAIN_NAME`, `TRUST_EXPLORER_URL`, `TRUST_SYMBOL`, `TRUST_DECIMALS`) | – | Hedera testnet | Hedera testnet | OrdoTrust: on-chain role credentials, validator stakes, release records, slashing. From the **Deploy OrdoTrust** workflow. Without them validators are approved in-app only |
+| `TRUST_WORKORDERS_ADDRESS`, `TRUST_POLICIES_ADDRESS` | – | Hedera testnet | Hedera testnet | OrdoWorkOrders (agent escrow for vendors) and OrdoPolicies (two plant managers to raise autonomy). From the **Hedera setup** workflow (`contracts`) |
 | `LLM_PROVIDER`, `GEMINI_API_KEY`, `GEMINI_MODEL` | offline or gemini | gemini | gemini | `gemini-flash-latest` tracks the current Flash model |
-| `ANCHOR`, `PAYMENTS` | local/mock | hedera | hedera | Decisions are signed with each person's wallet (EIP-712), so there is no approvals rail |
-| `HEDERA_*` | – | testnet | testnet | From `pnpm --filter @ordo/contracts bootstrap:hedera` and `deploy:hedera` |
+| `ANCHOR` | local | hedera | hedera | `hedera` anchors the ledger head to `HEDERA_TOPIC_ID` with the operator account |
+| `HEDERA_OPERATOR_ID`, `HEDERA_OPERATOR_KEY`, `HEDERA_TOPIC_ID` | – | testnet | testnet | Operator from the `hedera-testnet` GitHub environment (copied by **Sync secrets to Vercel**); topic from **Hedera setup** (`topic`) |
+| `HEDERA_AGENT_ID`, `HEDERA_AGENT_KEY` | – | testnet | testnet | The maintenance agent's own account; it escrows through Hedera Agent Kit. From **Hedera setup** (`agent`), which writes the key to Vercel directly |
 | `IDENTITY`, `ENS_RPC_URL` | plain | ens | ens | `ens` shows people's primary ENS names (mainnet reverse resolution) |
 | `EVIDENCE_STORE`, `ZG_*` | local | 0g (optional) | 0g (optional) | |
 

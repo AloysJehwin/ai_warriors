@@ -306,6 +306,8 @@ td.wrap { max-width: 360px; }
 .kpi-row { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
 .kpi .v { font-size: 24px; font-weight: 500; margin-top: 6px; font-variant-numeric: tabular-nums; }
 .kpi .s { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.kpis.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.kpi .s .btn { display: block; margin-top: 8px; }
 .bars { display: flex; gap: 4px; margin: 10px 0 8px; }
 .bars span { flex: 1; height: 6px; border-radius: 2px; border: 1px solid var(--accent); }
 .bars span.on { background: var(--accent); }
@@ -507,6 +509,8 @@ svg.flow { display: block; margin: 0 auto; overflow: visible; }
   .main { padding: 18px 16px 40px; }
   .kpis { margin: 0 -16px 18px; }
   .kpis.line { grid-template-columns: 1fr 1fr; }
+  .kpis.three { grid-template-columns: 1fr; }
+  .kpis.three .kpi { border-right: 0; border-bottom: 1px solid var(--divider); padding-left: 16px; }
   .kpi:first-child { padding-left: 16px; }
   .stream .row { grid-template-columns: 1fr; gap: 2px; }
   .b-grid { grid-template-columns: 1fr; margin: 0; }

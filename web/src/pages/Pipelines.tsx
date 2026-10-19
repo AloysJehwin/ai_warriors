@@ -4,7 +4,7 @@ import { useApp } from "../lib/app";
 import { actorLabel, AGENT_LABEL, dateTime, dur, LEVEL_LABEL, LEVEL_TEXT, num, pct, STATE_LABEL, time } from "../lib/format";
 import { go, href, useRoute } from "../lib/router";
 import { useSign } from "../lib/sign";
-import type { AutonomyLevel, DecisionView, InboxItemView, RunView, StageRunView, TemplateView, TypedSignature } from "../types";
+import type { AutonomyLevel, AutonomyProposalView, DecisionView, InboxItemView, RunView, StageRunView, TemplateView, TypedSignature } from "../types";
 import { DateTimePicker } from "../ui/Calendar";
 import { Action, Empty, Field, Loading, Modal, Segmented, useToast } from "../ui/kit";
 import { Select } from "../ui/Select";
@@ -315,12 +315,14 @@ function RunScreen({ runId, runs, onNew }: { runId: string; runs: RunView[]; onN
   );
 }
 
-export function AutonomyModal({ open, onClose, lineId, current }: { open: boolean; onClose: () => void; lineId: string; current: AutonomyLevel }) {
+export function AutonomyModal({ open, onClose, lineId, current, initial }: { open: boolean; onClose: () => void; lineId: string; current: AutonomyLevel; initial?: AutonomyLevel }) {
   const { path, can, reloadSite } = useApp();
   const sign = useSign();
-  const [level, setLevel] = useState<AutonomyLevel>(current);
+  const toast = useToast();
+  const [level, setLevel] = useState<AutonomyLevel>(initial ?? current);
   const [comment, setComment] = useState("");
-  useEffect(() => setLevel(current), [current, open]);
+  useEffect(() => setLevel(initial ?? current), [current, initial, open]);
+  const raising = Number(level.slice(1)) > Number(current.slice(1));
   return (
     <Modal
       open={open}
@@ -339,15 +341,18 @@ export function AutonomyModal({ open, onClose, lineId, current }: { open: boolea
               const r = await sign({
                 title: `Set autonomy to ${level} · ${LEVEL_LABEL[level]}`,
                 request: (chainId) => api.post<TypedSignature>(path(`/lines/${lineId}/autonomy/sign-request`), { level, comment, chainId }),
-                submit: (proof) => api.put(path(`/lines/${lineId}/autonomy`), { level, comment, ...proof }),
+                submit: (proof) => api.put<{ proposal: AutonomyProposalView }>(path(`/lines/${lineId}/autonomy`), { level, comment, ...proof }),
               });
               if (r) {
+                const p = r.proposal;
+                if (p.status === "open") toast(`Signed ${p.signers.length} of ${p.required}: another plant manager co-signs in Settings`, "ok");
+                else toast(`Autonomy is now ${p.to}${p.onchain?.status === "done" ? ", published on-chain" : ""}`, "ok");
                 await reloadSite();
                 onClose();
               }
             }}
           >
-            Sign and apply
+            {raising ? "Sign (1 of 2)" : "Sign and apply"}
           </Action>
         </div>
       }
@@ -365,6 +370,7 @@ export function AutonomyModal({ open, onClose, lineId, current }: { open: boolea
       <Field label="Reason (signed with the change)">
         <textarea value={comment} onChange={(e) => setComment(e.target.value)} maxLength={500} />
       </Field>
+      {raising && <p className="small muted">Raising autonomy takes two plant managers' signatures; lowering takes one and applies at once.</p>}
       {!can("plant_manager") && <p className="field-e">Only a plant manager can change autonomy.</p>}
     </Modal>
   );
