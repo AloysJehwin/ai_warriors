@@ -89,6 +89,9 @@ describe("agent payments through OrdoWorkOrders", () => {
     const funder = createWalletClient({ chain: foundry, transport, account: privateKeyToAccount(funderKey) });
     await pub.waitForTransactionReceipt({ hash: await funder.writeContract({ address: addr.orders, abi: ORDO_WORK_ORDERS_ABI, functionName: "fund", args: [site], value: parseEther("10") } as never) });
 
+    // the console funds and publishes through these addresses
+    const status = (await people.admin.call("GET", "/v1/status")).json;
+    expect(status.trust).toMatchObject({ workOrders: addr.orders, policies: addr.policies });
     const setup = (await people.admin.call("GET", `${S()}/work-orders`)).json.setup;
     expect(setup).toMatchObject({ configured: true, agent: { via: "evm" }, onchain: { funds: parseEther("10").toString(), paused: false, perOrder: caps.perOrder } });
     expect(setup.agent.address).toBe(privateKeyToAccount(agentKey).address);

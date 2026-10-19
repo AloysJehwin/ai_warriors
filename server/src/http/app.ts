@@ -6,6 +6,7 @@ import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { cors } from "hono/cors";
 import { z } from "zod";
 import { SESSION_COOKIE, type Principal } from "../auth/auth.js";
+import { ASSESSMENT_PATH, assessVibration } from "../chain/x402.js";
 import { CATEGORIES } from "../core/templates.js";
 import { REJECT } from "../core/inbox.js";
 import { ONBOARDING_KINDS } from "../core/trust.js";
@@ -85,7 +86,7 @@ export function createApp(sys: System, opts: AppOptions = {}) {
       build: opts.build ?? null,
       signatureChainId: sys.cfg.SIGNATURE_CHAIN_ID,
       trust: sys.trust.chain
-        ? { chainId: sys.trust.chain.cfg.chainId, name: sys.trust.chain.cfg.name, rpcUrl: sys.trust.chain.cfg.rpcUrl, explorerUrl: sys.trust.chain.cfg.explorerUrl, address: sys.trust.chain.cfg.address, symbol: sys.trust.chain.cfg.symbol, decimals: sys.trust.chain.cfg.decimals }
+        ? { chainId: sys.trust.chain.cfg.chainId, name: sys.trust.chain.cfg.name, rpcUrl: sys.trust.chain.cfg.rpcUrl, explorerUrl: sys.trust.chain.cfg.explorerUrl, address: sys.trust.chain.cfg.address, symbol: sys.trust.chain.cfg.symbol, decimals: sys.trust.chain.cfg.decimals, workOrders: sys.trust.chain.cfg.workOrders ?? null, policies: sys.trust.chain.cfg.policies ?? null }
         : null,
       restrictedSiteCreation: Boolean(sys.cfg.BOOTSTRAP_ADMIN_ADDRESS),
     }),
@@ -173,6 +174,23 @@ export function createApp(sys: System, opts: AppOptions = {}) {
     return c.json(await sys.passports.publicView(id));
   });
 
+  // ---------------- x402: vibration assessments sold per call, paid in HBAR (no sign-in; the payment is the credential) ----------------
+  const Assess = z.object({
+    machineClass: z.enum(["medium", "large"]).default("medium"),
+    samples: z.array(z.object({ t: z.number().finite(), v: z.number().finite().min(0).max(1000) })).min(3).max(5000),
+  });
+  const x402Cors = cors({ origin: "*", allowHeaders: ["content-type", "payment-signature", "x-payment"], exposeHeaders: ["payment-required", "payment-response"] });
+  app.get("/v1/x402", (c) => {
+    c.header("access-control-allow-origin", "*");
+    return c.json(sys.x402 ? { offers: [{ method: "POST", path: ASSESSMENT_PATH, ...sys.x402.terms, unit: "tinybar" }] } : { offers: [] });
+  });
+  app.use(ASSESSMENT_PATH, x402Cors);
+  app.use(ASSESSMENT_PATH, async (c, next) => {
+    if (!sys.x402) throw new HttpError(404, "This deployment does not sell assessments");
+    return sys.x402.middleware(c, next);
+  });
+  app.post(ASSESSMENT_PATH, async (c) => c.json(assessVibration(await body(c, Assess))));
+
   // ---------------- Site scope ----------------
   const site = new Hono<Env>();
   site.use("*", async (c, next) => {
@@ -223,8 +241,17 @@ export function createApp(sys: System, opts: AppOptions = {}) {
   // ---- Team ----
   site.get("/team", async (c) => {
     const t = await sys.plant.team(sid(c));
+    const issued = await sys.names.ofPeople(sid(c));
     const ens = sys.ensNames ? await sys.ensNames.lookup(t.members.map((m) => m.address)) : {};
-    return c.json({ ...t, members: t.members.map((m) => ({ ...m, ens: ens[m.address] ?? null })) });
+    return c.json({ ...t, members: t.members.map((m) => ({ ...m, ens: issued.get(m.address.toLowerCase()) ?? ens[m.address] ?? null })) });
+  });
+
+  // ---- ENS names (ENSv2 on Sepolia) ----
+  site.get("/names", async (c) => c.json({ live: sys.names.live, parent: sys.names.parent, items: await sys.names.list(sid(c)) }));
+  site.post("/names/:kind/:ref/retry", async (c) => {
+    need(c, "admin");
+    await sys.names.retry(sid(c), c.req.param("kind"), c.req.param("ref"));
+    return c.json({ ok: true });
   });
   site.post("/team/invites", async (c) => {
     need(c, "admin");
@@ -403,6 +430,7 @@ export function createApp(sys: System, opts: AppOptions = {}) {
       [sid(c)],
     );
     const views = await sys.plant.views(sid(c));
+    const nfts = await sys.agentNfts.ofSite(sid(c));
     return c.json(
       AGENTS.map((a) => {
         const st = stats.rows.find((x) => x.agent === `agent:${a}`);
@@ -410,6 +438,7 @@ export function createApp(sys: System, opts: AppOptions = {}) {
         return {
           key: a,
           ...AGENT_INFO[a],
+          inft: nfts.get(a) ?? null,
           autonomy: level,
           assets: views.filter((v) => v.owningAgent === a).map((v) => ({ id: v.id, name: v.name, status: v.status })),
           currentTask: current[0] ? `${current[0].run_id} · ${current[0].code} ${current[0].name ?? ""}`.trim() : null,
@@ -455,6 +484,7 @@ export function createApp(sys: System, opts: AppOptions = {}) {
     return c.json(await sys.validation.attach(sid(c), me(c).user, c.req.param("id"), { slotId: typeof form.slotId === "string" && form.slotId ? form.slotId : null, name: typeof form.name === "string" && form.name ? form.name : file.name, filename: file.name, mime: file.type || "application/octet-stream", bytes }));
   });
   site.delete("/validation/:id/evidence/:evidenceId", async (c) => c.json(await sys.validation.removeEvidence(sid(c), me(c).user, c.req.param("id"), c.req.param("evidenceId"))));
+  site.get("/validation/:id/evidence/:evidenceId/0g", async (c) => c.json(await sys.validation.verifyOnZeroG(sid(c), c.req.param("id"), c.req.param("evidenceId"))));
   site.get("/validation/:id/evidence/:evidenceId/file", async (c) => {
     const f = await sys.validation.blob(sid(c), c.req.param("id"), c.req.param("evidenceId"));
     return new Response(Buffer.from(f.bytes), { headers: { "content-type": f.mime, "content-disposition": `attachment; filename="${f.filename.replace(/"/g, "")}"`, "x-content-type-options": "nosniff" } });
@@ -534,6 +564,7 @@ export function createApp(sys: System, opts: AppOptions = {}) {
   });
   site.post("/work-orders/:id/release/sign-request", async (c) => c.json(await sys.workOrders.releaseRequest(sid(c), me(c).user, c.get("roles"), c.req.param("id"))));
   site.post("/work-orders/:id/release", async (c) => c.json(await sys.workOrders.release(sid(c), me(c).user, c.get("roles"), c.req.param("id"), await body(c, SignedBody))));
+  site.post("/work-orders/:id/assessment/retry", async (c) => c.json(await sys.workOrders.retryAssessment(sid(c), c.get("roles"), c.req.param("id"))));
   site.post("/work-orders/:id/retry", async (c) => c.json(await sys.workOrders.retryEscrow(sid(c), c.get("roles"), c.req.param("id"))));
 
   // ---- Ledger & proof ----

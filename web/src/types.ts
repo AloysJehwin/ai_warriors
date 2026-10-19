@@ -153,6 +153,17 @@ export interface AgentRow {
   decisionsToday: number;
   escalationsToday: number;
   avgConfidence: number | null;
+  /** The agent's ERC-7857 iNFT on 0G, when configured */
+  inft: {
+    contract: string;
+    tokenId: number | null;
+    status: "pending" | "synced" | "failed";
+    error: string | null;
+    url: string | null;
+    txUrl: string | null;
+    data: { dataDescription: string; dataHash: string }[];
+    authorizedUsers: string[];
+  } | null;
 }
 export interface Incident {
   id: string;
@@ -194,7 +205,7 @@ export interface PackageDetail extends Omit<PackageSummary, "owner" | "waitingOn
   returnedComment: string | null;
   assessment: { ranAt: string; agent: string; summary: string; figures: { label: string; value: string }[]; confidence: number | null } | null;
   checks: { id: string; criterion: string; method: string; target: string; source: string; result: string | null; actual: string | null; status: "pending" | "pass" | "fail"; auto: boolean; recordedBy: string | null; recordedAt: string | null }[];
-  evidence: { id: string; name: string; requirement: string; required: boolean; filename: string | null; mime: string | null; size: number | null; sha256: string | null; uploadedBy: string | null; uploadedAt: string | null; origin: string; version: number; removedAt: string | null }[];
+  evidence: { id: string; name: string; requirement: string; required: boolean; filename: string | null; mime: string | null; size: number | null; sha256: string | null; uploadedBy: string | null; uploadedAt: string | null; origin: string; version: number; removedAt: string | null; zeroG: { status: "pending" | "done" | "failed"; root: string | null; url: string | null; error: string | null } | null }[];
   chain: { meaning: string; label: string; role: Role; roleLabel: string; state: "signed" | "awaiting" | "pending" | "returned"; signer: { address: string; name: string | null } | null; signedAt: string | null; signature: string | null; comment: string | null }[];
   readiness: { ready: boolean; items: { label: string; ok: boolean }[] };
   audit: { seq: number; ts: string; actor: string; type: string; payload: Record<string, unknown>; entryHash: string }[];
@@ -232,6 +243,15 @@ export interface WorkOrderView {
   createdAt: string;
   updatedAt: string;
   release: RelayView | null;
+  /** The vibration assessment the agent bought over x402 */
+  assessment: AssessmentView | null;
+}
+export interface AssessmentView {
+  status: "pending" | "done" | "failed";
+  error: string | null;
+  skipped: string | null;
+  assessment: { standard: string; zone: "A" | "B" | "C" | "D"; verdict: string; level: number; peak: number; slopePerHour: number; hoursToZoneD: number | null; samples: number } | null;
+  payment: { transaction: string; url: string; payer: string | null; network: string } | null;
 }
 export interface WorkOrdersSetup {
   configured: boolean;
@@ -305,7 +325,7 @@ export interface PublicPassport {
       criteria: { label: string; target: string; actual: string | null; ok: boolean | null }[];
       deviation: boolean;
     }[];
-    signed: { kind: string; summary: string; stageCode: string | null; by: string; at: string; ledgerSeq: number | null }[];
+    signed: { kind: string; summary: string; stageCode: string | null; by: string; ens: string | null; at: string; ledgerSeq: number | null }[];
     agentDecisions: number;
     releases: {
       id: string;
@@ -313,7 +333,7 @@ export interface PublicPassport {
       type: string;
       title: string;
       releasedAt: string;
-      signers: { meaning: string; address: string; stake: { amount: string; active: boolean; symbol: string; decimals: number } | null }[];
+      signers: { meaning: string; address: string; ens: string | null; stake: { amount: string; active: boolean; symbol: string; decimals: number } | null }[];
       onchain: { txUrl: string | null; contract: string | null } | null;
     }[];
     proof: {
@@ -325,4 +345,21 @@ export interface PublicPassport {
       checkedAt: string;
     };
   };
+}
+
+// ---------------- ENS names (ENSv2 on Sepolia) ----------------
+export interface EnsNameView {
+  kind: "site" | "person" | "asset" | "agent";
+  ref: string;
+  name: string;
+  status: "pending" | "issued" | "revoked" | "failed";
+  error: string | null;
+  url: string;
+  txUrl: string | null;
+  records: Record<string, string>;
+}
+export interface EnsNamesResponse {
+  live: boolean;
+  parent: string | null;
+  items: EnsNameView[];
 }

@@ -332,6 +332,32 @@ function PackageView({ id }: { id: string }) {
                   {e.sha256 ? (
                     <>
                       <a href={api.url(path(`/validation/${id}/evidence/${e.id}/file`))}>{e.filename}</a> · {((e.size ?? 0) / 1024).toFixed(1)} KB · v{e.version} · {actorLabel(e.origin === "agent" ? (e.uploadedBy ?? "") : `user:${e.uploadedBy}`, names)} · {time(e.uploadedAt)} · <span className="mono">{e.sha256.slice(0, 19)}…</span>
+                      {e.zeroG && (
+                        <div>
+                          {e.zeroG.status === "done" && e.zeroG.root ? (
+                            <>
+                              On 0G Storage (encrypted), root{" "}
+                              <a href={e.zeroG.url ?? undefined} target="_blank" rel="noreferrer" className="mono">
+                                {e.zeroG.root.slice(0, 14)}…
+                              </a>{" "}
+                              ·{" "}
+                              <Action
+                                className="link"
+                                onClick={async () => {
+                                  const r = await api.get<{ ok: boolean; size: number }>(path(`/validation/${id}/evidence/${e.id}/0g`));
+                                  toast(r.ok ? `The copy on 0G matches, byte for byte (${r.size} bytes)` : "The copy on 0G does not match this file", r.ok ? "ok" : "bad");
+                                }}
+                              >
+                                verify
+                              </Action>
+                            </>
+                          ) : e.zeroG.status === "pending" ? (
+                            <>Copying to 0G Storage…{e.zeroG.error ? ` (retrying: ${e.zeroG.error})` : ""}</>
+                          ) : (
+                            <span className="field-e">Copy to 0G failed: {e.zeroG.error}</span>
+                          )}
+                        </div>
+                      )}
                     </>
                   ) : (
                     "Not attached"

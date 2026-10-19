@@ -21,6 +21,15 @@ export interface LlmResult<T> {
   latencyMs: number;
   fallback: boolean;
   error?: string;
+  /** For providers that prove their answers: 0G Compute checks the TEE provider's signature on each one */
+  attestation?: Attestation;
+}
+export interface Attestation {
+  kind: "0g-compute";
+  provider: string;
+  chatId: string | null;
+  /** true: signature checked; false: it did not verify; null: the provider gave nothing to check */
+  verified: boolean | null;
 }
 
 export interface LlmProvider {
@@ -78,7 +87,7 @@ export class OfflineLlm implements LlmProvider {
  */
 export class GuardedLlm implements LlmProvider {
   constructor(
-    private live: { name: string; modelId: string; call: (task: LlmTask<unknown>, signal: AbortSignal) => Promise<string> },
+    private live: { name: string; modelId: string; call: (task: LlmTask<unknown>, signal: AbortSignal) => Promise<string | { text: string; attestation?: Attestation }> },
     private timeoutMs: number,
     private offline = new OfflineLlm(),
   ) {}
@@ -91,7 +100,8 @@ export class GuardedLlm implements LlmProvider {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), this.timeoutMs);
     try {
-      const text = await this.live.call(task as LlmTask<unknown>, ctrl.signal);
+      const out = await this.live.call(task as LlmTask<unknown>, ctrl.signal);
+      const { text, attestation } = typeof out === "string" ? { text: out, attestation: undefined } : out;
       const value = task.schema.parse(JSON.parse(stripFences(text)));
       return {
         value,
@@ -102,6 +112,7 @@ export class GuardedLlm implements LlmProvider {
         outputHash: hashOf(value),
         latencyMs: Date.now() - t0,
         fallback: false,
+        ...(attestation ? { attestation } : {}),
       };
     } catch (e) {
       const r = await this.offline.generate(task);

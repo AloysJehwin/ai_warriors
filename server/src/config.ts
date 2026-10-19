@@ -78,13 +78,34 @@ const Env = z.object({
   /** HTS NFT collection for lot passports (the operator is treasury, supply and metadata key) */
   HEDERA_PASSPORT_TOKEN_ID: z.string().optional(),
 
+  /** x402: Ordo sells vibration assessments per call; fees go to this Hedera account (default: the operator) */
+  X402_PAY_TO: z.string().optional(),
+  X402_PRICE_TINYBARS: z.coerce.bigint().default(10_000_000n),
+  X402_FACILITATOR_URL: z.string().url().default("https://x402.org/facilitator"),
+  /** Where the agent buys assessments (default: this deployment's own endpoint) and the most it pays per call */
+  X402_ASSESSMENT_URL: z.string().url().optional(),
+  X402_MAX_TINYBARS: z.coerce.bigint().default(50_000_000n),
+
+  /** Primary-name lookups for signed-in wallets (Ethereum mainnet) when IDENTITY=ens */
   ENS_RPC_URL: z.string().optional(),
+  /** ENSv2 names on Sepolia: the parent name and its registry and resolver come from the ENS setup workflow */
   ENS_PARENT_NAME: z.string().optional(),
+  ENS_REGISTRY_ADDRESS: z.string().optional(),
+  ENS_RESOLVER_ADDRESS: z.string().optional(),
+  ENS_OWNER_KEY: z.string().optional(),
+  ENS_SEPOLIA_RPC_URL: z.string().default("https://ethereum-sepolia-rpc.publicnode.com"),
+  /** Tests point these at a local chain */
+  ENS_CHAIN_ID: z.coerce.number().int().optional(),
+  ENS_FACTORY_ADDRESS: z.string().optional(),
+  ENS_USER_REGISTRY_IMPL: z.string().optional(),
 
   ZG_RPC_URL: z.string().default("https://evmrpc-testnet.0g.ai"),
   ZG_INDEXER_URL: z.string().default("https://indexer-storage-testnet-turbo.0g.ai"),
   ZG_PRIVATE_KEY: z.string().optional(),
   ZG_PROVIDER_ADDRESS: z.string().optional(),
+  /** OrdoAgentNFT (ERC-7857) on 0G Galileo, from the 0G setup workflow: each agent of each site is a token */
+  ZG_INFT_ADDRESS: z.string().optional(),
+  ZG_CHAIN_ID: z.coerce.number().int().default(16602),
 });
 
 export type Config = z.infer<typeof Env>;

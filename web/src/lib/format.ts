@@ -60,3 +60,10 @@ export const num = (v: number | null | undefined, d = 0) => (v === null || v ===
 export const dur = (min: number | null | undefined) => (min === null || min === undefined ? "—" : min < 60 ? `${Math.round(min)} min` : `${Math.floor(min / 60)} h ${Math.round(min % 60)} min`);
 export const shortAddr = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
 export const signalLabel = (s: string) => s.replace("condition.", "condition · ").replaceAll("_", " ");
+
+/** " · verified on 0G Compute" when a model's answer carries a checked TEE signature. */
+export function computeProof(d: { data: unknown; modelId: string | null }): string {
+  const a = (d.data as { attestation?: { kind: string; verified: boolean | null } | null } | null)?.attestation;
+  if (!a || a.kind !== "0g-compute") return "";
+  return a.verified === true ? ` · ${d.modelId ?? "model"} verified on 0G Compute` : a.verified === false ? " · 0G Compute signature did not verify" : ` · ${d.modelId ?? "model"} on 0G Compute`;
+}

@@ -1,0 +1,69 @@
+name: 0G setup
+
+# Sets up Ordo on 0G Galileo with the key held in the `zerog-testnet` environment (secret ZG_PRIVATE_KEY, an EVM key
+# holding testnet 0G from faucet.0g.ai). List what to do in .github/deploy/zerog.request and push:
+#   inft      deploy OrdoAgentNFT                → ZG_INFT_ADDRESS
+#   storage   copy evidence to 0G Storage        → EVIDENCE_STORE=0g
+#   ledger    fund the 0G Compute ledger         (ZG_LEDGER_0G, default 3; then set LLM_PROVIDER=0g)
+# The values and ZG_PRIVATE_KEY go to Vercel (needs the repository secret VERCEL_TOKEN); the key is never printed.
+on:
+  push:
+    paths: [".github/deploy/zerog.request"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    environment: zerog-testnet
+    env:
+      ZG_PRIVATE_KEY: ${{ secrets.ZG_PRIVATE_KEY }}
+      ZG_LEDGER_0G: ${{ vars.ZG_LEDGER_0G }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: What to do
+        id: what
+        run: |
+          tasks=" $(sed 's/#.*//' .github/deploy/zerog.request | tr -s ' \n\t' ' ' | xargs) "
+          echo "tasks=$tasks" >> "$GITHUB_OUTPUT"
+          if [ -z "$(echo $tasks)" ]; then echo "any=false" >> "$GITHUB_OUTPUT"; echo "Nothing requested."; exit 0; fi
+          echo "any=true" >> "$GITHUB_OUTPUT"
+          echo "Doing:$tasks"
+          if [ -z "$ZG_PRIVATE_KEY" ]; then echo "::error::Add ZG_PRIVATE_KEY to the zerog-testnet environment first"; exit 1; fi
+      - name: Agent iNFT contract
+        if: contains(steps.what.outputs.tasks, ' inft ')
+        run: pnpm --filter @ordo/contracts setup:zerog | tee -a setup.log
+      - name: Evidence on 0G Storage
+        if: contains(steps.what.outputs.tasks, ' storage ')
+        run: echo "EVIDENCE_STORE=0g" | tee -a setup.log
+      - name: Compute ledger
+        if: contains(steps.what.outputs.tasks, ' ledger ')
+        run: pnpm --filter @ordo/server zerog:ledger | tee -a setup.log
+      - name: Set the values in Vercel
+        if: steps.what.outputs.any == 'true'
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_PROJECT_ID: prj_ua7E01jdI0VpLBJvZyqqulOlBzGP
+          VERCEL_ORG_ID: team_8ghjcEpH2t9p2BktkDNQ9ZXm
+        run: |
+          if [ -z "$VERCEL_TOKEN" ]; then echo "::warning::No VERCEL_TOKEN: set the values above in Vercel by hand"; exit 0; fi
+          umask 077
+          grep -E '^(ZG_INFT_ADDRESS|EVIDENCE_STORE)=' setup.log > "$RUNNER_TEMP/zg.env" || true
+          node -e 'const k=process.env.ZG_PRIVATE_KEY.trim().replace(/^(0x)?/,"0x");require("fs").appendFileSync(process.argv[1],`ZG_PRIVATE_KEY=${k}\n`)' "$RUNNER_TEMP/zg.env"
+          node scripts/vercel-env.mjs push "$RUNNER_TEMP/zg.env" production,preview
+          rm -f "$RUNNER_TEMP/zg.env"
+      - name: Summary
+        if: always()
+        run: |
+          echo '### 0G setup' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          [ -f setup.log ] && cat setup.log >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

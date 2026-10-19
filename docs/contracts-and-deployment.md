@@ -170,17 +170,13 @@ Contracts are **immutable** — no proxies. A fix means deploying a new address 
 
 ---
 
-## 5. ENS (Sepolia)
+## 5. ENS (Sepolia, ENSv2)
 
-1. Register a parent name in the ENS app on Sepolia (e.g. `ordo-mfg.eth`) with the ENS wallet; wrap it (Name Wrapper).
-2. `chain/scripts/ens-bootstrap.ts` (viem) creates subnames with the Public Resolver, e.g. `line02.ordo-mfg.eth`, `cnc05.line02.ordo-mfg.eth`, `cnc07.line02.ordo-mfg.eth`, `healer.agents.ordo-mfg.eth`, `maintenance.agents.ordo-mfg.eth`.
-3. Records per name:
-   - `addr` for Hedera: coin type `0x80000000 | 296` (ENSIP-11 EVM chain coin type) → the account's EVM address. Also plain ETH `addr` for Sepolia tooling.
-   - Text: `description`, `url` (asset page in Ordo), `avatar`, `com.ordo.type` (`asset` / `line` / `agent`), `com.ordo.line`, `com.ordo.limits` (JSON of spec limits), `com.ordo.owner-agent`, `com.ordo.ledger-topic` (HCS topic id).
-4. The API resolves names with viem (`getEnsName`, `getEnsText`) and caches them; the UI shows names wherever an id appears.
-5. **Stretch:** an ENSIP-10 wildcard + CCIP-Read off-chain resolver on `line02.ordo-mfg.eth` so `*.line02…` returns **live** status (`com.ordo.status`, `com.ordo.health`) signed by the API. Any ENS-aware app then shows real machine state.
-
-Take the Sepolia Registry, Name Wrapper and Public Resolver addresses from the official ENS deployments list on the day; do not hard-code addresses copied from blogs.
+1. **ENS setup** workflow (`contracts/scripts/ens-setup.ts`): deploys Ordo's `PermissionedResolver` and a `UserRegistry` through ENS's `VerifiableFactory`, registers `<label>.eth` on the v2 `ETHRegistrar` pointing at both, and writes `ENS_PARENT_NAME`, `ENS_REGISTRY_ADDRESS`, `ENS_RESOLVER_ADDRESS` and `ENS_OWNER_KEY` to Vercel.
+2. The app (`server/src/core/names.ts`) reconciles names in the engine cycle: the site gets `<site>.<parent>` and its own `UserRegistry` (ENSv2's per-name registries); people, assets and agents get names in it.
+3. People's names are minted to their wallet with an empty role bitmap: the holder cannot transfer or repoint the name, and the site, which keeps the registry's root roles, unregisters it when the person holds no role. A role change updates the records.
+4. Records (Ordo's resolver): `addr` (people, and the maintenance agent's account), `description`, `url`, `com.ordo.type` (`site` / `person` / `asset` / `agent`), `com.ordo.site`, `com.ordo.roles`, `com.ordo.validator` (scope), `com.ordo.signed` (validation signatures given at the site), `com.ordo.kind` (assets), `com.ordo.status` (`revoked`).
+5. Names show wherever a person's address does: the team list and the public lot passport.
 
 ---
 
@@ -200,7 +196,7 @@ Take the Sepolia Registry, Name Wrapper and Public Resolver addresses from the o
 | `create-accounts` | Creates the Hedera accounts in §2, prints ids and keys once | Once |
 | `bootstrap-hedera` | Topics, NFT collection, associations; writes deployments file | Once, idempotent |
 | `deploy-evm` | Wraps `forge script` + verify + ABI export | Once per contract version |
-| `ens-bootstrap` | Subnames + records from `chain/ens.yaml` | Once, idempotent |
+| `ens-setup` | ENSv2 parent name, Ordo's registry and resolver | Once |
 | `check-balances` | HBAR per account, vault balance, 0G balance + broker deposit, Sepolia ETH; fails under thresholds | Before every demo, and in CI nightly |
 | `smoke-chain` | One HCS message, one schedule create+sign, one vault escrow+release, one ENS read, one 0G call; prints HashScan links | After any chain change |
 | `anchor-build` | Posts `git rev-parse HEAD` to the build topic | Every ~3 h at the event |

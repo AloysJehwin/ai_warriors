@@ -1,0 +1,104 @@
+name: ENS setup
+
+# Registers Ordo's parent name on ENSv2 (Sepolia). List what to do in .github/deploy/ens.request and push:
+#   key            generate the ENS owner key inside this job (if none exists yet); it goes straight to Vercel and is
+#                  never printed. The log shows its address: fund it with a little Sepolia ETH.
+#   label <name>   register <name>.eth with the owner key, then set ENS_PARENT_NAME, ENS_REGISTRY_ADDRESS,
+#                  ENS_RESOLVER_ADDRESS and ENS_OWNER_KEY in Vercel. Registration is paid in the testnet's MockUSDC,
+#                  which the script mints; gas needs the Sepolia ETH.
+# Runs in the `hedera-testnet` environment, which holds VERCEL_TOKEN. The owner key comes from an ENS_OWNER_KEY secret
+# there if one is set, otherwise from Vercel.
+on:
+  push:
+    paths: [".github/deploy/ens.request"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    environment: hedera-testnet
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_PROJECT_ID: prj_ua7E01jdI0VpLBJvZyqqulOlBzGP
+      VERCEL_ORG_ID: team_8ghjcEpH2t9p2BktkDNQ9ZXm
+      ENS_SEPOLIA_RPC_URL: ${{ vars.ENS_SEPOLIA_RPC_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: What to do
+        id: what
+        run: |
+          body="$(sed 's/#.*//' .github/deploy/ens.request)"
+          key=$(echo "$body" | grep -qw '^ *key' && echo true || echo false)
+          label=$(echo "$body" | sed -n 's/^ *label[: ]\+\([a-z0-9-]*\).*/\1/p' | head -1)
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "label=$label" >> "$GITHUB_OUTPUT"
+          echo "generate key: $key · label: ${label:-none}"
+      - name: Owner key
+        id: owner
+        if: steps.what.outputs.key == 'true' || steps.what.outputs.label != ''
+        env:
+          SECRET_KEY: ${{ secrets.ENS_OWNER_KEY }}
+          WANT_KEY: ${{ steps.what.outputs.key }}
+        run: |
+          umask 077
+          f="$RUNNER_TEMP/ens-key.env"
+          if [ -n "$SECRET_KEY" ]; then
+            echo "ENS_OWNER_KEY=$SECRET_KEY" > "$f"; echo "Using the ENS_OWNER_KEY secret"
+          else
+            if [ -z "$VERCEL_TOKEN" ]; then echo "::error::Needs VERCEL_TOKEN (or an ENS_OWNER_KEY secret)"; exit 1; fi
+            node scripts/vercel-env.mjs export ENS_OWNER_KEY "$f"
+            if [ ! -s "$f" ]; then
+              if [ "$WANT_KEY" != "true" ]; then echo "::error::No ENS owner key yet: request 'key' first"; exit 1; fi
+              (cd contracts && node --input-type=module -e 'import { generatePrivateKey } from "viem/accounts"; console.log(`ENS_OWNER_KEY=${generatePrivateKey()}`)') > "$f"
+              node scripts/vercel-env.mjs push "$f" production,preview --readable
+              echo "Generated a new ENS owner key and stored it in Vercel"
+            fi
+          fi
+          key=$(sed -n 's/^ENS_OWNER_KEY=//p' "$f")
+          echo "::add-mask::$key"
+          echo "ENS_OWNER_KEY=$key" >> "$GITHUB_ENV"
+          rm -f "$f"
+      - name: Owner address
+        if: steps.owner.outcome == 'success'
+        run: |
+          cd contracts && node --input-type=module -e '
+            import { privateKeyToAccount } from "viem/accounts";
+            import { createPublicClient, http, formatEther } from "viem";
+            import { sepolia } from "viem/chains";
+            const a = privateKeyToAccount(process.env.ENS_OWNER_KEY.replace(/^(0x)?/, "0x")).address;
+            const pub = createPublicClient({ chain: sepolia, transport: http(process.env.ENS_SEPOLIA_RPC_URL || "https://ethereum-sepolia-rpc.publicnode.com") });
+            const b = await pub.getBalance({ address: a }).catch(() => null);
+            console.log(`ENS owner address: ${a}`);
+            console.log(`Sepolia balance: ${b === null ? "unknown" : formatEther(b) + " ETH"}`);
+            if (b === 0n) console.log("Fund this address with a little Sepolia ETH (e.g. https://cloud.google.com/application/web3/faucet/ethereum/sepolia), then request a label.");
+          ' | tee -a setup.log
+      - name: Register the parent name
+        if: steps.what.outputs.label != ''
+        env:
+          ENS_LABEL: ${{ steps.what.outputs.label }}
+        run: pnpm --filter @ordo/contracts setup:ens | tee -a setup.log
+      - name: Set the values in Vercel
+        if: steps.what.outputs.label != ''
+        run: |
+          umask 077
+          grep -E '^ENS_(PARENT_NAME|REGISTRY_ADDRESS|RESOLVER_ADDRESS)=' setup.log > "$RUNNER_TEMP/ens.env"
+          node scripts/vercel-env.mjs push "$RUNNER_TEMP/ens.env" production,preview
+          node -e 'require("fs").writeFileSync(process.argv[1],`ENS_OWNER_KEY=${process.env.ENS_OWNER_KEY.trim().replace(/^(0x)?/,"0x")}\n`,{mode:0o600})' "$RUNNER_TEMP/ens-key.env"
+          node scripts/vercel-env.mjs push "$RUNNER_TEMP/ens-key.env" production,preview --readable
+          rm -f "$RUNNER_TEMP/ens.env" "$RUNNER_TEMP/ens-key.env"
+      - name: Summary
+        if: always()
+        run: |
+          echo '### ENS setup' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          [ -f setup.log ] && cat setup.log >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

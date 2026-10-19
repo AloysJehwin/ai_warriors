@@ -24,6 +24,8 @@ Live on Hedera testnet:
 | `OrdoWorkOrders` | [`0x600807998f50258bc0319afab3411225c51a993f`](https://hashscan.io/testnet/contract/0x600807998f50258bc0319afab3411225c51a993f) |
 | `OrdoPolicies` | [`0xfcde36a4668c18c219ba1f3696bb0d68b9babd43`](https://hashscan.io/testnet/contract/0xfcde36a4668c18c219ba1f3696bb0d68b9babd43) |
 | Ledger topic (HCS) | [`0.0.11087048`](https://hashscan.io/testnet/topic/0.0.11087048) |
+| Lot passport collection (HTS NFT) | [`0.0.11087232`](https://hashscan.io/testnet/token/0.0.11087232) |
+| Maintenance agent account | [`0.0.11087374`](https://hashscan.io/testnet/account/0.0.11087374) · EVM `0x8af16bA6Bbae3DDA39acF028017e175390584db2` |
 
 Deployments run in GitHub Actions with the operator account held in the `hedera-testnet` environment (`HEDERA_OPERATOR_ID`, `HEDERA_OPERATOR_KEY`, an **ECDSA** key):
 
@@ -62,22 +64,25 @@ Post the current commit to the HCS build topic every few hours:
 cd server && HEDERA_BUILD_TOPIC_ID=<build topic> pnpm anchor:build
 ```
 
-## ENS (Sepolia)
+## ENS (Sepolia, ENSv2)
 
-Register and wrap a parent name in the ENS app on Sepolia, take the Name Wrapper and Public Resolver addresses from the official ENS deployments list, then:
-
-```bash
-ENS_RPC_URL=... ENS_OWNER_KEY=0x... ENS_PARENT_NAME=ordo-mfg.eth \
-ENS_NAME_WRAPPER=0x... ENS_PUBLIC_RESOLVER=0x... pnpm bootstrap:ens
-```
-
-It creates `line-02`, `cnc-04/05/07`, `healer` and `maintenance` subnames with `com.ordo.*` text records. Start the server with `IDENTITY=ens ENS_PARENT_NAME=... ENS_RPC_URL=...` and the console shows the names.
-
-## 0G
+ENSv2 gives every name its own registry. `scripts/ens-setup.ts` registers Ordo's parent name once: it deploys Ordo's `PermissionedResolver` and a `UserRegistry` through ENS's `VerifiableFactory`, then registers `<label>.eth` (commit, wait, pay in the testnet's MockUSDC) pointing at both. Run it from the **ENS setup** workflow (put the label in `.github/deploy/ens.request`; needs the `sepolia` environment with `ENS_OWNER_KEY` holding some Sepolia ETH), or locally:
 
 ```bash
-pnpm --filter @ordo/server add @0glabs/0g-serving-broker @0gfoundation/0g-ts-sdk ethers
-LLM_PROVIDER=0g EVIDENCE_STORE=0g ZG_PRIVATE_KEY=0x... pnpm --filter @ordo/server dev
+ENS_OWNER_KEY=0x... ENS_LABEL=ordo-mfg pnpm setup:ens
 ```
 
-Fund the wallet from the 0G faucet and deposit to the compute broker first. Package names change often; check docs.0g.ai.
+**Live:** [`ordo-mfg.eth`](https://sepolia.app.ens.domains/ordo-mfg.eth), registry `0x1F621f14718a9251b74F1683D6F1D5F8E9889358`, resolver `0xC2992b48350F642cd820a22DAf5ffaDB6e26566C`, owner `0x38e6C7622b2E9BdcB16821E88083274489625b74`.
+
+The app then issues the rest as the site changes: `<site>.<parent>` with its own `UserRegistry`, and in it a name for each person (minted to their wallet with no roles on the token, so it cannot be transferred; revoked when they hold no role), each asset and each agent, with `com.ordo.*` text records in Ordo's resolver. The contract addresses are the Sepolia set ENS deployed on 2026-10-01 (`server/src/chain/ensv2.ts`).
+
+## 0G (Galileo testnet, chain 16602)
+
+`src/OrdoAgentNFT.sol` makes each agent of each site an ERC-7857 iNFT: its intelligent data is the policy hash it acts under, its model, the autonomy each line gives it and its scope; Ordo updates it when any of those change (`Updated` events), and the site's plant managers are its authorized users. Agents belong to their site, so tokens do not transfer. It uses OpenZeppelin's ERC-721, which needs Cancun, so `compile.mjs` compiles it in a separate Cancun pass (0G supports Cancun) and its tests run on anvil.
+
+The **0G setup** workflow (`.github/deploy/zerog.request`, environment `zerog-testnet` with `ZG_PRIVATE_KEY`) deploys it (`inft`), turns on evidence copies to 0G Storage (`storage`) and funds the 0G Compute ledger (`ledger`), and writes the values and the key to Vercel. Locally:
+
+```bash
+ZG_PRIVATE_KEY=0x... pnpm setup:zerog                          # deploy OrdoAgentNFT → ZG_INFT_ADDRESS
+ZG_PRIVATE_KEY=0x... pnpm --filter @ordo/server zerog:ledger   # fund 0G Compute (3 0G), list providers
+```

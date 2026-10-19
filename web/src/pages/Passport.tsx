@@ -148,7 +148,7 @@ export function Passport({ runId }: { runId: string }) {
               <ul className="pp-signers">
                 {r.signers.map((s) => (
                   <li key={s.meaning}>
-                    {MEANING[s.meaning] ?? s.meaning} <span className="mono" title={s.address}>{shortAddr(s.address)}</span>
+                    {MEANING[s.meaning] ?? s.meaning} <span className="mono" title={s.address}>{s.ens ?? shortAddr(s.address)}</span>
                     {s.stake && (
                       <span className={`tag ${s.stake.active ? "ok" : "warn"}`}>
                         {s.stake.active ? "staked" : "not staked now"} {fromUnits(s.stake.amount, s.stake.decimals)} {s.stake.symbol}
@@ -208,7 +208,7 @@ export function Passport({ runId }: { runId: string }) {
                 <span>{d.summary}</span>
                 <span className="faint small">
                   {" "}
-                  · signed by <span className="mono" title={d.by}>{shortAddr(d.by)}</span> · {dateTime(d.at)}
+                  · signed by <span className="mono" title={d.by}>{d.ens ?? shortAddr(d.by)}</span> · {dateTime(d.at)}
                   {d.ledgerSeq ? ` · ledger #${d.ledgerSeq}` : ""}
                 </span>
               </li>

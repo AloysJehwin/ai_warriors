@@ -9,6 +9,7 @@ import { HttpError } from "../engine/errors.js";
 import type { RunEngine } from "../pipelines/engine.js";
 import { newId } from "../plant/plant.js";
 import type { Inbox } from "./inbox.js";
+import type { Replicas, ReplicaView } from "./replicas.js";
 import type { Trust } from "./trust.js";
 import type { Recorder } from "./recorder.js";
 
@@ -74,6 +75,8 @@ export class Validation {
     private chainId: number,
     private trust: Trust,
   ) {}
+  /** Copies of evidence on 0G Storage, when configured */
+  replicas: Replicas | null = null;
 
   private async row(siteId: string, id: string): Promise<PkgRow> {
     const r = await this.db.query<PkgRow>("SELECT id, site_id, number, type, title, owner_id, status, step, objective, acceptance, sample_plan, run_id, stage_code, template_id, asset_id, outcome, precheck_json, returned_comment, created_at::text AS created_at, updated_at::text AS updated_at, window_start::text AS window_start, window_end::text AS window_end FROM validation_packages WHERE id = $1 AND site_id = $2", [id, siteId]);
@@ -194,6 +197,10 @@ export class Validation {
     if (f.bytes.byteLength > MAX_FILE) throw new HttpError(400, "Files are limited to 4 MB");
     const hex = sha256hex(f.bytes);
     await this.db.query("INSERT INTO blobs (sha256, mime, size, bytes) VALUES ($1,$2,$3,$4) ON CONFLICT (sha256) DO NOTHING", [hex, f.mime, f.bytes.byteLength, Buffer.from(f.bytes)]);
+    if (this.replicas) {
+      const site = (await this.db.query<{ site_id: string }>("SELECT site_id FROM validation_packages WHERE id = $1", [id])).rows[0];
+      if (site) await this.replicas.request(site.site_id, `sha256:${hex}`);
+    }
     const prev = f.slotId
       ? (await this.db.query<{ id: string; name: string; required: boolean; version: number; sha256: string | null }>("SELECT id, name, required, version, sha256 FROM evidence WHERE id = $1 AND package_id = $2", [f.slotId, id])).rows[0]
       : (await this.db.query<{ id: string; name: string; required: boolean; version: number; sha256: string | null }>("SELECT id, name, required, version, sha256 FROM evidence WHERE package_id = $1 AND name = $2 AND removed_at IS NULL", [id, f.name])).rows[0];
@@ -224,6 +231,14 @@ export class Validation {
     const hash = await this.storeEvidence(id, { ...f, origin: "upload", by: user.address });
     await this.audit(siteId, `user:${user.address}`, id, "evidence.attached", { name: f.name, filename: f.filename, sha256: hash, size: f.bytes.byteLength });
     return this.get(siteId, id);
+  }
+  /** Fetch the evidence file's copy from 0G Storage and check it matches. */
+  async verifyOnZeroG(siteId: string, id: string, evidenceId: string) {
+    await this.row(siteId, id);
+    if (!this.replicas) throw new HttpError(409, "0G Storage is not configured");
+    const e = (await this.db.query<{ sha256: string | null }>("SELECT sha256 FROM evidence WHERE id = $1 AND package_id = $2", [evidenceId, id])).rows[0];
+    if (!e?.sha256) throw new HttpError(404, "Evidence not found");
+    return this.replicas.verify(e.sha256);
   }
   async removeEvidence(siteId: string, user: User, id: string, evidenceId: string) {
     await this.editable(siteId, user, id);
@@ -400,7 +415,9 @@ export class Validation {
     const evidence = (await this.db.query<{ id: string; name: string; requirement: string; required: boolean; filename: string | null; mime: string | null; size: number | null; sha256: string | null; uploaded_by: string | null; uploaded_at: string | null; origin: string; version: number; removed_at: string | null }>(
       "SELECT id, name, requirement, required, filename, mime, size, sha256, uploaded_by, uploaded_at::text, origin, version, removed_at::text FROM evidence WHERE package_id = $1 ORDER BY required DESC, name, version",
       [id],
-    )).rows.map((e) => ({ id: e.id, name: e.name, requirement: e.requirement, required: e.required, filename: e.filename, mime: e.mime, size: e.size === null ? null : Number(e.size), sha256: e.sha256, uploadedBy: e.uploaded_by, uploadedAt: e.uploaded_at ? new Date(e.uploaded_at).toISOString() : null, origin: e.origin, version: Number(e.version), removedAt: e.removed_at ? new Date(e.removed_at).toISOString() : null }));
+    )).rows.map((e) => ({ id: e.id, name: e.name, requirement: e.requirement, required: e.required, filename: e.filename, mime: e.mime, size: e.size === null ? null : Number(e.size), sha256: e.sha256, uploadedBy: e.uploaded_by, uploadedAt: e.uploaded_at ? new Date(e.uploaded_at).toISOString() : null, origin: e.origin, version: Number(e.version), removedAt: e.removed_at ? new Date(e.removed_at).toISOString() : null, zeroG: null as ReplicaView | null }));
+    const copies = this.replicas ? await this.replicas.of(evidence.flatMap((e) => (e.sha256 ? [e.sha256] : []))) : null;
+    for (const e of evidence) e.zeroG = (e.sha256 && copies?.get(e.sha256)) || null;
     const sigRows = (await this.db.query<{ meaning: string; role: Role; address: string; display_name: string | null; signature_id: string; comment: string | null; created_at: string; ledger_seq: number | null; signature: string }>(
       "SELECT ps.meaning, ps.role, ps.address, u.display_name, ps.signature_id, ps.comment, ps.created_at::text, s.ledger_seq, s.signature FROM package_signatures ps JOIN users u ON u.id = ps.user_id JOIN signatures s ON s.id = ps.signature_id WHERE ps.package_id = $1 AND ps.cleared_at IS NULL ORDER BY ps.created_at",
       [id],

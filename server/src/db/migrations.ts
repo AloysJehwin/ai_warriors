@@ -2,7 +2,7 @@
  * Versioned, forward-only migrations. Each runs once, in order, inside a transaction.
  * v1 = the original demo schema (kept so existing databases upgrade cleanly).
  * v2 = real accounts, sites, assets, telemetry, templates, runs, inbox, validation, signatures.
- * v3 = validation workflow · v4 = onboarding and on-chain trust · v5 = agent work orders and autonomy proposals · v6 = lot passports.
+ * v3 = validation workflow · v4 = onboarding and on-chain trust · v5 = agent work orders and autonomy proposals · v6 = lot passports · v7 = jobs on other networks (ENS, 0G).
  */
 export const MIGRATIONS: { version: number; name: string; sql: string }[] = [
   {
@@ -181,6 +181,40 @@ CREATE TABLE passports (run_id TEXT PRIMARY KEY REFERENCES runs(id), site_id TEX
   shipped_to TEXT, shipped_at TIMESTAMPTZ, ship_tx TEXT, ship_pending BOOLEAN, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
 CREATE INDEX passports_site ON passports (site_id, created_at DESC);
+`,
+  },
+  {
+    version: 7,
+    name: "jobs on other networks",
+    sql: `
+CREATE TABLE chain_jobs (id TEXT PRIMARY KEY, site_id TEXT, kind TEXT NOT NULL, ref TEXT NOT NULL, payload_json TEXT NOT NULL,
+  status TEXT NOT NULL, result_json TEXT, error TEXT, attempts INTEGER NOT NULL DEFAULT 0, next_try_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE INDEX chain_jobs_due ON chain_jobs (status, next_try_at);
+CREATE INDEX chain_jobs_ref ON chain_jobs (kind, ref);
+`,
+  },
+  {
+    version: 8,
+    name: "ENS names",
+    sql: `
+CREATE TABLE ens_names (id TEXT PRIMARY KEY, site_id TEXT NOT NULL REFERENCES sites(id), kind TEXT NOT NULL, ref TEXT NOT NULL,
+  label TEXT NOT NULL, name TEXT NOT NULL, registry TEXT, want_json TEXT NOT NULL, have_json TEXT, status TEXT NOT NULL,
+  stage TEXT, sent_json TEXT, pending_txs TEXT, sent_at TIMESTAMPTZ,
+  tx_hash TEXT, error TEXT, attempts INTEGER NOT NULL DEFAULT 0, next_try_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE UNIQUE INDEX ens_names_ref ON ens_names (site_id, kind, ref);
+CREATE UNIQUE INDEX ens_names_name ON ens_names (name);
+CREATE INDEX ens_names_due ON ens_names (status, next_try_at);
+`,
+  },
+  {
+    version: 9,
+    name: "agent iNFTs",
+    sql: `
+CREATE TABLE agent_nfts (site_id TEXT NOT NULL REFERENCES sites(id), agent TEXT NOT NULL, token_id INTEGER, want_json TEXT NOT NULL,
+  have_json TEXT, status TEXT NOT NULL, tx_hash TEXT, mint_tx TEXT, error TEXT, attempts INTEGER NOT NULL DEFAULT 0,
+  next_try_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY (site_id, agent));
 `,
   },
 ];

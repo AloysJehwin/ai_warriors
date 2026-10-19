@@ -2,9 +2,78 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import { useApp } from "../lib/app";
 import { ago, LEVEL_LABEL, shortAddr } from "../lib/format";
-import type { AutonomyLevel, AutonomyProposalView } from "../types";
+import type { AutonomyLevel, AutonomyProposalView, EnsNamesResponse } from "../types";
 import { Action, Field, useToast } from "../ui/kit";
 import { AutonomyModal } from "./Pipelines";
+
+const ENS_STATUS = { pending: ["issuing…", "warn"], issued: ["issued", "ok"], revoked: ["revoked", ""], failed: ["failed", "bad"] } as const;
+
+/** The site's ENSv2 names: the site, each person (held in their own wallet), each asset and agent. */
+function EnsNames() {
+  const { path, site, can } = useApp();
+  const [names, setNames] = useState<EnsNamesResponse | null>(null);
+  const load = () => api.get<EnsNamesResponse>(path("/names")).then(setNames);
+  useEffect(() => {
+    void load();
+  }, [path, site]);
+  if (!names?.live) return null;
+  const order = ["site", "person", "agent", "asset"];
+  const items = [...names.items].sort((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind));
+  return (
+    <section className="card section">
+      <div className="card-h">
+        <h2>ENS names</h2>
+        <span className="faint small">ENSv2 · Sepolia · under {names.parent}</span>
+      </div>
+      <div className="card-b">
+        <p className="small muted">
+          The site has its own ENSv2 registry. Each person's name is minted to their own wallet and cannot be transferred; it carries their roles at this site and is revoked when they hold none.
+        </p>
+        <div className="scroll-x">
+          <table className="t">
+            <tbody>
+              {items.map((n) => {
+                const [label, tone] = ENS_STATUS[n.status];
+                return (
+                  <tr key={`${n.kind}:${n.ref}`}>
+                    <td>
+                      <a href={n.url} target="_blank" rel="noreferrer" className="mono">
+                        {n.name}
+                      </a>
+                      <div className="faint small">{n.records.description ?? n.kind}</div>
+                    </td>
+                    <td>
+                      <span className={`tag ${tone}`}>{label}</span>
+                      {n.error && <div className="field-e small">{n.error}</div>}
+                    </td>
+                    <td className="r">
+                      {n.txUrl && (
+                        <a href={n.txUrl} target="_blank" rel="noreferrer" className="small">
+                          tx
+                        </a>
+                      )}
+                      {n.status === "failed" && can("admin") && (
+                        <Action
+                          className="btn sm"
+                          onClick={async () => {
+                            await api.post(path(`/names/${n.kind}/${encodeURIComponent(n.ref)}/retry`));
+                            await load();
+                          }}
+                        >
+                          Retry
+                        </Action>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  );
+}
 
 export function Settings() {
   const { status, site, can, path, reloadSite, meta, me } = useApp();
@@ -161,6 +230,7 @@ export function Settings() {
           </div>
         </section>
       </div>
+      <EnsNames />
       {auto && (
         <AutonomyModal
           open
