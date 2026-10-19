@@ -89,6 +89,7 @@ export function createApp(sys: System, opts: AppOptions = {}) {
         ? { chainId: sys.trust.chain.cfg.chainId, name: sys.trust.chain.cfg.name, rpcUrl: sys.trust.chain.cfg.rpcUrl, explorerUrl: sys.trust.chain.cfg.explorerUrl, address: sys.trust.chain.cfg.address, symbol: sys.trust.chain.cfg.symbol, decimals: sys.trust.chain.cfg.decimals, workOrders: sys.trust.chain.cfg.workOrders ?? null, policies: sys.trust.chain.cfg.policies ?? null }
         : null,
       restrictedSiteCreation: Boolean(sys.cfg.BOOTSTRAP_ADMIN_ADDRESS),
+      worldId: sys.trust.worldId ? { appId: sys.trust.worldId.cfg.appId, action: sys.trust.worldId.cfg.action, environment: sys.trust.worldId.cfg.environment } : null,
     }),
   );
   app.get("/v1/meta", (c) =>
@@ -148,6 +149,14 @@ export function createApp(sys: System, opts: AppOptions = {}) {
     kind: z.enum(ONBOARDING_KINDS),
     role: z.string().min(2).max(40),
     form: z.record(z.string(), z.string().max(2000)).refine((f) => Object.keys(f).length <= 20, "Too many fields"),
+    /** the IDKit result, for validators when World ID is configured */
+    worldId: z.record(z.string(), z.unknown()).optional(),
+  });
+  // a fresh RP-signed World ID request for this wallet (the proof's signal is the wallet address)
+  app.get("/v1/world-id/request", async (c) => {
+    const p = me(c);
+    if (!sys.trust.worldId) throw new HttpError(404, "World ID is not configured");
+    return c.json({ ...sys.trust.worldId.request(), signal: p.user.address.toLowerCase() });
   });
   app.get("/v1/onboarding/site/:siteId", async (c) => {
     me(c);
@@ -547,10 +556,11 @@ export function createApp(sys: System, opts: AppOptions = {}) {
       sys.trust.chainStatus(sid(c)),
       sys.trust.proposals(sid(c)),
     ]);
-    return c.json({ validators, me: { ...mine, row: await sys.trust.validatorRow(sid(c), me(c).user.id) }, chain, proposals });
+    return c.json({ validators, me: { ...mine, row: await sys.trust.validatorRow(sid(c), me(c).user.id), human: await sys.trust.isHuman(sid(c), me(c).user.id) }, chain, proposals });
   });
   // after a stake or unstake from the wallet: schedule (or delete) the payout at the end of the cooldown on Hedera
   site.post("/validators/me/payout-schedule", async (c) => c.json({ payout: (await sys.schedules?.syncStake(sid(c), me(c).user.address)) ?? null }));
+  site.post("/validators/world-id", async (c) => c.json(await sys.trust.verifyHuman(sid(c), me(c).user, await body(c, z.object({ worldId: z.record(z.string(), z.unknown()) })).then((b) => b.worldId))));
   site.get("/vendors", async (c) => c.json(await sys.trust.vendors(sid(c))));
   site.get("/chain", async (c) => c.json(await sys.trust.chainStatus(sid(c))));
   site.post("/chain/register/sign-request", async (c) => {

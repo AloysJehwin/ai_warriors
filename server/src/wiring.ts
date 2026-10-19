@@ -75,7 +75,7 @@ export interface System {
   close(): Promise<void>;
 }
 
-export async function buildSystem(cfg: Config, opts: { now?: () => number; policyText?: string; llm?: LlmProvider; trustTransport?: Transport; x402Facilitator?: import("@x402/core/server").FacilitatorClient; x402Fetch?: typeof fetch; ensTransport?: Transport; blobStore?: import("./chain/zerog.js").BlobStore; inftTransport?: Transport; scheduler?: ScheduleRail } = {}): Promise<System> {
+export async function buildSystem(cfg: Config, opts: { now?: () => number; policyText?: string; llm?: LlmProvider; trustTransport?: Transport; x402Facilitator?: import("@x402/core/server").FacilitatorClient; x402Fetch?: typeof fetch; ensTransport?: Transport; blobStore?: import("./chain/zerog.js").BlobStore; inftTransport?: Transport; scheduler?: ScheduleRail; worldIdFetch?: typeof fetch } = {}): Promise<System> {
   const warnings: string[] = [];
   if (cfg.VERCEL && !cfg.DATABASE_URL) throw new Error("On Vercel, DATABASE_URL is required (add Neon from the Vercel Marketplace)");
   const now = opts.now ?? Date.now;
@@ -162,6 +162,15 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
   }
   const trust = new Trust(db, rec, sigs, trustChain, cfg.SIGNATURE_CHAIN_ID);
   inbox.trust = trust;
+  if (cfg.WORLD_ID_APP_ID && cfg.WORLD_ID_RP_ID && cfg.WORLD_ID_SIGNING_KEY) {
+    const { WorldId } = await import("./chain/worldid.js");
+    trust.worldId = new WorldId(
+      { appId: cfg.WORLD_ID_APP_ID as `app_${string}`, rpId: cfg.WORLD_ID_RP_ID, signingKey: cfg.WORLD_ID_SIGNING_KEY, action: cfg.WORLD_ID_ACTION, environment: cfg.WORLD_ID_ENVIRONMENT, verifyBase: cfg.WORLD_ID_VERIFY_URL },
+      opts.worldIdFetch,
+    );
+  } else if (cfg.WORLD_ID_APP_ID || cfg.WORLD_ID_RP_ID || cfg.WORLD_ID_SIGNING_KEY) {
+    warnings.push("World ID needs WORLD_ID_APP_ID, WORLD_ID_RP_ID and WORLD_ID_SIGNING_KEY together; validators are not checked for one person per seat");
+  }
   const validation = new Validation(db, rec, ledger, sigs, engine, inbox, cfg.SIGNATURE_CHAIN_ID, trust);
   // ---- Evidence copies on 0G Storage ----
   if (opts.blobStore || cfg.EVIDENCE_STORE === "0g") {

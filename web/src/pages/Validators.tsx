@@ -8,6 +8,7 @@ import { fromUnits, trustTx } from "../lib/wallet";
 import type { PackageSummary, TypedSignature, ValidatorsView, VendorRow } from "../types";
 import { Action, Empty, Field, Loading, Modal, useToast } from "../ui/kit";
 import { Select } from "../ui/Select";
+import { WorldIdButton } from "../ui/WorldId";
 import { ApplyForm, MyApplications } from "./Onboarding";
 
 function ChainBanner({ v, onChange }: { v: ValidatorsView; onChange: () => Promise<unknown> }) {
@@ -155,6 +156,16 @@ export function Validators() {
           </div>
           <div className="card-b">
             {v.me.reason && <p className="muted">{v.me.reason}</p>}
+            {status.worldId && (
+              <WorldIdButton
+                done={v.me.human}
+                onProof={async (worldId) => {
+                  await api.post(path("/validators/world-id"), { worldId });
+                  toast("Verified with World ID", "ok");
+                  await load();
+                }}
+              />
+            )}
             {!trust && v.me.ok && <p className="muted">You can sign “Reviewed by” and “Approved by” and release quality gates. Stakes are off on this deployment, so your approval is the whole credential.</p>}
             {trust && info && mine.onchain && (
               <>

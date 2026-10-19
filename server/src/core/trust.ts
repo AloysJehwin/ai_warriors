@@ -9,6 +9,7 @@ import { canApproveAny } from "../domain/policy.js";
 import { ROLE_LABEL, ROLES, type Role } from "../domain/types.js";
 import { HttpError } from "../engine/errors.js";
 import { newId } from "../plant/plant.js";
+import { WorldId } from "../chain/worldid.js";
 import type { Recorder } from "./recorder.js";
 import type { Schedules } from "./schedules.js";
 
@@ -36,6 +37,7 @@ interface RequestRow {
   signature_id: string | null;
   created_at: string;
   display_name: string | null;
+  world_id_nullifier: string | null;
 }
 export interface OnboardingView {
   id: string;
@@ -54,6 +56,8 @@ export interface OnboardingView {
   reason: string | null;
   createdAt: string;
   chain: RelayView | null;
+  /** the applicant proved with World ID that they are a person not already validating here */
+  humanVerified: boolean;
 }
 export interface RelayView {
   kind: string;
@@ -68,12 +72,16 @@ const iso = (s: string | null) => (s ? new Date(s).toISOString() : null);
 /**
  * Who may do what, and the proof of it. Onboarding requests become roles only with a site
  * admin's EIP-712 signature; validators are people whose validator onboarding was approved and,
- * when the trust contract is configured, who hold an active stake on-chain. Every grant, release
- * and slash the contract can verify is relayed to it with the original signatures.
+ * when the trust contract is configured, who hold an active stake on-chain. With World ID configured,
+ * each validator is also one verified person: a person holds one validator seat per site, whatever
+ * wallet they apply from. Every grant, release and slash the contract can verify is relayed to it with
+ * the original signatures.
  */
 export class Trust {
   /** Set when Hedera's Schedule Service returns stakes at the end of the unstake cooldown */
   schedules: Schedules | null = null;
+  /** set when World ID is configured: validators must prove they are a person not already validating at the site */
+  worldId: WorldId | null = null;
   constructor(
     private db: Db,
     private rec: Recorder,
@@ -115,7 +123,7 @@ export class Trust {
     return s;
   }
 
-  async submit(siteId: string, user: User, input: { kind: OnboardingKind; role: string; form: Record<string, string> }): Promise<OnboardingView> {
+  async submit(siteId: string, user: User, input: { kind: OnboardingKind; role: string; form: Record<string, string>; worldId?: unknown }): Promise<OnboardingView> {
     await this.publicSite(siteId);
     const role = this.roleFor(input.kind, input.role);
     const form = Object.fromEntries(Object.entries(input.form).map(([k, v]) => [k.slice(0, 40), String(v).slice(0, 2000)]));
@@ -124,9 +132,22 @@ export class Trust {
     if (input.kind === "validator" && !form.qualifications?.trim()) throw new HttpError(400, "Describe your qualifications");
     const dup = await this.db.query("SELECT 1 FROM onboarding_requests WHERE site_id = $1 AND user_id = $2 AND kind = $3 AND role = $4 AND status = 'pending'", [siteId, user.id, input.kind, role]);
     if (dup.rows.length) throw new HttpError(409, "You already have a pending request for this");
+    let nullifier: string | null = null;
+    if (input.kind === "validator" && this.worldId) {
+      if (!input.worldId) throw new HttpError(400, "Validators verify with World ID: one person, one validator at a site");
+      nullifier = (await this.worldId.verify(input.worldId, user.address)).nullifier;
+      await this.assertOneHuman(this.db, siteId, user.id, nullifier);
+      const other = await this.db.query("SELECT 1 FROM onboarding_requests WHERE site_id = $1 AND world_id_nullifier = $2 AND user_id <> $3 AND status = 'pending'", [siteId, nullifier, user.id]);
+      if (other.rows.length) throw new HttpError(409, "You already applied as a validator at this site from another wallet");
+    }
     const id = newId("onb");
-    await this.db.query("INSERT INTO onboarding_requests (id, site_id, user_id, address, kind, role, form_json) VALUES ($1,$2,$3,$4,$5,$6,$7)", [id, siteId, user.id, user.address, input.kind, role, JSON.stringify(form)]);
-    await this.rec.decide(siteId, { agent: `user:${user.address}`, kind: "onboarding.submitted", summary: `${form.fullName} applied as ${Trust.labelOf(input.kind, role)}`, data: { requestId: id, kind: input.kind, role, formHash: hashOf(form) } });
+    await this.db.query("INSERT INTO onboarding_requests (id, site_id, user_id, address, kind, role, form_json, world_id_nullifier) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)", [id, siteId, user.id, user.address, input.kind, role, JSON.stringify(form), nullifier]);
+    await this.rec.decide(siteId, {
+      agent: `user:${user.address}`,
+      kind: "onboarding.submitted",
+      summary: `${form.fullName} applied as ${Trust.labelOf(input.kind, role)}`,
+      data: { requestId: id, kind: input.kind, role, formHash: hashOf(form), ...(nullifier ? { worldId: WorldId.ledgerRef(siteId, nullifier) } : {}) },
+    });
     return this.get(siteId, id);
   }
 
@@ -179,6 +200,7 @@ export class Trust {
       reason: r.reason,
       createdAt: new Date(r.created_at).toISOString(),
       chain: await this.relayOf(r.site_id, r.id),
+      humanVerified: Boolean(r.world_id_nullifier),
     };
   }
   async get(siteId: string, id: string) {
@@ -248,6 +270,7 @@ export class Trust {
     const add = (role: string) => q.query("INSERT INTO memberships (site_id, user_id, role, created_by) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING", [siteId, r.user_id, role, admin.id]);
     if (r.kind === "member") await add(r.role);
     if (r.kind === "validator") {
+      if (r.world_id_nullifier) await this.bindHuman(q, siteId, r.user_id, r.address, r.world_id_nullifier);
       await add(VALIDATOR_SCOPES[r.role as ValidatorScope]);
       await q.query(
         "INSERT INTO validators (site_id, user_id, scope, status, request_id) VALUES ($1,$2,$3,'approved',$4) ON CONFLICT (site_id, user_id) DO UPDATE SET scope = EXCLUDED.scope, status = 'approved', request_id = EXCLUDED.request_id, approved_at = now()",
@@ -355,6 +378,8 @@ export class Trust {
   async isValidator(siteId: string, user: User): Promise<{ ok: boolean; reason: string | null }> {
     const v = await this.validatorRow(siteId, user.id);
     if (!v || v.status !== "approved") return { ok: false, reason: "Only an approved validator can sign this. Apply as a validator from Team → Validators." };
+    if (this.worldId && !(await this.isHuman(siteId, user.id)))
+      return { ok: false, reason: "Verify with World ID before you sign (Team → Validators): each validator at a site must be a different person." };
     if (!this.chain) return { ok: true, reason: null };
     const active = await this.chain.isActiveValidator(siteId, user.address).catch(() => null);
     if (active === null) return { ok: false, reason: "Could not reach the trust contract to check your stake. Try again." };
@@ -366,9 +391,34 @@ export class Trust {
     if (!r.ok) throw new HttpError(403, r.reason!);
   }
 
+  // ---------------------------------------------------------------- one person per validator (World ID)
+  async isHuman(siteId: string, userId: string) {
+    return (await this.db.query("SELECT 1 FROM validator_humans WHERE site_id = $1 AND user_id = $2", [siteId, userId])).rows.length > 0;
+  }
+  private async assertOneHuman(q: Queryable, siteId: string, userId: string, nullifier: string) {
+    const held = (await q.query<{ user_id: string }>("SELECT user_id FROM validator_humans WHERE site_id = $1 AND nullifier = $2", [siteId, nullifier])).rows[0];
+    if (held && held.user_id !== userId) throw new HttpError(409, "You already validate at this site from another wallet: one person holds one validator seat per site");
+  }
+  private async bindHuman(q: Queryable, siteId: string, userId: string, address: string, nullifier: string) {
+    await this.assertOneHuman(q, siteId, userId, nullifier);
+    const mine = (await q.query<{ nullifier: string }>("SELECT nullifier FROM validator_humans WHERE site_id = $1 AND user_id = $2", [siteId, userId])).rows[0];
+    if (mine && mine.nullifier !== nullifier) throw new HttpError(409, "This wallet is already verified at this site as a different World ID");
+    if (!mine) await q.query("INSERT INTO validator_humans (site_id, nullifier, user_id, address) VALUES ($1,$2,$3,$4)", [siteId, nullifier, userId, address]);
+  }
+  /** World ID for a validator approved before the site required it, or whose application predates it. */
+  async verifyHuman(siteId: string, user: User, result: unknown) {
+    if (!this.worldId) throw new HttpError(409, "World ID is not configured");
+    const v = await this.validatorRow(siteId, user.id);
+    if (!v || v.status !== "approved") throw new HttpError(403, "Only an approved validator verifies here; apply as a validator with World ID instead");
+    const { nullifier } = await this.worldId.verify(result, user.address);
+    await this.db.tx((q) => this.bindHuman(q, siteId, user.id, user.address, nullifier));
+    await this.rec.decide(siteId, { agent: `user:${user.address}`, kind: "validator.human_verified", summary: `${user.address} verified with World ID as a unique person`, data: { worldId: WorldId.ledgerRef(siteId, nullifier) } });
+    return { human: true };
+  }
+
   async validators(siteId: string) {
-    const rows = await this.db.query<{ user_id: string; scope: ValidatorScope; status: string; approved_at: string; address: string; display_name: string | null }>(
-      "SELECT v.user_id, v.scope, v.status, v.approved_at::text, u.address, u.display_name FROM validators v JOIN users u ON u.id = v.user_id WHERE v.site_id = $1 ORDER BY v.approved_at",
+    const rows = await this.db.query<{ user_id: string; scope: ValidatorScope; status: string; approved_at: string; address: string; display_name: string | null; human: boolean }>(
+      "SELECT v.user_id, v.scope, v.status, v.approved_at::text, u.address, u.display_name, EXISTS (SELECT 1 FROM validator_humans h WHERE h.site_id = v.site_id AND h.user_id = v.user_id) AS human FROM validators v JOIN users u ON u.id = v.user_id WHERE v.site_id = $1 ORDER BY v.approved_at",
       [siteId],
     );
     return Promise.all(
@@ -378,7 +428,7 @@ export class Trust {
               .then(([s, a, payout]) => ({ stake: s.amount, unlockAt: s.unlockAt, active: a, payout }))
               .catch(() => null)
           : null;
-        return { userId: v.user_id, address: v.address, name: v.display_name, scope: v.scope, scopeLabel: ROLE_LABEL[VALIDATOR_SCOPES[v.scope]], status: v.status, approvedAt: new Date(v.approved_at).toISOString(), onchain };
+        return { userId: v.user_id, address: v.address, name: v.display_name, scope: v.scope, scopeLabel: ROLE_LABEL[VALIDATOR_SCOPES[v.scope]], status: v.status, approvedAt: new Date(v.approved_at).toISOString(), human: Boolean(v.human), onchain };
       }),
     );
   }
