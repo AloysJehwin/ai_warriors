@@ -72,6 +72,8 @@ ENSv2 gives every name its own registry. `scripts/ens-setup.ts` registers Ordo's
 ENS_OWNER_KEY=0x... ENS_LABEL=ordo-mfg pnpm setup:ens
 ```
 
+**Live:** [`ordo-mfg.eth`](https://sepolia.app.ens.domains/ordo-mfg.eth), registry `0x1F621f14718a9251b74F1683D6F1D5F8E9889358`, resolver `0xC2992b48350F642cd820a22DAf5ffaDB6e26566C`, owner `0x38e6C7622b2E9BdcB16821E88083274489625b74`.
+
 The app then issues the rest as the site changes: `<site>.<parent>` with its own `UserRegistry`, and in it a name for each person (minted to their wallet with no roles on the token, so it cannot be transferred; revoked when they hold no role), each asset and each agent, with `com.ordo.*` text records in Ordo's resolver. The contract addresses are the Sepolia set ENS deployed on 2026-10-01 (`server/src/chain/ensv2.ts`).
 
 ## 0G (Galileo testnet, chain 16602)
