@@ -4,6 +4,7 @@ import { useApp } from "./lib/app";
 import { LEVEL_LABEL, shortAddr } from "./lib/format";
 import { href, useRoute } from "./lib/router";
 import { Field, Icon, Menu, Modal, useToast } from "./ui/kit";
+import { ThemeToggle } from "./ui/ThemeToggle";
 import { Approvals } from "./pages/Approvals";
 import { Builder } from "./pages/Builder";
 import { Floor } from "./pages/Floor";
@@ -100,9 +101,12 @@ export function Shell({ onSignOut, onSwitchSite }: { onSignOut: () => void; onSw
   return (
     <div className="shell">
       <aside className="side">
-        <div className="brand">
-          <b>Ordo</b>
-          <span className="eyebrow">Autonomous orchestration</span>
+        <div className="brand-row">
+          <div className="brand">
+            <b>Ordo</b>
+            <span className="eyebrow">Autonomous orchestration</span>
+          </div>
+          <ThemeToggle />
         </div>
         <nav className="nav" aria-label="Main">
           {NAV.map(navItem)}

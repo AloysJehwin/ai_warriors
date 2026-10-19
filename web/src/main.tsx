@@ -10,6 +10,7 @@ import { Setup } from "./pages/Setup";
 import { Shell } from "./Shell";
 import type { Me, Meta, Status } from "./types";
 import { ToastProvider } from "./ui/kit";
+import { ThemeToggle } from "./ui/ThemeToggle";
 import "./styles.css";
 
 const lastSite = () => {
@@ -94,6 +95,7 @@ createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <ToastProvider>
       <Root />
+      <ThemeToggle floating />
     </ToastProvider>
   </StrictMode>,
 );

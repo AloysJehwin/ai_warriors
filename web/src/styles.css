@@ -23,8 +23,10 @@
   --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   color-scheme: light;
 }
+/* Dark tokens: follow the system unless the person picked light; an explicit pick of dark always wins.
+   The pick is stored by lib/theme.ts and set on <html data-theme> before first paint (index.html). */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #171615;
     --surface: #201f1d;
     --surface-2: #2a2826;
@@ -45,6 +47,27 @@
     --info: #9cc3ec;
     color-scheme: dark;
   }
+}
+:root[data-theme="dark"] {
+  --bg: #171615;
+  --surface: #201f1d;
+  --surface-2: #2a2826;
+  --text: #efece8;
+  --muted: #b5b0ab;
+  --faint: #827d78;
+  --divider: color-mix(in srgb, #efece8 14%, transparent);
+  --accent: #e1ad66;
+  --accent-50: #2a2218;
+  --accent-100: #3a2b17;
+  --accent-700: #f5cd96;
+  --ok: #8fd19e;
+  --ok-bg: #1d2e21;
+  --warn: #f5cd96;
+  --warn-bg: #3a2b17;
+  --bad: #f2a29b;
+  --bad-bg: #3a1f1c;
+  --info: #9cc3ec;
+  color-scheme: dark;
 }
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; }
@@ -251,6 +274,10 @@ fieldset.plain { border: 0; padding: 0; margin: 0; min-width: 0; }
 .shell { display: flex; min-height: 100%; }
 .side { width: 232px; flex: none; border-right: 1px solid var(--divider); padding: 24px 14px 16px; display: flex; flex-direction: column; gap: 26px; position: sticky; top: 0; height: 100vh; overflow: auto; }
 .brand { padding: 0 10px; }
+.brand-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.theme-float { position: fixed; top: 12px; right: 12px; z-index: 40; background: var(--surface); border: 1px solid var(--divider); }
+/* the sidebar carries its own toggle */
+body:has(.shell) .theme-float { display: none; }
 .nav { display: flex; flex-direction: column; gap: 2px; }
 .nav a { display: flex; align-items: center; gap: 12px; padding: 9px 10px; border-radius: var(--radius); color: var(--text); }
 .nav a:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); text-decoration: none; }
