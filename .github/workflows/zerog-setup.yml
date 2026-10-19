@@ -1,11 +1,13 @@
 name: 0G setup
 
-# Sets up Ordo on 0G Galileo with the key held in the `zerog-testnet` environment (secret ZG_PRIVATE_KEY, an EVM key
-# holding testnet 0G from faucet.0g.ai). List what to do in .github/deploy/zerog.request and push:
+# Sets up Ordo on 0G Galileo (chain 16602). List what to do in .github/deploy/zerog.request and push:
+#   key       generate Ordo's 0G key in this job (if none exists yet); it goes straight to Vercel and is never printed.
+#             The log shows its address: fund it from faucet.0g.ai.
 #   inft      deploy OrdoAgentNFT                → ZG_INFT_ADDRESS
 #   storage   copy evidence to 0G Storage        → EVIDENCE_STORE=0g
 #   ledger    fund the 0G Compute ledger         (ZG_LEDGER_0G, default 3; then set LLM_PROVIDER=0g)
-# The values and ZG_PRIVATE_KEY go to Vercel (needs the repository secret VERCEL_TOKEN); the key is never printed.
+# Runs in the `hedera-testnet` environment, which holds VERCEL_TOKEN. The key comes from a ZG_PRIVATE_KEY secret there if
+# one is set, otherwise from Vercel. The values and the key are written to Vercel.
 on:
   push:
     paths: [".github/deploy/zerog.request"]
@@ -17,9 +19,11 @@ permissions:
 jobs:
   setup:
     runs-on: ubuntu-latest
-    environment: zerog-testnet
+    environment: hedera-testnet
     env:
-      ZG_PRIVATE_KEY: ${{ secrets.ZG_PRIVATE_KEY }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_PROJECT_ID: prj_ua7E01jdI0VpLBJvZyqqulOlBzGP
+      VERCEL_ORG_ID: team_8ghjcEpH2t9p2BktkDNQ9ZXm
       ZG_LEDGER_0G: ${{ vars.ZG_LEDGER_0G }}
     steps:
       - uses: actions/checkout@v4
@@ -37,7 +41,43 @@ jobs:
           if [ -z "$(echo $tasks)" ]; then echo "any=false" >> "$GITHUB_OUTPUT"; echo "Nothing requested."; exit 0; fi
           echo "any=true" >> "$GITHUB_OUTPUT"
           echo "Doing:$tasks"
-          if [ -z "$ZG_PRIVATE_KEY" ]; then echo "::error::Add ZG_PRIVATE_KEY to the zerog-testnet environment first"; exit 1; fi
+      - name: 0G key
+        if: steps.what.outputs.any == 'true'
+        env:
+          SECRET_KEY: ${{ secrets.ZG_PRIVATE_KEY }}
+          WANT_KEY: ${{ contains(steps.what.outputs.tasks, ' key ') }}
+        run: |
+          umask 077
+          f="$RUNNER_TEMP/zg-key.env"
+          if [ -n "$SECRET_KEY" ]; then
+            echo "ZG_PRIVATE_KEY=$SECRET_KEY" > "$f"; echo "Using the ZG_PRIVATE_KEY secret"
+          else
+            if [ -z "$VERCEL_TOKEN" ]; then echo "::error::Needs VERCEL_TOKEN (or a ZG_PRIVATE_KEY secret)"; exit 1; fi
+            node scripts/vercel-env.mjs export ZG_PRIVATE_KEY "$f"
+            if [ ! -s "$f" ]; then
+              if [ "$WANT_KEY" != "true" ]; then echo "::error::No 0G key yet: request 'key' first"; exit 1; fi
+              (cd contracts && node --input-type=module -e 'import { generatePrivateKey } from "viem/accounts"; console.log(`ZG_PRIVATE_KEY=${generatePrivateKey()}`)') > "$f"
+              node scripts/vercel-env.mjs push "$f" production,preview --readable
+              echo "Generated a new 0G key and stored it in Vercel"
+            fi
+          fi
+          key=$(sed -n 's/^ZG_PRIVATE_KEY=//p' "$f")
+          echo "::add-mask::$key"
+          echo "ZG_PRIVATE_KEY=$key" >> "$GITHUB_ENV"
+          rm -f "$f"
+      - name: 0G address
+        if: steps.what.outputs.any == 'true'
+        run: |
+          cd contracts && node --input-type=module -e '
+            import { privateKeyToAccount } from "viem/accounts";
+            import { createPublicClient, defineChain, http, formatEther } from "viem";
+            const chain = defineChain({ id: 16602, name: "0G-Galileo-Testnet", nativeCurrency: { name: "0G", symbol: "0G", decimals: 18 }, rpcUrls: { default: { http: ["https://evmrpc-testnet.0g.ai"] } } });
+            const a = privateKeyToAccount(process.env.ZG_PRIVATE_KEY.replace(/^(0x)?/, "0x")).address;
+            const b = await createPublicClient({ chain, transport: http() }).getBalance({ address: a }).catch(() => null);
+            console.log(`0G address: ${a}`);
+            console.log(`Galileo balance: ${b === null ? "unknown" : formatEther(b) + " 0G"}`);
+            if (b === 0n) console.log("Fund this address from https://faucet.0g.ai, then request inft / storage.");
+          ' | tee -a setup.log
       - name: Agent iNFT contract
         if: contains(steps.what.outputs.tasks, ' inft ')
         run: pnpm --filter @ordo/contracts setup:zerog | tee -a setup.log
@@ -48,18 +88,14 @@ jobs:
         if: contains(steps.what.outputs.tasks, ' ledger ')
         run: pnpm --filter @ordo/server zerog:ledger | tee -a setup.log
       - name: Set the values in Vercel
-        if: steps.what.outputs.any == 'true'
-        env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_PROJECT_ID: prj_ua7E01jdI0VpLBJvZyqqulOlBzGP
-          VERCEL_ORG_ID: team_8ghjcEpH2t9p2BktkDNQ9ZXm
+        if: contains(steps.what.outputs.tasks, ' inft ') || contains(steps.what.outputs.tasks, ' storage ')
         run: |
-          if [ -z "$VERCEL_TOKEN" ]; then echo "::warning::No VERCEL_TOKEN: set the values above in Vercel by hand"; exit 0; fi
           umask 077
           grep -E '^(ZG_INFT_ADDRESS|EVIDENCE_STORE)=' setup.log > "$RUNNER_TEMP/zg.env" || true
-          node -e 'const k=process.env.ZG_PRIVATE_KEY.trim().replace(/^(0x)?/,"0x");require("fs").appendFileSync(process.argv[1],`ZG_PRIVATE_KEY=${k}\n`)' "$RUNNER_TEMP/zg.env"
-          node scripts/vercel-env.mjs push "$RUNNER_TEMP/zg.env" production,preview
-          rm -f "$RUNNER_TEMP/zg.env"
+          [ -s "$RUNNER_TEMP/zg.env" ] && node scripts/vercel-env.mjs push "$RUNNER_TEMP/zg.env" production,preview
+          node -e 'require("fs").writeFileSync(process.argv[1],`ZG_PRIVATE_KEY=${process.env.ZG_PRIVATE_KEY.trim().replace(/^(0x)?/,"0x")}\n`,{mode:0o600})' "$RUNNER_TEMP/zg-key.env"
+          node scripts/vercel-env.mjs push "$RUNNER_TEMP/zg-key.env" production,preview --readable
+          rm -f "$RUNNER_TEMP/zg.env" "$RUNNER_TEMP/zg-key.env"
       - name: Summary
         if: always()
         run: |
