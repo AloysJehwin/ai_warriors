@@ -10,10 +10,16 @@ const require = createRequire(import.meta.url);
 // Contracts for 0G (OrdoAgentNFT) use OpenZeppelin's ERC-721, which needs Cancun; they compile separately and are
 // tested on anvil. Everything else stays on Shanghai so the in-process test chain (ganache) can run it.
 const CANCUN = new Set(["src/OrdoAgentNFT.sol"]);
+// shared sources the Cancun contracts import; they compile in both passes
+const SHARED = new Set(["src/OrdoSigned.sol"]);
 const sources = {};
 const cancunSources = {};
 for (const dir of ["src", "test"])
-  for (const f of readdirSync(join(root, dir)).filter((f) => f.endsWith(".sol"))) (CANCUN.has(`${dir}/${f}`) ? cancunSources : sources)[`${dir}/${f}`] = { content: readFileSync(join(root, dir, f), "utf8") };
+  for (const f of readdirSync(join(root, dir)).filter((f) => f.endsWith(".sol"))) {
+    const src = { content: readFileSync(join(root, dir, f), "utf8") };
+    (CANCUN.has(`${dir}/${f}`) ? cancunSources : sources)[`${dir}/${f}`] = src;
+    if (SHARED.has(`${dir}/${f}`)) cancunSources[`${dir}/${f}`] = src;
+  }
 
 const input = {
   language: "Solidity",

@@ -68,6 +68,18 @@ run("agent iNFTs", () => {
     expect(decisions.some((d: any) => d.kind === "agent.inft_updated" && /autonomy/.test(d.summary))).toBe(true);
   }, 120_000);
 
+  it("keeps tokens the current contract has, and mints again those from an earlier contract", async () => {
+    const before = (await admin.call("GET", `${S()}/agents`)).json;
+    const tokenOf = (list: any[], k: string) => list.find((a: any) => a.key === k).inft.tokenId;
+    await sys.db.query("UPDATE agent_nfts SET contract = NULL WHERE site_id = $1 AND agent = 'planning'", [site]);
+    await sys.db.query("UPDATE agent_nfts SET contract = '0x0000000000000000000000000000000000000001' WHERE site_id = $1 AND agent = 'supply'", [site]);
+    await settle();
+    const after = (await admin.call("GET", `${S()}/agents`)).json;
+    expect(tokenOf(after, "planning")).toBe(tokenOf(before, "planning"));
+    // forgotten and queued to mint again (this test reuses one contract, which still holds the name, so it stays unminted)
+    expect(after.find((a: any) => a.key === "supply").inft).toMatchObject({ tokenId: null, error: expect.stringMatching(/AgentExists/) });
+  }, 120_000);
+
   it("keeps agents with their site: tokens do not transfer", async () => {
     const d = deployer(anvil.url);
     await expect(

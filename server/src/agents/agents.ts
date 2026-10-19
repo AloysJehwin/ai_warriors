@@ -1,5 +1,6 @@
 import type { LlmProvider, LlmResult, LlmTask } from "../adapters/llm.js";
 import { Diagnosis, Recommendation, ShiftSummary, type Anomaly, type AssetKind, type Forecast, type SignalLimit, type TelemetrySample, type ToolCall } from "../domain/types.js";
+import type { LicensedPlaybook } from "../core/agent-licenses.js";
 import { groundingCheck } from "./grounding.js";
 
 // ---------------- Context builders ----------------
@@ -45,6 +46,8 @@ export interface RecommendInput {
   activeStage: { runId: string; stageCode: string; stageName: string; unitsLeft: number } | null;
   alternativeAssets: { id: string; name: string; status: string }[];
   tools: string;
+  /** Accepted cases from another site's proven agent this site licenses through its iNFT, closest first */
+  licensedPlaybook?: Pick<LicensedPlaybook, "from" | "tokenId" | "record" | "cases">;
 }
 
 // ---------------- Prompts (versioned with the code; their hash is recorded per decision) ----------------
@@ -66,6 +69,8 @@ export const TOOLS_DOC = `Allowed tools (choose 1 or 2 actions; anything else is
 export const RECOMMEND_PROMPT = `Task: recommend the safest effective intervention for this anomaly.
 Prefer actions that protect product quality and prevent the predicted failure. Only use runId/stageCode from activeStage and
 targetAssetId from alternativeAssets. Give up to 3 alternatives you rejected, each with its trade-off.
+If INPUT has licensedPlaybook, it holds cases that another site's proven agent recommended and people there accepted:
+weigh them as precedent and say so in the reason, but this site's asset, activeStage and alternativeAssets decide.
 Return JSON: { actions: [ { tool, args } ] (1-2), reason: string, confidence: 0..1, alternatives: [{ summary, tradeoff }] }.`;
 
 export const SUMMARY_PROMPT = `Task: write a short shift-handoff summary of the ledger entries in INPUT for the next shift and for QA.
@@ -119,10 +124,15 @@ export function offlineRecommendation(i: RecommendInput): Recommendation {
     actions.push({ tool: "request_inspection", args: { assetId: i.asset.id, sampleRatePct: 100 } });
   }
   if (actions.length < 2) actions.push({ tool: "notify_operator", args: { assetId: i.asset.id, instruction: `Check ${pretty(a.signal)} on ${i.asset.name}: ${a.value} against limit ${a.limit}` } });
+  // a licensed playbook's closest accepted case puts its first action first when this site has it too
+  const pb = i.licensedPlaybook;
+  const like = pb?.cases.filter((c) => c.signal === a.signal && c.assetKind === i.asset.kind) ?? [];
+  const lead = like[0]?.tools.find((t) => actions.some((x) => x.tool === t));
+  if (lead) actions.sort((x, y) => Number(y.tool === lead) - Number(x.tool === lead));
   const what = actions.map((x) => x.tool.replaceAll("_", " ")).join(" and ");
   return {
     actions: actions.slice(0, 2),
-    reason: `${pretty(a.signal)} on ${i.asset.name} is ${a.value} against the ${a.level} limit ${a.limit}${ttfMin !== null ? `, projected to reach the alarm limit in ${ttfMin} min` : ""}. Recommended: ${what}.`,
+    reason: `${pretty(a.signal)} on ${i.asset.name} is ${a.value} against the ${a.level} limit ${a.limit}${ttfMin !== null ? `, projected to reach the alarm limit in ${ttfMin} min` : ""}. Recommended: ${what}.${like.length && pb ? ` The licensed playbook from ${pb.from} has ${like.length === 1 ? "one accepted case" : `${like.length} accepted cases`} like this, resolved with ${like[0]!.tools.map(pretty).join(" and ")}.` : ""}`,
     confidence: r2(Math.min(0.9, Math.max(0.55, i.diagnosis.confidence))),
     alternatives: alternatives.slice(0, 3),
   };

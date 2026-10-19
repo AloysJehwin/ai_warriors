@@ -6,6 +6,7 @@ import { LocalSignedAnchor, type AnchorAdapter } from "./adapters/rails.js";
 import { Agents } from "./agents/agents.js";
 import { Auth, Signatures } from "./auth/auth.js";
 import { Assessments } from "./core/assessments.js";
+import { AgentLicenses } from "./core/agent-licenses.js";
 import { AgentNfts } from "./core/agent-nfts.js";
 import { Autonomy } from "./core/autonomy.js";
 import { Inbox } from "./core/inbox.js";
@@ -68,6 +69,7 @@ export interface System {
   names: Names;
   lotNames: LotNames;
   agentNfts: AgentNfts;
+  agentLicenses: AgentLicenses;
   /** x402: the paid assessment route's middleware and terms, when Ordo sells assessments */
   x402: { middleware: import("hono").MiddlewareHandler; terms: { network: string; payTo: string; price: string; asset: string } } | null;
   ensNames: { lookup(addresses: string[]): Promise<Record<string, string | null>> } | null;
@@ -281,7 +283,7 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
   passports.lots = lotNames;
 
   // ---- Agents as ERC-7857 iNFTs on 0G ----
-  let inftRail: import("./core/agent-nfts.js").AgentNftRail | null = null;
+  let inftRail: (import("./core/agent-nfts.js").AgentNftRail & import("./core/agent-licenses.js").LicenseRail) | null = null;
   if (cfg.ZG_INFT_ADDRESS && cfg.ZG_PRIVATE_KEY) {
     const { AgentNftChain } = await import("./chain/inft.js");
     inftRail = new AgentNftChain({ rpcUrl: cfg.ZG_RPC_URL, chainId: cfg.ZG_CHAIN_ID, address: cfg.ZG_INFT_ADDRESS as Hex, key: cfg.ZG_PRIVATE_KEY.replace(/^(0x)?/, "0x") as Hex }, opts.inftTransport);
@@ -289,6 +291,10 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
     warnings.push("ZG_INFT_ADDRESS is set but ZG_PRIVATE_KEY is not: agents are not minted as iNFTs");
   }
   const agentNfts = new AgentNfts(db, rec, inftRail, policy.hash, () => (llm.name === "gemini" ? `gemini:${cfg.GEMINI_MODEL}` : llm.name), now);
+  // ---- Licensing proven agents between sites through their iNFTs; playbooks on 0G Storage with the evidence ----
+  const agentLicenses = new AgentLicenses(db, rec, sigs, inftRail, validation.replicas?.store ?? null, cfg.SIGNATURE_CHAIN_ID, now);
+  agentNfts.licensed = (siteId) => agentLicenses.licensedData(siteId);
+  monitor.licenses = agentLicenses;
   passports.names = names;
   const openings = new Openings(db, engine);
 
@@ -305,6 +311,7 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
     await jobs.run().catch((e) => console.error("[ordo] jobs", e));
     await names.reconcile().catch((e) => console.error("[ordo] ens", e));
     await lotNames.reconcile().catch((e) => console.error("[ordo] ens lots", e));
+    await agentLicenses.reconcile().catch((e) => console.error("[ordo] licences", e));
     await agentNfts.reconcile().catch((e) => console.error("[ordo] inft", e));
     const head = await ledger.head();
     const last = (await proof.anchors(1))[0];
@@ -369,6 +376,7 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
     names,
     lotNames,
     agentNfts,
+    agentLicenses,
     x402,
     ensNames,
     advance,

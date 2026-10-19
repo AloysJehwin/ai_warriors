@@ -2,7 +2,7 @@
  * Versioned, forward-only migrations. Each runs once, in order, inside a transaction.
  * v1 = the original demo schema (kept so existing databases upgrade cleanly).
  * v2 = real accounts, sites, assets, telemetry, templates, runs, inbox, validation, signatures.
- * v3 = validation workflow · v4 = onboarding and on-chain trust · v5 = agent work orders and autonomy proposals · v6 = lot passports · v7 = jobs on other networks (ENS, 0G) · v11–14 = ENS lot names and credentials, Hedera schedules, one World ID per validator, zero-knowledge spec proofs.
+ * v3 = validation workflow · v4 = onboarding and on-chain trust · v5 = agent work orders and autonomy proposals · v6 = lot passports · v7 = jobs on other networks (ENS, 0G) · v11–15 = ENS lot names and credentials, Hedera schedules, one World ID per validator, zero-knowledge spec proofs, agent licences.
  */
 export const MIGRATIONS: { version: number; name: string; sql: string }[] = [
   {
@@ -267,6 +267,21 @@ CREATE TABLE spec_proofs (run_id TEXT NOT NULL REFERENCES runs(id), stage_code T
   subject TEXT, value TEXT, salt TEXT, target TEXT, op INTEGER, commitment TEXT, ledger_seq INTEGER, proof_json TEXT, error TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(), proven_at TIMESTAMPTZ, PRIMARY KEY (run_id, stage_code, label));
 CREATE INDEX spec_proofs_due ON spec_proofs (status, created_at);
+`,
+  },
+  {
+    version: 15,
+    name: "agent licences",
+    sql: `
+ALTER TABLE agent_nfts ADD COLUMN contract TEXT;
+CREATE TABLE agent_licenses (id TEXT PRIMARY KEY, licensor_site TEXT NOT NULL REFERENCES sites(id), licensee_site TEXT NOT NULL REFERENCES sites(id),
+  agent TEXT NOT NULL, token_id INTEGER, contract TEXT, status TEXT NOT NULL, days INTEGER NOT NULL, expires_at TIMESTAMPTZ,
+  terms_json TEXT, terms_hash TEXT, playbook_json TEXT, playbook_sha TEXT, storage_root TEXT, storage_tx TEXT,
+  grant_sig_json TEXT, revoke_sig_json TEXT, tx_hash TEXT, error TEXT, attempts INTEGER NOT NULL DEFAULT 0,
+  next_try_at TIMESTAMPTZ NOT NULL DEFAULT now(), requested_by TEXT NOT NULL, granted_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE INDEX agent_licenses_licensee ON agent_licenses (licensee_site, agent, status);
+CREATE INDEX agent_licenses_due ON agent_licenses (status, next_try_at);
 `,
   },
 ];

@@ -118,6 +118,33 @@ Deploy them with the **ENS setup** workflow (`contracts https://<Ordo's public U
 
 **Live:** `OrdoAgentNFT` `0x9577498d6305a8498744ab33217fab6722ff8141` on 0G Galileo, minter `0xa902C5542Fc209e639Ed151a3619e103D18bD55a`.
 
+### Licensing a proven agent to another site
+
+Agents don't transfer, but a site can license one. An agent is **proven** once people have decided at least 3 of its recommendations and accepted at least 75% (`PROVEN` in `server/src/core/agent-licenses.ts`). Its **playbook** is the accepted cases: asset kind, signal, the actions taken and their settings, not the site's ids.
+
+```mermaid
+sequenceDiagram
+  participant B as Site B plant manager
+  participant O as Ordo server
+  participant A as Site A plant manager
+  participant S as 0G Storage
+  participant N as OrdoAgentNFT (0G Galileo)
+  B->>O: request a 7/30/90-day licence to A's proven agent
+  A->>O: sign "agent.license" (EIP-712): licensee, expiry, terms hash
+  Note over O: terms pin the playbook by SHA-256
+  O->>S: upload the playbook, encrypted
+  O->>N: grantLicense(token, B, expiry, termsHash, signature)
+  N->>N: signer must be one of the token's authorized users
+  O->>N: licenseOf(token, B) is active with the same terms
+  O->>N: update B's own agent token: license:<A>/<agent>#token
+  Note over O: B's agent of that kind now recommends with A's playbook as precedent
+  A->>O: sign "agent.unlicense" to end it early (revokeLicense), or it expires
+```
+
+`grantLicense` and `revokeLicense` take the same `OrdoSignature` typed data as the Hedera contracts, with the domain on chain 16602, so the wallet signs for 0G Galileo. The contract rebuilds the entity (`<site>/<agent>><licensee>#<expiresAt>#<termsHash>`) and rejects a signer who isn't an authorized user of that token, whoever relays it. Only sites that list publicly (Settings → public pipelines) appear to other sites as licensors.
+
+**After this merges, redeploy the contract:** the licence functions are new, so the live `0x9577…8141` doesn't have them. Put `inft` in `.github/deploy/zerog.request` on `main` and push; the workflow deploys the new `OrdoAgentNFT` and writes `ZG_INFT_ADDRESS` to Vercel. Don't push that file on a branch, because the workflow runs on any push that changes it. Ordo notices the new address and mints every agent again on the new contract.
+
 The **0G setup** workflow (`.github/deploy/zerog.request`; `key` generates Ordo's 0G key and keeps it in Vercel) deploys it (`inft`), turns on evidence copies to 0G Storage (`storage`) and funds the 0G Compute ledger (`ledger`), and writes the values and the key to Vercel. Locally:
 
 ```bash
