@@ -49,7 +49,7 @@ await check("database", true, async () => {
 });
 if (cfg.VERCEL && !cfg.DATABASE_URL) warn("database", "DATABASE_URL is required on Vercel");
 if (!cfg.LEDGER_SIGNING_KEY && cfg.ANCHOR === "local") warn("ledger key", "LEDGER_SIGNING_KEY not set: anchors are signed with a throwaway key");
-if (!cfg.DEMO_PASSCODE) warn("passcode", "DEMO_PASSCODE not set: anyone with the URL can drive the demo");
+if (!cfg.BOOTSTRAP_ADMIN_ADDRESS) warn("accounts", "BOOTSTRAP_ADMIN_ADDRESS not set: any wallet can sign in and create its own site");
 
 // ---- AI ----
 await check("ai: gemini", cfg.LLM_PROVIDER === "gemini", async () => {
@@ -64,7 +64,7 @@ await check("ai: openai-compatible", cfg.LLM_PROVIDER === "openai_compat", async
 await check("ai: 0g compute", cfg.LLM_PROVIDER === "0g", async () => `RPC chain ${parseInt(await rpc(cfg.ZG_RPC_URL, "eth_chainId"), 16)}`);
 
 // ---- Hedera ----
-const hedera = cfg.ANCHOR === "hedera" || cfg.APPROVALS === "hedera" || cfg.PAYMENTS === "hedera";
+const hedera = cfg.ANCHOR === "hedera" || cfg.PAYMENTS === "hedera";
 const mirror = (cfg.HEDERA_MIRROR_URL ?? `https://${cfg.HEDERA_NETWORK}.mirrornode.hedera.com`).replace(/\/$/, "");
 await check("hedera: operator", hedera, async () => {
   const a = await json(`${mirror}/api/v1/accounts/${cfg.HEDERA_OPERATOR_ID}`);
@@ -75,13 +75,6 @@ await check("hedera: operator", hedera, async () => {
 await check("hedera: ledger topic", cfg.ANCHOR === "hedera", async () => {
   const t = await json(`${mirror}/api/v1/topics/${cfg.HEDERA_TOPIC_ID}`);
   return `${cfg.HEDERA_TOPIC_ID} · memo "${t.memo}"`;
-});
-await check("hedera: role accounts", cfg.APPROVALS === "hedera", async () => {
-  const roles = JSON.parse(cfg.HEDERA_ROLE_ACCOUNTS ?? "{}") as Record<string, { id: string }>;
-  const names = Object.keys(roles);
-  if (!names.includes("maintenance_lead") || !names.includes("operator")) throw new Error("HEDERA_ROLE_ACCOUNTS needs at least operator and maintenance_lead");
-  for (const [role, v] of Object.entries(roles)) await json(`${mirror}/api/v1/accounts/${v.id}`).catch(() => Promise.reject(new Error(`${role} account ${v.id} not found`)));
-  return names.join(", ");
 });
 await check("hedera: json-rpc", Boolean(cfg.HEDERA_VAULT_ADDRESS || cfg.HEDERA_POLICY_REGISTRY_ADDRESS), async () => {
   const id = parseInt(await rpc(cfg.HEDERA_JSON_RPC_URL, "eth_chainId"), 16);
@@ -96,18 +89,18 @@ await check("hedera: AgentSpendVault", Boolean(cfg.HEDERA_VAULT_ADDRESS), async 
 });
 await check("hedera: policy registry", Boolean(cfg.HEDERA_POLICY_REGISTRY_ADDRESS), async () => {
   const { hederaFromConfig } = await import("../src/chain/hedera.js");
-  const r = await hederaFromConfig(cfg).policyRegistryCheck(policy.hash)!();
+  const r = await hederaFromConfig(cfg).policyRegistryCheck(policy.policy.id, policy.hash)!();
   if (!r.ok) throw new Error(r.detail);
   return r.detail;
 });
 
 // ---- ENS ----
 await check("ens", cfg.IDENTITY === "ens", async () => {
-  const { EnsIdentity } = await import("../src/chain/ens.js");
-  const names = await new EnsIdentity(cfg).names(["CNC-05", "LINE-02"]);
+  const { EnsNames } = await import("../src/chain/ens.js");
+  const names = await new EnsNames(cfg.ENS_RPC_URL).lookup(["0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"]);
   const found = Object.values(names).filter(Boolean);
-  if (!found.length) throw new Error(`no Ordo records under ${cfg.ENS_PARENT_NAME}`);
-  return found.join(", ");
+  if (!found.length) throw new Error("reverse resolution returned nothing (check ENS_RPC_URL)");
+  return `reverse resolution works (${found.join(", ")})`;
 });
 
 // ---- 0G storage ----

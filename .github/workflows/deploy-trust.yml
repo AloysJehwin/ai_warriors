@@ -1,0 +1,45 @@
+name: Deploy OrdoTrust
+
+# Deploys contracts/src/OrdoTrust.sol to Hedera testnet with the operator key held in the
+# `hedera-testnet` environment. Runs when .github/deploy/trust.request changes (so it works from
+# any branch) or by hand once this file is on the default branch. The log prints only public values.
+on:
+  push:
+    paths: [".github/deploy/trust.request"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: hedera-testnet
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Check the operator account
+        env:
+          HEDERA_OPERATOR_ID: ${{ secrets.HEDERA_OPERATOR_ID }}
+        run: |
+          curl -sf "https://testnet.mirrornode.hedera.com/api/v1/accounts/${HEDERA_OPERATOR_ID}" \
+            | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const a=JSON.parse(s);console.log(`account ${a.account} · evm ${a.evm_address} · ${(Number(a.balance.balance)/1e8).toFixed(2)} HBAR · key ${a.key?._type}`);if(a.key?._type!=="ECDSA_SECP256K1"){console.error("The operator key must be ECDSA (secp256k1)");process.exit(1)}})'
+      - name: Deploy OrdoTrust
+        env:
+          HEDERA_OPERATOR_KEY: ${{ secrets.HEDERA_OPERATOR_KEY }}
+          TRUST_RPC_URL: https://testnet.hashio.io/api
+          TRUST_CHAIN_ID: "296"
+          MIN_STAKE: "10"
+          UNSTAKE_COOLDOWN_SECONDS: "604800"
+        run: pnpm --filter @ordo/contracts deploy:trust | tee deploy.log
+      - name: Summary
+        run: |
+          echo '### OrdoTrust on Hedera testnet' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          grep -v RELAYER deploy.log >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

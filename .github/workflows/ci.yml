@@ -30,11 +30,11 @@ jobs:
       - name: Contract tests (in-process EVM)
         run: pnpm --filter @ordo/contracts test
       - run: pnpm exec playwright install --with-deps chromium
-      - name: End-to-end demo (single container)
+      - name: End-to-end console (single container, injected test wallet)
         run: pnpm e2e
       - name: Build for Vercel (Build Output API)
         run: pnpm vercel-build
-      - name: End-to-end demo (Vercel build, real Postgres, no background timer)
+      - name: End-to-end console (Vercel build, real Postgres, no background timer)
         run: pnpm e2e
         env:
           E2E_TARGET: vercel

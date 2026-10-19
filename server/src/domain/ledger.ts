@@ -6,7 +6,7 @@ export interface LedgerDraft {
   ts: string;
   actor: string;
   type: string;
-  incidentId: string | null;
+  subject: string | null;
   payload: unknown;
 }
 
@@ -23,7 +23,7 @@ export function entryHashOf(e: Omit<LedgerEntry, "entryHash" | "payload">): stri
     ts: e.ts,
     actor: e.actor,
     type: e.type,
-    incidentId: e.incidentId,
+    subject: e.subject,
     payloadHash: e.payloadHash,
     prevHash: e.prevHash,
   });

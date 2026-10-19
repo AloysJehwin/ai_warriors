@@ -181,7 +181,7 @@ Healer tools (the only actions that can ever execute):
 
 ## 8. Policy guard
 
-One policy file per line, versioned in git (`policies/line-02.v1.yaml`). The guard is a pure function `evaluate(proposal, line, policy) → PolicyResult`.
+One policy file per line, versioned in git (`policies/default.yaml`). The guard is a pure function `evaluate(proposal, line, policy) → PolicyResult`.
 
 Merged and de-duplicated from the PRD action matrix and `architecture.md` §10:
 

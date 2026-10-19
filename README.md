@@ -1,110 +1,100 @@
-# Ordo — self-healing manufacturing, with proof
+# Ordo — autonomous manufacturing orchestration, with proof
 
-Ordo watches a production line, predicts a machine failure before it happens, explains the cause, proposes a fix, and lets a **policy guard** decide whether the fix runs on its own or needs a person. Every step is written to a **hash-chained audit ledger** that is anchored outside Ordo's database, so anyone can verify later that the record was not changed.
+Ordo runs production pipelines across machines, robots, vehicles and people. Software agents execute each stage from live plant data, escalate what is out of policy, and record every decision with its reason and confidence. People stay in control through autonomy levels, approval gates and validation packages, and **every human decision is signed with the person's wallet**. The record is a hash-chained ledger anchored outside the database, so anyone can verify it was not changed.
 
-![Incident timeline](docs/img/incident.png)
+![Pipeline run](docs/img/pipeline.png)
 
-## The demo loop (about 60 seconds)
+## How it works
 
-1. **Run demo incident** starts a bearing-wear scenario on CNC-05 (simulated telemetry, deterministic seed).
-2. The **Line agent** detects vibration crossing the 4.5 mm/s warning limit.
-3. The **Maintenance agent** fits a trend and forecasts the failure: about 50 minutes to the 7.1 mm/s limit, 93% probability within 24 h.
-4. The **Diagnosis agent** (Gemini, or a grounded offline model) explains the root cause, citing only numbers it was given.
-5. The **Healer agent** proposes allow-listed actions: reroute the batch's remaining units to idle CNC-07 and open a maintenance work order.
-6. The **policy guard** (versioned YAML, L1–L4 autonomy) allows the reroute at L3 and escalates the work order to the maintenance lead.
-7. The maintenance lead approves. The work order executes and the agent pays the vendor (mock, or on-chain through `AgentSpendVault`).
-8. The incident closes with **downtime avoided** computed from its inputs, an evidence bundle, a summary, and a **ledger anchor**.
-9. **Verify** re-walks the chain from genesis. **Simulate tampering** on any entry turns the check red.
+1. **Sign in with your wallet** (Sign-In with Ethereum). The first wallet creates a site and becomes its administrator; the team is added by wallet address with roles: operator, supervisor, process engineer, quality engineer, maintenance lead, plant manager.
+2. **Connect real data.** Register each asset with a source: an MTConnect agent (Ordo reads `/probe` and `/current`), a CSV dataset recorded from a real machine and played back, or readings operators enter. Status, utilization and OEE are computed only from what is measured; without data the console shows "—".
+3. **Pick a pipeline.** Fifteen library templates (discrete assembly, batch chemical, SMT, pharma GMP, predictive maintenance…) or your own from the **builder**, with parallel branches, merges, a rework loop, per-stage agent, resource, mode (Auto / Approve / Manual), success criteria, timeout and escalation role. Publishing creates an immutable version.
+4. **Run it.** Stages are assigned to assets of the right kind. Progress comes from the machine's part counter or from what the operator records. Success criteria are evaluated on measured values; an unmeasured criterion is never assumed to pass, so a person confirms it at the gate.
+5. **Agents watch the telemetry** against the limits you set. On a threshold, drift or controller fault they open an incident, diagnose it (Gemini, 0G Compute, or a grounded offline model), and recommend allow-listed actions: hold or reassign a stage, open a work order (which starts a predictive-maintenance run), raise inspection, or instruct an operator. The **policy guard** allows the action at the line's autonomy level or sends it to the inbox for the right role.
+6. **People decide by signing.** Gate releases, inbox decisions, autonomy changes and validation sign-offs are EIP-712 typed-data signatures with single-use nonces bound to the action and entity. The server verifies them before acting and stores them with the decision.
+7. **Validators have skin in the game.** People join a site by application; administrators approve by signature. Only approved validators sign reviews, approvals and quality-gate releases. With the OrdoTrust contract configured, roles are on-chain credentials, a validator must hold an active stake to sign, every release is recorded on-chain, and two other validators plus a plant manager can slash a stake into the site's quality fund.
+8. **Validation packages** prove a stage or change works: agent pre-check from run data, hashed evidence files, and a three-signature chain (performed, reviewed, approved) where one person cannot sign twice.
+9. **Verify** re-walks the ledger from genesis and checks each anchor (Ed25519 checkpoint, or a Hedera Consensus Service message via the mirror node).
 
-If nobody acts, the bearing fails about 70 plant minutes in. The simulator models that too.
+![Validation package](docs/img/validation.png)
 
 ## Quick start
 
 ```bash
 pnpm install
-pnpm build                                   # web console + server
-cd server && SIM_AUTOSTART=true node dist/index.js
-# open http://localhost:8080 and click "Run demo incident"
+pnpm build
+cd server && node dist/index.js        # http://localhost:8080
 ```
 
-Development with hot reload: `pnpm dev`, then open http://localhost:5173. Check configuration and every live service with `pnpm env:doctor`. No database or API keys are needed: Ordo uses embedded Postgres (PGlite) and offline agents by default. Set `LLM_PROVIDER=gemini` and `GEMINI_API_KEY` for live AI. All settings are in [`server/.env.example`](server/.env.example).
+Open the console with a browser wallet (MetaMask, Rabby…), sign in, and create your site. Development with hot reload: `pnpm dev`, then http://localhost:5173. No database or API keys are needed locally: embedded Postgres (PGlite) and offline agents are the defaults. To try live machine data without hardware, add an asset with the MTConnect agent `https://demo.mtconnect.org`. All settings are in [`server/.env.example`](server/.env.example); check them with `pnpm env:doctor`.
 
 ## Tests
 
 | Command | What it covers |
 | --- | --- |
-| `pnpm --filter @ordo/server test` | 73 tests: simulator determinism, detector, forecast, the full policy matrix (every action × every autonomy level), ledger tamper and concurrency, LLM fallback and grounding, the whole incident loop through the HTTP API, and serverless behaviour (two instances on one database, leases, replay, pause/resume, passcode) |
-| `pnpm --filter @ordo/contracts test` | 8 tests on an in-process EVM: roles, vendor allow-list, per-payment and daily caps, escrow/release/refund, pause, reentrancy, policy versioning |
-| `pnpm e2e` | Playwright drives the real console through the demo: approve as the maintenance lead, verify ✔, tamper ✘ |
-| `E2E_TARGET=vercel pnpm e2e` | The same demo against the Vercel build output on real Postgres, with no background timer |
+| `pnpm --filter @ordo/server test` | 85 tests: migrations, SIWE sessions and EIP-712 signatures, MTConnect parsing and SSRF guard, metrics from measured data, CSV replay, pipeline graph rules and criteria, the policy matrix, the ledger, and an API flow with four wallets: site setup, invites, roles, a run advanced by part counts, a signed gate, a forged and a replayed signature rejected, an incident escalated and a signed work order, a signed autonomy change, a full validation chain with separation of duties, anchoring and verification; and the on-chain trust layer against an in-process EVM: site registration, signed role grants, validator staking, an on-chain release record and a slash |
+| `pnpm --filter @ordo/contracts test` | 16 tests on an in-process EVM: the agent spend vault (roles, vendor allow-list, caps, escrow, pause, reentrancy), policy versioning, and OrdoTrust (signed role grants, replay and cross-site protection, staking and cooldown, releases only by staked validators, slashing rules) |
+| `pnpm e2e` | Playwright with an injected test wallet drives the real console: sign in, create a site, register an asset, record readings, build and publish a pipeline, run it, sign two gates, verify the ledger |
+| `E2E_TARGET=vercel pnpm e2e` | The same flow against the Vercel build on real Postgres, with no background timer |
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    ui["Web console<br/>React · polling"] -- REST --> api
+    wallet["Browser wallet<br/>SIWE · EIP-712"] --> ui["Web console<br/>React"]
+    ui -- REST --> api
     subgraph api["Ordo server (Node · Hono)"]
-        sim["Plant simulator"] --> line["Line agent"] --> maint["Maintenance agent"] --> diag["Diagnosis agent (LLM)"] --> heal["Healer agent (LLM, allow-listed tools)"] --> guard["Policy guard"]
-        guard -- allow --> exec["Executor"]
-        guard -- escalate --> appr["Approvals"] --> exec
-        exec --> ledger["Hash-chained ledger"]
+        src["Sources<br/>MTConnect · CSV replay · manual"] --> tel["Telemetry"]
+        tel --> engine["Run engine<br/>templates · stages · gates"]
+        tel --> mon["Agents<br/>detect · diagnose · recommend"] --> guard["Policy guard"]
+        guard -- allow --> act["Actions"]
+        guard -- escalate --> inbox["Inbox"] -- signed decision --> act
+        engine --> inbox
+        act --> engine
+        val["Validation packages"] --> act
+        engine & act & val --> ledger["Hash-chained ledger"]
     end
     ledger --> db[("Postgres / PGlite")]
-    ledger --> anchor["Anchor: signed checkpoint · Hedera HCS"]
-    appr -.-> sched["Hedera scheduled tx"]
-    exec -.-> vault["AgentSpendVault (Hedera EVM)"]
-    guard -.-> reg["OrdoPolicyRegistry"]
-    heal -.-> og["0G Compute"]
-    ledger -.-> ogs["0G Storage"]
-    ui -.-> ens["ENS names"]
+    ledger --> anchor["Anchor: Ed25519 · Hedera HCS"]
+    guard -.-> reg["OrdoPolicyRegistry (Hedera EVM)"]
+    act -.-> vault["AgentSpendVault (Hedera EVM)"]
+    mon -.-> og["0G Compute"]
+    ui -.-> ens["ENS primary names"]
 ```
 
-Dotted lines are optional partner rails, switched on by environment variables. Each sits behind an interface with a local implementation, so the app always runs.
-
-| Rail | Local (default) | Partner |
+| Rail | Default | Partner |
 | --- | --- | --- |
-| Ledger anchor | Ed25519-signed checkpoint | Hedera Consensus Service topic, verified via the mirror node |
-| Approvals | In-app, role-checked | Hedera scheduled transaction that only the required role's key can release |
-| Agent payments | Mock | `AgentSpendVault` on Hedera EVM: allow-listed vendors, per-payment and daily caps, escrow, kill switch |
-| Policy provenance | Hash recorded with every decision | `OrdoPolicyRegistry` on Hedera; the Verify page checks the match |
-| AI inference | Gemini or offline | 0G Compute (OpenAI-compatible endpoint) |
-| Evidence | Local content-addressed files | 0G Storage (Merkle root as id) |
-| Identity | Plain ids | ENS subnames with text records (`cnc-05.<parent>.eth`) |
-
-The partner adapters, contracts and setup scripts are complete and typechecked. The contracts are tested on an in-process EVM. Live testnet runs need network access that CI does not have: follow [`contracts/README.md`](contracts/README.md), then run `pnpm --filter @ordo/server smoke:hedera`.
+| Identity | Wallet sign-in (EIP-4361) | ENS primary names shown for team members |
+| Decisions | EIP-712 signatures verified server-side | ERC-1271 smart wallets via `AUTH_RPC_URL` |
+| Ledger anchor | Ed25519-signed checkpoint | Hedera Consensus Service topic, verified through the mirror node |
+| Roles and validators | Approved in-app by signed applications | `OrdoTrust`: credentials, validator stakes, release records, slashing (Hedera EVM or any EVM chain). Live on Hedera testnet at [`0x608c…b9e1`](https://hashscan.io/testnet/contract/0x608cba52976e34fa160fe64ff0499a8a5a4eb9e1) |
+| Policy provenance | Hash recorded with every decision | `OrdoPolicyRegistry` on Hedera |
+| Agent payments | Mock | `AgentSpendVault` on Hedera EVM: allow-listed vendors, caps, escrow, kill switch |
+| AI inference | Offline grounded model | Gemini, or 0G Compute (OpenAI-compatible) |
 
 ## Repository layout
 
 ```
-server/      API, agents, policy guard, ledger, simulator, partner adapters (TypeScript)
-web/         console (React + Vite)
+server/      API, auth, plant data sources, run engine, agents, policy guard, validation, ledger
+web/         console (React + Vite) with its own Select, calendar, modal and drawer components
 contracts/   AgentSpendVault, OrdoPolicyRegistry, Hedera / ENS setup scripts
-policies/    versioned autonomy policy files
-e2e/         Playwright demo test
-docs/        product, architecture, technical requirements, deployment, ETHGlobal plans
-mockups/     original design mockups (PNG) · *.dc.html: original clickable prototype
+policies/    versioned autonomy policy
+e2e/         Playwright flow with an injected test wallet
+docs/        product, pipeline templates, validation workflow, environments, plans
+mockups/     design mockups (PNG) · *.dc.html: original clickable prototype
 ```
 
 ## Deploy
 
-**Vercel (primary).** One Vercel project serves the console and the API. `vercel.json` runs `pnpm vercel-build`, which writes `.vercel/output`: the static console plus one Node function for `/v1/*`. The engine is stateless: the plant is replayed from Postgres on each request, and the console polls, so it runs on serverless functions.
+**Vercel (primary).** `vercel.json` runs `pnpm vercel-build`, which writes the static console plus one Node function for `/v1/*`. All state is in Postgres (Neon from the Vercel Marketplace sets `DATABASE_URL`). Each console poll runs at most one engine cycle every 4 seconds across instances, under a database lease. Set `LEDGER_SIGNING_KEY`, and `BOOTSTRAP_ADMIN_ADDRESS` if only your wallet may create sites. The full workflow is in [docs/environments.md](docs/environments.md).
 
-1. Import the repo in Vercel (root directory = repo root, framework "Other").
-2. Add **Neon** from the Vercel Marketplace; it sets `DATABASE_URL` and gives every preview its own database branch.
-3. Set `LEDGER_SIGNING_KEY` and `DEMO_PASSCODE` (and any partner rails), or push a file: `pnpm env:vercel push .env.production production`.
-4. Push to `main` for production; every other branch gets a preview URL for live testing.
+**Docker**: `docker build -t ordo . && docker run -p 8080:8080 ordo`. Use this on a plant network to reach MTConnect agents with private addresses, which the cloud deployment refuses.
 
-The full workflow (environments, syncing variables, `pnpm env:doctor`, rehearsing the Vercel build locally) is in [docs/environments.md](docs/environments.md).
+## What is real
 
-**Docker** (Render, Railway, Fly.io, Cloud Run): the same code runs as one long-lived container with a background timer. `docker build -t ordo . && docker run -p 8080:8080 ordo`, or use the `render.yaml` blueprint.
-
-## What is real and what is simulated
-
-- **Real:** detection, forecasting, the LLM calls (when enabled), the policy guard, approvals, the ledger, hashing, anchoring, verification, the contracts.
-- **Simulated:** the plant (three CNC cells, batches, wear), sensor data, maintenance outcomes.
-- **Not included:** real PLC/OPC UA connectivity, SSO (the "acting as" switch stands in for it), ERP/MES integration.
-
-Compliance features are designed to support 21 CFR Part 11-style records; they are not a certified system.
+- Everything in the console comes from what you connect or record. There is no simulator and no sample data.
+- Not included yet: OPC UA connectivity, ERP/MES integration, file storage outside Postgres (evidence is stored hashed in the database, up to 4 MB per file).
+- Compliance features are designed to support 21 CFR Part 11-style records; Ordo is not a certified system.
 
 ## Prior work
 

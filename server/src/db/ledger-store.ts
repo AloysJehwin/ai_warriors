@@ -7,7 +7,7 @@ interface Row {
   ts: string;
   actor: string;
   type: string;
-  incident_id: string | null;
+  subject: string | null;
   payload_json: string;
   payload_hash: string;
   prev_hash: string;
@@ -18,7 +18,7 @@ const toEntry = (r: Row): LedgerEntry => ({
   ts: r.ts,
   actor: r.actor,
   type: r.type,
-  incidentId: r.incident_id,
+  subject: r.subject,
   payload: JSON.parse(r.payload_json),
   payloadHash: r.payload_hash,
   prevHash: r.prev_hash,
@@ -45,8 +45,8 @@ export class LedgerStore {
         const payload = JSON.parse(canonicalize(draft.payload));
         const e = buildEntry(prev, { ...draft, payload });
         await q.query(
-          "INSERT INTO ledger (seq, ts, actor, type, incident_id, payload_json, payload_hash, prev_hash, entry_hash) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
-          [e.seq, e.ts, e.actor, e.type, e.incidentId, canonicalize(payload), e.payloadHash, e.prevHash, e.entryHash],
+          "INSERT INTO ledger (seq, ts, actor, type, subject, payload_json, payload_hash, prev_hash, entry_hash) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+          [e.seq, e.ts, e.actor, e.type, e.subject, canonicalize(payload), e.payloadHash, e.prevHash, e.entryHash],
         );
         return e;
       });
@@ -60,9 +60,9 @@ export class LedgerStore {
     return r.rows.map(toEntry);
   }
 
-  async latest(limit: number, incidentId?: string): Promise<LedgerEntry[]> {
-    const r = incidentId
-      ? await this.db.query<Row>("SELECT * FROM ledger WHERE incident_id = $1 ORDER BY seq DESC LIMIT $2", [incidentId, limit])
+  async latest(limit: number, subject?: string): Promise<LedgerEntry[]> {
+    const r = subject
+      ? await this.db.query<Row>("SELECT * FROM ledger WHERE subject = $1 ORDER BY seq DESC LIMIT $2", [subject, limit])
       : await this.db.query<Row>("SELECT * FROM ledger ORDER BY seq DESC LIMIT $1", [limit]);
     return r.rows.map(toEntry);
   }

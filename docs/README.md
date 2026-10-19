@@ -22,3 +22,4 @@ Markdown versions of the Ordo product, architecture and validation documentation
 | [glossary.md](glossary.md) | Terms and abbreviations |
 
 The original designed versions are kept alongside: [`Ordo Documentation.dc.html`](../Ordo%20Documentation.dc.html) (printable) and [`Ordo Architecture.dc.html`](../Ordo%20Architecture.dc.html) (diagram). If you change behaviour here, update the prototype or note the difference.
+- [web3-roadmap.md](web3-roadmap.md): roles as on-chain credentials, onboarding, staking, and the ranked web3 build list

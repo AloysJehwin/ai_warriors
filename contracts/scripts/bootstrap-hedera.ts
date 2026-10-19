@@ -47,27 +47,19 @@ async function topic(name: "ledger" | "build", memo: string): Promise<string> {
 }
 
 for (const n of Object.keys(FUNDING) as (keyof Deployments["accounts"])[]) await account(n);
-await topic("ledger", "ordo:ledger:LINE-02:v1");
+await topic("ledger", "ordo:ledger:v2");
 await topic("build", "ordo:build");
 client.close();
 
 const a = d.accounts;
-const roles = {
-  operator: { id: a.operator_role!.id, key: a.operator_role!.key },
-  maintenance_lead: { id: a.maintenance_lead!.id, key: a.maintenance_lead!.key },
-  plant_manager: { id: a.plant_manager!.id, key: a.plant_manager!.key },
-  quality_engineer: { id: a.quality_engineer!.id, key: a.quality_engineer!.key },
-};
 console.log(`
 # ---- add to server/.env ----
 ANCHOR=hedera
-APPROVALS=hedera
 PAYMENTS=hedera
 HEDERA_NETWORK=testnet
 HEDERA_OPERATOR_ID=${operatorId}
 HEDERA_OPERATOR_KEY=0x${operatorKeyHex}
 HEDERA_TOPIC_ID=${d.topics.ledger}
-HEDERA_ROLE_ACCOUNTS='${JSON.stringify(roles)}'
 HEDERA_AGENT_ID=${a.agent!.id}
 HEDERA_AGENT_KEY=${a.agent!.key}
 HEDERA_VENDOR_ID=${a.vendor!.id}

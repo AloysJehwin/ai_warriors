@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { canonicalize, hashOf } from "../../src/domain/canonical.js";
 import { buildEntry, GENESIS_HASH, verifyChain, type LedgerEntry } from "../../src/domain/ledger.js";
 
-const draft = (i: number) => ({ ts: `2026-10-19T10:00:0${i}Z`, actor: "agent:line", type: "test", incidentId: "INC-1", payload: { i, nested: { b: 2, a: 1 } } });
+const draft = (i: number) => ({ ts: `2026-10-19T10:00:0${i}Z`, actor: "agent:line", type: "test", subject: "INC-1", payload: { i, nested: { b: 2, a: 1 } } });
 
 function chain(n: number): LedgerEntry[] {
   const out: LedgerEntry[] = [];

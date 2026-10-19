@@ -28,7 +28,7 @@ pnpm deploy:hedera               # prints HEDERA_VAULT_ADDRESS and HEDERA_POLICY
 cd ../server && pnpm smoke:hedera
 ```
 
-Then start the server with `ANCHOR=hedera APPROVALS=hedera PAYMENTS=hedera`. Approvals become scheduled transactions on HashScan, anchors become HCS messages, and the work-order payment goes through the vault.
+Then start the server with `ANCHOR=hedera PAYMENTS=hedera`. Ledger anchors become HCS messages on HashScan and agent payments go through the vault. Human approvals are EIP-712 signatures from each person's own wallet, so the server holds no role keys.
 
 Verify contract source on Sourcify for chain 296 (HashScan shows verified source); `artifacts/*.json` has the ABI and bytecode.
 
