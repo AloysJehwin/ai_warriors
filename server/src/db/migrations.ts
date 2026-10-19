@@ -224,4 +224,15 @@ CREATE TABLE agent_nfts (site_id TEXT NOT NULL REFERENCES sites(id), agent TEXT 
 ALTER TABLE sites ADD COLUMN public_pipelines BOOLEAN NOT NULL DEFAULT true;
 `,
   },
+  {
+    version: 11,
+    name: "Hedera schedules",
+    sql: `
+CREATE TABLE hedera_schedules (id TEXT PRIMARY KEY, site_id TEXT NOT NULL, kind TEXT NOT NULL, ref TEXT NOT NULL,
+  execute_at TIMESTAMPTZ NOT NULL, schedule_id TEXT, tx_id TEXT, status TEXT NOT NULL, executed_at TIMESTAMPTZ, error TEXT,
+  next_check_at TIMESTAMPTZ NOT NULL DEFAULT now(), created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE UNIQUE INDEX hedera_schedules_ref ON hedera_schedules (kind, ref);
+CREATE INDEX hedera_schedules_open ON hedera_schedules (kind, status, execute_at);
+`,
+  },
 ];

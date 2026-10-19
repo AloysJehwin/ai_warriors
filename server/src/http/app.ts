@@ -539,6 +539,8 @@ export function createApp(sys: System, opts: AppOptions = {}) {
     ]);
     return c.json({ validators, me: { ...mine, row: await sys.trust.validatorRow(sid(c), me(c).user.id) }, chain, proposals });
   });
+  // after a stake or unstake from the wallet: schedule (or delete) the payout at the end of the cooldown on Hedera
+  site.post("/validators/me/payout-schedule", async (c) => c.json({ payout: (await sys.schedules?.syncStake(sid(c), me(c).user.address)) ?? null }));
   site.get("/vendors", async (c) => c.json(await sys.trust.vendors(sid(c))));
   site.get("/chain", async (c) => c.json(await sys.trust.chainStatus(sid(c))));
   site.post("/chain/register/sign-request", async (c) => {

@@ -73,6 +73,7 @@ flowchart LR
 | Autonomy policies | Two plant managers' signatures to raise, recorded in the ledger | `OrdoPolicies`: the same rule enforced on-chain, each change published with its signatures |
 | Lot passports | Public page and QR code for every lot, in Ordo | HTS NFT per lot (`HEDERA_PASSPORT_TOKEN_ID`): minted at start, metadata updated on hold and completion (HIP-657), airdropped to the customer on a signed shipment |
 | Agent payments | Work orders assign a vendor, no money moves | `OrdoWorkOrders` via Hedera Agent Kit: per-site fund, admin-signed caps, credentialed vendors, escrow released by a maintenance lead's signature, refunds, kill switch |
+| Deadlines | The server's engine cycle refunds expired escrows and raises stage timeouts | Hedera Schedule Service (HIP-423): the 72h escrow refund, the validator payout at the end of the unstake cooldown and each stage's timeout are scheduled transactions the network executes on time, even if Ordo is down |
 | AI inference | Offline grounded model | Gemini, or 0G Compute (OpenAI-compatible) |
 
 ## Repository layout

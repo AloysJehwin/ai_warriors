@@ -10,6 +10,7 @@ import { ROLE_LABEL, ROLES, type Role } from "../domain/types.js";
 import { HttpError } from "../engine/errors.js";
 import { newId } from "../plant/plant.js";
 import type { Recorder } from "./recorder.js";
+import type { Schedules } from "./schedules.js";
 
 export const ONBOARDING_KINDS = ["member", "validator", "vendor"] as const;
 export type OnboardingKind = (typeof ONBOARDING_KINDS)[number];
@@ -71,6 +72,8 @@ const iso = (s: string | null) => (s ? new Date(s).toISOString() : null);
  * and slash the contract can verify is relayed to it with the original signatures.
  */
 export class Trust {
+  /** Set when Hedera's Schedule Service returns stakes at the end of the unstake cooldown */
+  schedules: Schedules | null = null;
   constructor(
     private db: Db,
     private rec: Recorder,
@@ -371,7 +374,9 @@ export class Trust {
     return Promise.all(
       rows.rows.map(async (v) => {
         const onchain = this.chain
-          ? await Promise.all([this.chain.stakeOf(siteId, v.address), this.chain.isActiveValidator(siteId, v.address)]).then(([s, a]) => ({ stake: s.amount, unlockAt: s.unlockAt, active: a })).catch(() => null)
+          ? await Promise.all([this.chain.stakeOf(siteId, v.address), this.chain.isActiveValidator(siteId, v.address), this.schedules?.stakeSchedule(siteId, v.address) ?? null])
+              .then(([s, a, payout]) => ({ stake: s.amount, unlockAt: s.unlockAt, active: a, payout }))
+              .catch(() => null)
           : null;
         return { userId: v.user_id, address: v.address, name: v.display_name, scope: v.scope, scopeLabel: ROLE_LABEL[VALIDATOR_SCOPES[v.scope]], status: v.status, approvedAt: new Date(v.approved_at).toISOString(), onchain };
       }),

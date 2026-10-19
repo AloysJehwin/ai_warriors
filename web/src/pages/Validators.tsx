@@ -94,7 +94,8 @@ export function Validators() {
     const hash = await trustTx(trust, me.user!.address, fn, siteId, amount);
     toast(`Transaction sent: ${hash.slice(0, 10)}…`, "ok");
     setAmount("");
-    setTimeout(() => void load(), 4000);
+    // once it is final, Ordo schedules (or deletes) the payout at the end of the cooldown on Hedera
+    setTimeout(() => void api.post(path("/validators/me/payout-schedule")).catch(() => null).then(load), 6000);
   };
   return (
     <div>
@@ -166,6 +167,17 @@ export function Validators() {
                     <>
                       <dt>Withdrawable from</dt>
                       <dd>{dateTime(new Date(mine.onchain.unlockAt * 1000).toISOString())}</dd>
+                    </>
+                  )}
+                  {mine.onchain.payout?.status === "scheduled" && mine.onchain.payout.url && (
+                    <>
+                      <dt>Paid back by</dt>
+                      <dd>
+                        <a href={mine.onchain.payout.url} target="_blank" rel="noreferrer">
+                          Hedera schedule {mine.onchain.payout.scheduleId}
+                        </a>{" "}
+                        <span className="faint small">· runs on its own at {dateTime(mine.onchain.payout.executeAt)}, no need to withdraw</span>
+                      </dd>
                     </>
                   )}
                 </dl>

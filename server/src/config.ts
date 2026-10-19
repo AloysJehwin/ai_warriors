@@ -77,6 +77,8 @@ const Env = z.object({
   HEDERA_MIRROR_URL: z.string().optional(),
   /** HTS NFT collection for lot passports (the operator is treasury, supply and metadata key) */
   HEDERA_PASSPORT_TOKEN_ID: z.string().optional(),
+  /** Work-order refunds, validator payouts and stage timeouts run on Hedera's Schedule Service when the operator is set */
+  HEDERA_SCHEDULES: z.enum(["on", "off"]).default("on"),
 
   /** x402: Ordo sells vibration assessments per call; fees go to this Hedera account (default: the operator) */
   X402_PAY_TO: z.string().optional(),

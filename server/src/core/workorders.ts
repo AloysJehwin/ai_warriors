@@ -11,6 +11,7 @@ import type { Recorder } from "./recorder.js";
 import type { Assessments, AssessmentView } from "./assessments.js";
 import { sigArg, type SigArg } from "../chain/trust.js";
 import type { RelayView, Trust } from "./trust.js";
+import { SCHEDULE_GRACE_MS, type Schedules, type ScheduleView } from "./schedules.js";
 
 /** Hours of work the agent budgets for, by priority. */
 const HOURS: Record<string, number> = { high: 2, medium: 1, low: 1 };
@@ -62,6 +63,8 @@ export interface WorkOrderView {
   release: RelayView | null;
   /** The vibration assessment the agent bought over x402 for this work order */
   assessment: AssessmentView | null;
+  /** The Hedera schedule that refunds the escrow if nobody releases it */
+  refundSchedule: ScheduleView | null;
 }
 
 /**
@@ -72,6 +75,8 @@ export interface WorkOrderView {
 export class WorkOrders {
   /** Set when the agent buys assessments over x402 */
   assessments: Assessments | null = null;
+  /** Set when Hedera's Schedule Service refunds expired escrows */
+  schedules: Schedules | null = null;
   constructor(
     private db: Db,
     private rec: Recorder,
@@ -300,11 +305,31 @@ export class WorkOrders {
     return this.get(siteId, id);
   }
 
-  /** Return expired escrows to the site's fund. Anyone may call refund on-chain; the engine cycle does it. */
+  /**
+   * Return expired escrows to the site's fund. With Hedera's Schedule Service the refund is a scheduled transaction
+   * the network runs at expiry, and this only records it; otherwise, or if the schedule has not run a few minutes
+   * later, the relayer calls refund itself (anyone may).
+   */
   async refundExpired(): Promise<number> {
     if (!this.trust.chain?.cfg.workOrders) return 0;
-    const due = await this.db.query<{ id: string; site_id: string; amount: string }>("SELECT id, site_id, amount FROM work_orders WHERE status = 'escrowed' AND expires_at < $1 LIMIT 5", [new Date(this.now()).toISOString()]);
+    const due = await this.db.query<{ id: string; site_id: string; amount: string }>("SELECT id, site_id, amount FROM work_orders WHERE status = 'escrowed' AND expires_at < $1 ORDER BY expires_at LIMIT 20", [new Date(this.now()).toISOString()]);
     for (const w of due.rows) {
+      const schedule = await this.schedules?.of("workorder.refund", w.id);
+      if (schedule?.status === "scheduled") {
+        const onchain = await this.chain().workOrder(w.site_id, w.id).catch(() => null);
+        if (onchain?.status === "refunded") {
+          await this.db.query("UPDATE work_orders SET status = 'refunded', updated_at = now() WHERE id = $1", [w.id]);
+          await this.schedules!.refunded(w.id);
+          await this.rec.decide(w.site_id, {
+            agent: "system:scheduler",
+            kind: "work_order.refunded",
+            summary: `${w.id} expired unreleased: Hedera schedule ${schedule.scheduleId} returned ${this.units(w.amount)} to the site's fund`,
+            data: { workOrderId: w.id, scheduleId: schedule.scheduleId, url: schedule.url },
+          });
+          continue;
+        }
+        if (this.now() < Date.parse(schedule.executeAt) + SCHEDULE_GRACE_MS) continue;
+      }
       const relay = await this.trust.relay(w.site_id, "workorder.refund", w.id, {}, () => this.chain().refundWorkOrder(w.site_id, w.id), true, this.chain().cfg.workOrders!);
       if (relay.status === "done") {
         await this.db.query("UPDATE work_orders SET status = 'refunded', updated_at = now() WHERE id = $1", [w.id]);
@@ -344,6 +369,7 @@ export class WorkOrders {
       updatedAt: new Date(w.updated_at).toISOString(),
       release: w.status === "releasing" || w.status === "released" ? await this.trust.relayOf(w.site_id, w.id) : null,
       assessment: (await this.assessments?.of(w.id)) ?? null,
+      refundSchedule: (await this.schedules?.of("workorder.refund", w.id)) ?? null,
     };
   }
   async get(siteId: string, id: string) {

@@ -105,7 +105,7 @@ export interface ChainStatus {
   registeredAt?: string | null;
 }
 export interface ValidatorsView {
-  validators: { userId: string; address: string; name: string | null; scope: string; scopeLabel: string; status: string; approvedAt: string; onchain: { stake: string; unlockAt: number; active: boolean } | null }[];
+  validators: { userId: string; address: string; name: string | null; scope: string; scopeLabel: string; status: string; approvedAt: string; onchain: { stake: string; unlockAt: number; active: boolean; payout: ScheduleView | null } | null }[];
   me: { ok: boolean; reason: string | null; row: { scope: string; status: string } | null };
   chain: ChainStatus;
   proposals: {
@@ -246,6 +246,8 @@ export interface WorkOrderView {
   release: RelayView | null;
   /** The vibration assessment the agent bought over x402 */
   assessment: AssessmentView | null;
+  /** The Hedera schedule that refunds the escrow if nobody releases it */
+  refundSchedule: ScheduleView | null;
 }
 export interface AssessmentView {
   status: "pending" | "done" | "failed";
@@ -386,4 +388,15 @@ export interface PublicPipeline {
   stages: { code: string; column: number; name: string; state: string; mode: string; agent: string; resource: string; gateRole: string; progress: number }[];
   roles: OpenRole[];
   validation?: { ref: string; type: string; status: string; stageCode: string | null; waitingFor: { meaning: string; label: string; role: string; roleLabel: string } | null }[];
+}
+
+/** A deadline Hedera's Schedule Service runs on its own */
+export interface ScheduleView {
+  kind: "workorder.refund" | "stake.withdraw" | "stage.timeout";
+  status: "scheduled" | "executed" | "cancelled" | "failed" | "skipped";
+  executeAt: string;
+  scheduleId: string | null;
+  url: string | null;
+  executedAt: string | null;
+  error: string | null;
 }
