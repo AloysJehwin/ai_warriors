@@ -11,6 +11,7 @@ import { Autonomy } from "./core/autonomy.js";
 import { Inbox } from "./core/inbox.js";
 import { Jobs } from "./core/jobs.js";
 import { Monitor } from "./core/monitor.js";
+import { LotNames } from "./core/lot-names.js";
 import { Names } from "./core/names.js";
 import { Openings } from "./core/openings.js";
 import { Passports } from "./core/passports.js";
@@ -61,6 +62,7 @@ export interface System {
   openings: Openings;
   jobs: Jobs;
   names: Names;
+  lotNames: LotNames;
   agentNfts: AgentNfts;
   /** x402: the paid assessment route's middleware and terms, when Ordo sells assessments */
   x402: { middleware: import("hono").MiddlewareHandler; terms: { network: string; payTo: string; price: string; asset: string } } | null;
@@ -224,7 +226,7 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
   const passports = new Passports(db, rec, sigs, engine, trust, proof, passportRail, publicBase(cfg), cfg.SIGNATURE_CHAIN_ID, now);
 
   // ---- ENSv2 names on Sepolia for the site, its people, assets and agents ----
-  let nameRail: import("./core/names.js").NameRail | null = null;
+  let nameRail: import("./chain/ensv2.js").EnsV2 | null = null;
   const ensParts = [cfg.ENS_PARENT_NAME, cfg.ENS_REGISTRY_ADDRESS, cfg.ENS_RESOLVER_ADDRESS, cfg.ENS_OWNER_KEY];
   if (ensParts.every(Boolean)) {
     const { EnsV2 } = await import("./chain/ensv2.js");
@@ -238,6 +240,8 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
         factory: cfg.ENS_FACTORY_ADDRESS as Hex | undefined,
         userRegistryImpl: cfg.ENS_USER_REGISTRY_IMPL as Hex | undefined,
         chainId: cfg.ENS_CHAIN_ID,
+        credentials: cfg.ENS_ROLES_ADDRESS as Hex | undefined,
+        lotResolver: cfg.ENS_LOT_RESOLVER_ADDRESS as Hex | undefined,
       },
       opts.ensTransport,
     );
@@ -245,6 +249,10 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
     warnings.push("ENS names need ENS_PARENT_NAME, ENS_REGISTRY_ADDRESS, ENS_RESOLVER_ADDRESS and ENS_OWNER_KEY together");
   }
   const names = new Names(db, rec, nameRail, publicBase(cfg), () => payer?.address ?? null, now);
+  if (Boolean(cfg.ENS_ROLES_ADDRESS) !== Boolean(cfg.ENS_LOT_RESOLVER_ADDRESS)) warnings.push("ENS credentials and lot names need ENS_ROLES_ADDRESS and ENS_LOT_RESOLVER_ADDRESS together");
+  const lotNames = new LotNames(db, rec, nameRail?.credentialsLive ? nameRail : null, engine, passports, now);
+  validation.lots = lotNames;
+  passports.lots = lotNames;
 
   // ---- Agents as ERC-7857 iNFTs on 0G ----
   let inftRail: import("./core/agent-nfts.js").AgentNftRail | null = null;
@@ -269,6 +277,7 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
     await passports.reconcile().catch((e) => console.error("[ordo] passports", e));
     await jobs.run().catch((e) => console.error("[ordo] jobs", e));
     await names.reconcile().catch((e) => console.error("[ordo] ens", e));
+    await lotNames.reconcile().catch((e) => console.error("[ordo] ens lots", e));
     await agentNfts.reconcile().catch((e) => console.error("[ordo] inft", e));
     const head = await ledger.head();
     const last = (await proof.anchors(1))[0];
@@ -279,6 +288,7 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
     { rail: "database", mode: db.kind === "postgres" ? "postgres" : cfg.DATA_DIR === "memory" ? "pglite (memory)" : "pglite (disk)", live: db.kind === "postgres" },
     { rail: "identity", mode: `SIWE wallet sign-in${ensNames ? " + ENS primary names" : ""}`, live: true },
     { rail: "ens names", mode: nameRail ? `ENSv2 on Sepolia under ${cfg.ENS_PARENT_NAME}` : "off: no names issued", live: Boolean(nameRail) },
+    { rail: "ens credentials", mode: lotNames.live ? `roles from member names (OrdoEnsRoles ${cfg.ENS_ROLES_ADDRESS}) · lot names via OrdoLotResolver ${cfg.ENS_LOT_RESOLVER_ADDRESS}` : "off: ENS names are records only", live: lotNames.live },
     { rail: "signatures", mode: "EIP-712 typed data", live: true },
     { rail: "trust contract", mode: trustChain ? `OrdoTrust ${cfg.TRUST_CONTRACT_ADDRESS} · ${cfg.TRUST_CHAIN_NAME} (${cfg.TRUST_CHAIN_ID})` : "off: validators approved in-app, no stakes", live: Boolean(trustChain) },
     { rail: "ai", mode: llm.name === "gemini" ? `gemini:${cfg.GEMINI_MODEL}` : llm.name, live: llm.name !== "offline" },
@@ -324,6 +334,7 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
     openings,
     jobs,
     names,
+    lotNames,
     agentNfts,
     x402,
     ensNames,

@@ -2,7 +2,7 @@
  * Versioned, forward-only migrations. Each runs once, in order, inside a transaction.
  * v1 = the original demo schema (kept so existing databases upgrade cleanly).
  * v2 = real accounts, sites, assets, telemetry, templates, runs, inbox, validation, signatures.
- * v3 = validation workflow · v4 = onboarding and on-chain trust · v5 = agent work orders and autonomy proposals · v6 = lot passports · v7 = jobs on other networks (ENS, 0G).
+ * v3 = validation workflow · v4 = onboarding and on-chain trust · v5 = agent work orders and autonomy proposals · v6 = lot passports · v7 = jobs on other networks (ENS, 0G) · v11 = ENS lot names and credentials.
  */
 export const MIGRATIONS: { version: number; name: string; sql: string }[] = [
   {
@@ -222,6 +222,20 @@ CREATE TABLE agent_nfts (site_id TEXT NOT NULL REFERENCES sites(id), agent TEXT 
     name: "public pipelines",
     sql: `
 ALTER TABLE sites ADD COLUMN public_pipelines BOOLEAN NOT NULL DEFAULT true;
+`,
+  },
+  {
+    version: 11,
+    name: "ENS lot names and credentials",
+    sql: `
+CREATE TABLE ens_lots (id TEXT PRIMARY KEY, site_id TEXT NOT NULL REFERENCES sites(id), kind TEXT NOT NULL, ref TEXT NOT NULL, run_id TEXT,
+  label TEXT NOT NULL, name TEXT NOT NULL, status TEXT NOT NULL, payload_json TEXT, pending_txs TEXT, sent_at TIMESTAMPTZ,
+  tx_hash TEXT, error TEXT, attempts INTEGER NOT NULL DEFAULT 0, next_try_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE UNIQUE INDEX ens_lots_ref ON ens_lots (kind, ref);
+CREATE UNIQUE INDEX ens_lots_lot_name ON ens_lots (name) WHERE kind = 'lot';
+CREATE INDEX ens_lots_due ON ens_lots (status, next_try_at);
+CREATE INDEX ens_lots_run ON ens_lots (run_id);
 `,
   },
 ];

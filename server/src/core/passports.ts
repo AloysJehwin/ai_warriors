@@ -9,6 +9,7 @@ import { HttpError } from "../engine/errors.js";
 import type { RunEngine } from "../pipelines/engine.js";
 import type { Proof } from "./proof.js";
 import type { Recorder } from "./recorder.js";
+import type { LotNames, LotNameView } from "./lot-names.js";
 import type { Names } from "./names.js";
 import type { Trust } from "./trust.js";
 
@@ -38,6 +39,8 @@ export interface PassportView {
   pageUrl: string;
   nft: { tokenId: string; serial: number | null; url: string | null; onchainStatus: string | null; mintTxUrl: string | null; error: string | null } | null;
   shipment: { to: string; at: string; txUrl: string | null; pending: boolean | null } | null;
+  /** the lot's ENS name (lot-<order>.<site>.<parent>) and its releases recorded there */
+  ens?: LotNameView | null;
 }
 
 /** The status a lot's passport shows, computed from the run and its stages. */
@@ -71,6 +74,8 @@ export class Passports {
   ) {}
   /** ENS names of the site's people, when names are issued */
   names: Names | null = null;
+  /** The lot's own ENS name, when lot names are on */
+  lots: LotNames | null = null;
 
   /** The public page for a lot; relative when the deployment does not know its own URL. */
   pageUrl(runId: string) {
@@ -188,7 +193,7 @@ export class Passports {
   }
   async get(siteId: string, runId: string): Promise<PassportView> {
     await this.reconcile(0);
-    return this.view(await this.row(siteId, runId));
+    return { ...this.view(await this.row(siteId, runId)), ens: (await this.lots?.ofLot(runId)) ?? null };
   }
 
   /**
@@ -208,7 +213,7 @@ export class Passports {
     const agents = decisions.filter((d) => !d.agent.startsWith("user:")).length;
     const releases = await this.releases(p.site_id, runId, ens);
     const lastSeq = Math.max(0, ...decisions.map((d) => d.ledgerSeq ?? 0));
-    const view = this.view(p);
+    const view = { ...this.view(p), ens: (await this.lots?.ofLot(runId)) ?? null };
     const name = `Lot ${run.orderRef}`;
     return {
       // HIP-412 fields, so wallets and explorers render the NFT

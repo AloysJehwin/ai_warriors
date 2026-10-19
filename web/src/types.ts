@@ -299,6 +299,8 @@ export interface PassportView {
   pageUrl: string;
   nft: { tokenId: string; serial: number | null; url: string | null; onchainStatus: string | null; mintTxUrl: string | null; error: string | null } | null;
   shipment: { to: string; at: string; txUrl: string | null; pending: boolean | null } | null;
+  /** the lot's own ENS name, and its releases recorded there against the signers' ENS credentials */
+  ens?: { name: string; url: string; releases: { packageId: string; status: "pending" | "done" | "failed"; txUrl: string | null; error: string | null }[] } | null;
 }
 export interface PublicPassport {
   name: string;

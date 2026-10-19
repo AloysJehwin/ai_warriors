@@ -174,6 +174,16 @@ export function createApp(sys: System, opts: AppOptions = {}) {
     return c.json(await sys.passports.publicView(id));
   });
 
+  // ---------------- ENS lot names: the CCIP-Read gateway (EIP-3668) OrdoLotResolver sends clients to ----------------
+  const ensGateway = async (c: Context, sender: string, data: string) => {
+    if (!/^0x[0-9a-fA-F]{40}$/.test(sender) || !/^0x([0-9a-fA-F]{2})*$/.test(data)) throw new HttpError(400, "Expected a resolver address and calldata");
+    c.header("access-control-allow-origin", "*");
+    c.header("cache-control", "public, max-age=60");
+    return c.json({ data: await sys.lotNames.answer(sender, data as `0x${string}`) });
+  };
+  app.get("/v1/public/ens/:sender/:data", (c) => ensGateway(c, c.req.param("sender"), c.req.param("data").replace(/\.json$/, "")));
+  app.post("/v1/public/ens/:sender", async (c) => ensGateway(c, c.req.param("sender"), String(((await c.req.json().catch(() => ({}))) as { data?: unknown }).data ?? "")));
+
   // ---------------- Running pipelines: public, no sign-in, so a newcomer can see what a site runs and apply for a role ----------------
   app.get("/v1/public/pipelines", async (c) => {
     c.header("cache-control", "public, max-age=15");

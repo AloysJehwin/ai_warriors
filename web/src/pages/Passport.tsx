@@ -103,6 +103,30 @@ export function Passport({ runId }: { runId: string }) {
           ) : (
             <Check ok={null}>No NFT: this deployment keeps passports in Ordo only</Check>
           )}
+          {x.ens && (
+            <Check ok={x.ens.releases.every((r) => r.status === "done") ? true : x.ens.releases.some((r) => r.status === "failed") ? false : null}>
+              ENS name{" "}
+              <a href={x.ens.url} target="_blank" rel="noreferrer" className="mono">
+                {x.ens.name}
+              </a>
+              {x.ens.releases.length === 0
+                ? " · resolves to this passport"
+                : x.ens.releases.map((r) => (
+                    <span key={r.packageId}>
+                      {" · "}
+                      {r.txUrl ? (
+                        <a href={r.txUrl} target="_blank" rel="noreferrer">
+                          release recorded against the signers' ENS credentials
+                        </a>
+                      ) : r.status === "failed" ? (
+                        `release not recorded: ${r.error}`
+                      ) : (
+                        "recording the release on ENS"
+                      )}
+                    </span>
+                  ))}
+            </Check>
+          )}
           {x.shipment && (
             <Check ok>
               Shipped {dateTime(x.shipment.at)} to <span className="mono">{x.shipment.to}</span>

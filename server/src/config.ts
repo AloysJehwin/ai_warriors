@@ -98,6 +98,9 @@ const Env = z.object({
   ENS_CHAIN_ID: z.coerce.number().int().optional(),
   ENS_FACTORY_ADDRESS: z.string().optional(),
   ENS_USER_REGISTRY_IMPL: z.string().optional(),
+  /** OrdoEnsRoles and OrdoLotResolver on Sepolia: roles read from member names, and lot-… names for passports */
+  ENS_ROLES_ADDRESS: z.string().optional(),
+  ENS_LOT_RESOLVER_ADDRESS: z.string().optional(),
 
   ZG_RPC_URL: z.string().default("https://evmrpc-testnet.0g.ai"),
   ZG_INDEXER_URL: z.string().default("https://indexer-storage-testnet-turbo.0g.ai"),
