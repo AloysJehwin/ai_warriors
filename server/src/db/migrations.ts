@@ -224,4 +224,19 @@ CREATE TABLE agent_nfts (site_id TEXT NOT NULL REFERENCES sites(id), agent TEXT 
 ALTER TABLE sites ADD COLUMN public_pipelines BOOLEAN NOT NULL DEFAULT true;
 `,
   },
+  {
+    version: 11,
+    name: "agent licences",
+    sql: `
+ALTER TABLE agent_nfts ADD COLUMN contract TEXT;
+CREATE TABLE agent_licenses (id TEXT PRIMARY KEY, licensor_site TEXT NOT NULL REFERENCES sites(id), licensee_site TEXT NOT NULL REFERENCES sites(id),
+  agent TEXT NOT NULL, token_id INTEGER, contract TEXT, status TEXT NOT NULL, days INTEGER NOT NULL, expires_at TIMESTAMPTZ,
+  terms_json TEXT, terms_hash TEXT, playbook_json TEXT, playbook_sha TEXT, storage_root TEXT, storage_tx TEXT,
+  grant_sig_json TEXT, revoke_sig_json TEXT, tx_hash TEXT, error TEXT, attempts INTEGER NOT NULL DEFAULT 0,
+  next_try_at TIMESTAMPTZ NOT NULL DEFAULT now(), requested_by TEXT NOT NULL, granted_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE INDEX agent_licenses_licensee ON agent_licenses (licensee_site, agent, status);
+CREATE INDEX agent_licenses_due ON agent_licenses (status, next_try_at);
+`,
+  },
 ];

@@ -8,6 +8,7 @@ import type { Recorder } from "./recorder.js";
 /** What AgentNfts needs from OrdoAgentNFT (AgentNftChain in production). */
 export interface AgentNftRail {
   readonly cfg: { address: Address };
+  tokenOf(agent: string): Promise<number>;
   mint(agent: string, datas: IntelligentData[]): Promise<{ tokenId: number; hash: Hex }>;
   update(tokenId: number, datas: IntelligentData[]): Promise<Hex>;
   authorize(tokenId: number, user: Address): Promise<Hex>;
@@ -56,6 +57,9 @@ const datum = (dataDescription: string, hash?: string): IntelligentData => ({
  * shows up as an `Updated` event on the agent's token.
  */
 export class AgentNfts {
+  /** Licences the site runs, as extra intelligent data on its own agents' tokens (set by the wiring) */
+  licensed: ((siteId: string) => Promise<Map<AgentKey, IntelligentData[]>>) | null = null;
+
   constructor(
     private db: Db,
     private rec: Recorder,
@@ -72,10 +76,11 @@ export class AgentNfts {
   private async wanted(siteId: string): Promise<Map<AgentKey, Want>> {
     const lines = (await this.db.query<{ name: string; autonomy: string }>("SELECT name, autonomy FROM lines WHERE site_id = $1 ORDER BY created_at", [siteId])).rows;
     const users = (await this.db.query<{ address: string }>("SELECT DISTINCT u.address FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.site_id = $1 AND m.role = 'plant_manager' ORDER BY u.address", [siteId])).rows.map((r) => r.address.toLowerCase());
+    const licensed = (await this.licensed?.(siteId)) ?? new Map<AgentKey, IntelligentData[]>();
     const out = new Map<AgentKey, Want>();
     for (const a of AGENTS)
       out.set(a, {
-        datas: [datum("policy:ordo-guard", this.policyHash), datum(`model:${this.model()}`), datum(`autonomy:${lines.map((l) => `${l.name}=${l.autonomy}`).join(",")}`), datum(`scope:${AGENT_INFO[a].scope}`)],
+        datas: [datum("policy:ordo-guard", this.policyHash), datum(`model:${this.model()}`), datum(`autonomy:${lines.map((l) => `${l.name}=${l.autonomy}`).join(",")}`), datum(`scope:${AGENT_INFO[a].scope}`), ...(licensed.get(a) ?? [])],
         users: users.slice(0, 100),
       });
     return out;
@@ -83,11 +88,12 @@ export class AgentNfts {
 
   async reconcile(limit = 1): Promise<number> {
     if (!this.rail) return 0;
+    await this.forgetOtherContracts();
     for (const s of (await this.db.query<{ id: string }>("SELECT id FROM sites")).rows) {
       const have = new Map((await this.db.query<{ agent: string; want_json: string }>("SELECT agent, want_json FROM agent_nfts WHERE site_id = $1", [s.id])).rows.map((r) => [r.agent, r.want_json]));
       for (const [agent, want] of await this.wanted(s.id)) {
         const w = JSON.stringify(want);
-        if (!have.has(agent)) await this.db.query("INSERT INTO agent_nfts (site_id, agent, want_json, status, next_try_at) VALUES ($1,$2,$3,'pending',$4) ON CONFLICT DO NOTHING", [s.id, agent, w, this.iso()]);
+        if (!have.has(agent)) await this.db.query("INSERT INTO agent_nfts (site_id, agent, want_json, status, next_try_at, contract) VALUES ($1,$2,$3,'pending',$4,$5) ON CONFLICT DO NOTHING", [s.id, agent, w, this.iso(), this.rail.cfg.address.toLowerCase()]);
         else if (have.get(agent) !== w) await this.db.query("UPDATE agent_nfts SET want_json = $1, status = 'pending', attempts = 0, error = NULL, next_try_at = $2, updated_at = now() WHERE site_id = $3 AND agent = $4", [w, this.iso(), s.id, agent]);
       }
     }
@@ -108,6 +114,21 @@ export class AgentNfts {
       }
     }
     return due.rows.length;
+  }
+
+  /**
+   * Tokens minted on an earlier OrdoAgentNFT (ZG_INFT_ADDRESS changed) are forgotten so the agents mint again on the
+   * current one. Rows from before the contract was recorded are kept only if the current contract has that token.
+   */
+  private async forgetOtherContracts() {
+    const addr = this.rail!.cfg.address.toLowerCase();
+    await this.db.query("DELETE FROM agent_nfts WHERE contract IS NOT NULL AND contract <> $1", [addr]);
+    await this.db.query("UPDATE agent_licenses SET status = 'failed', error = 'The agent was minted again on a new OrdoAgentNFT', updated_at = now() WHERE contract IS NOT NULL AND contract <> $1 AND status IN ('requested','signed','active','revoking')", [addr]);
+    const legacy = await this.db.query<{ site_id: string; agent: string; token_id: number | null }>("SELECT site_id, agent, token_id FROM agent_nfts WHERE contract IS NULL LIMIT 8");
+    for (const r of legacy.rows) {
+      if (r.token_id === null || (await this.rail!.tokenOf(`${r.site_id}/${r.agent}`)) === Number(r.token_id)) await this.db.query("UPDATE agent_nfts SET contract = $1 WHERE site_id = $2 AND agent = $3", [addr, r.site_id, r.agent]);
+      else await this.db.query("DELETE FROM agent_nfts WHERE site_id = $1 AND agent = $2", [r.site_id, r.agent]);
+    }
   }
 
   /** One transaction: mint, then update the data, then add or remove one authorized user. */

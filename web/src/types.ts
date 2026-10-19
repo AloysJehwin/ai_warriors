@@ -165,6 +165,51 @@ export interface AgentRow {
     data: { dataDescription: string; dataHash: string }[];
     authorizedUsers: string[];
   } | null;
+  /** How often people accepted what it recommended; proven agents can be licensed to other sites */
+  record: TrackRecord;
+  /** Agents of the same kind this site licenses from other sites (their playbooks feed this agent) */
+  licensedFrom: { id: string; site: string; tokenId: number | null; tokenUrl: string | null; expiresAt: string | null }[];
+}
+export interface TrackRecord {
+  recommended: number;
+  decided: number;
+  accepted: number;
+  overridden: number;
+  rate: number | null;
+  proven: boolean;
+}
+export type LicenseStatus = "requested" | "declined" | "signed" | "active" | "revoking" | "revoked" | "expired" | "failed";
+export interface AgentLicense {
+  id: string;
+  agent: AgentKey;
+  agentLabel: string;
+  licensor: { id: string; name: string };
+  licensee: { id: string; name: string };
+  tokenId: number | null;
+  tokenUrl: string | null;
+  status: LicenseStatus;
+  days: number;
+  expiresAt: string | null;
+  termsHash: string | null;
+  record: TrackRecord | null;
+  cases: number;
+  playbookSha256: string | null;
+  storage: { root: string; url: string } | null;
+  txUrl: string | null;
+  error: string | null;
+  requestedBy: string;
+  grantedBy: string | null;
+  createdAt: string;
+}
+export interface MarketAgent {
+  site: { id: string; name: string };
+  agent: AgentKey;
+  label: string;
+  scope: string;
+  tokenId: number | null;
+  tokenUrl: string | null;
+  record: TrackRecord;
+  license: AgentLicense | null;
 }
 export interface Incident {
   id: string;

@@ -9,6 +9,7 @@ import { SESSION_COOKIE, type Principal } from "../auth/auth.js";
 import { ASSESSMENT_PATH, assessVibration } from "../chain/x402.js";
 import { CATEGORIES } from "../core/templates.js";
 import { REJECT } from "../core/inbox.js";
+import { LICENSE_DAYS } from "../core/agent-licenses.js";
 import { ONBOARDING_KINDS } from "../core/trust.js";
 import { canApproveAny } from "../domain/policy.js";
 import { AGENT_INFO, AGENTS, ASSET_KIND_LABEL, ASSET_KINDS, AgentKey, AssetKind, AutonomyLevel, DataSource, PackageType, Role, ROLE_LABEL, ROLES, SignalLimit, TemplateSpec } from "../domain/types.js";
@@ -443,6 +444,8 @@ export function createApp(sys: System, opts: AppOptions = {}) {
     );
     const views = await sys.plant.views(sid(c));
     const nfts = await sys.agentNfts.ofSite(sid(c));
+    const records = new Map(await Promise.all(AGENTS.map(async (a) => [a, await sys.agentLicenses.record(sid(c), a)] as const)));
+    const licensed = (await sys.agentLicenses.list(sid(c))).outgoing.filter((l) => l.status === "active");
     return c.json(
       AGENTS.map((a) => {
         const st = stats.rows.find((x) => x.agent === `agent:${a}`);
@@ -451,6 +454,8 @@ export function createApp(sys: System, opts: AppOptions = {}) {
           key: a,
           ...AGENT_INFO[a],
           inft: nfts.get(a) ?? null,
+          record: records.get(a)!,
+          licensedFrom: licensed.filter((l) => l.agent === a).map((l) => ({ id: l.id, site: l.licensor.name, tokenId: l.tokenId, tokenUrl: l.tokenUrl, expiresAt: l.expiresAt })),
           autonomy: level,
           assets: views.filter((v) => v.owningAgent === a).map((v) => ({ id: v.id, name: v.name, status: v.status })),
           currentTask: current[0] ? `${current[0].run_id} · ${current[0].code} ${current[0].name ?? ""}`.trim() : null,
@@ -462,6 +467,21 @@ export function createApp(sys: System, opts: AppOptions = {}) {
       }),
     );
   });
+
+  // ---- Licensing proven agents between sites (their iNFTs on 0G) ----
+  site.get("/agents/market", async (c) => c.json(await sys.agentLicenses.market(sid(c))));
+  site.get("/agents/licenses", async (c) => c.json(await sys.agentLicenses.list(sid(c))));
+  site.post("/agents/licenses", async (c) => {
+    const b = await body(c, z.object({ site: z.string().min(1), agent: AgentKey, days: z.number().int().refine((d) => (LICENSE_DAYS as readonly number[]).includes(d), `days: one of ${LICENSE_DAYS.join(", ")}`) }));
+    return c.json(await sys.agentLicenses.request(sid(c), me(c).user, c.get("roles"), b), 201);
+  });
+  site.post("/agents/licenses/:id/sign-request", async (c) => {
+    const b = await body(c, z.object({ kind: z.enum(["grant", "revoke"]), comment: z.string().max(500).default(""), chainId: z.number().int().optional() }));
+    return c.json(await sys.agentLicenses.signRequest(sid(c), me(c).user, c.get("roles"), c.req.param("id"), b));
+  });
+  site.post("/agents/licenses/:id/grant", async (c) => c.json(await sys.agentLicenses.grant(sid(c), me(c).user, c.get("roles"), c.req.param("id"), await body(c, SignedBody))));
+  site.post("/agents/licenses/:id/revoke", async (c) => c.json(await sys.agentLicenses.revoke(sid(c), me(c).user, c.get("roles"), c.req.param("id"), await body(c, SignedBody))));
+  site.post("/agents/licenses/:id/decline", async (c) => c.json(await sys.agentLicenses.decline(sid(c), me(c).user, c.get("roles"), c.req.param("id"))));
 
   // ---- Validation packages ----
   site.get("/validation", async (c) => c.json(await sys.validation.list(sid(c), me(c).user, c.get("roles"))));
