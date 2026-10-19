@@ -314,7 +314,7 @@ export interface PublicPassport {
       criteria: { label: string; target: string; actual: string | null; ok: boolean | null }[];
       deviation: boolean;
     }[];
-    signed: { kind: string; summary: string; stageCode: string | null; by: string; at: string; ledgerSeq: number | null }[];
+    signed: { kind: string; summary: string; stageCode: string | null; by: string; ens: string | null; at: string; ledgerSeq: number | null }[];
     agentDecisions: number;
     releases: {
       id: string;
@@ -322,7 +322,7 @@ export interface PublicPassport {
       type: string;
       title: string;
       releasedAt: string;
-      signers: { meaning: string; address: string; stake: { amount: string; active: boolean; symbol: string; decimals: number } | null }[];
+      signers: { meaning: string; address: string; ens: string | null; stake: { amount: string; active: boolean; symbol: string; decimals: number } | null }[];
       onchain: { txUrl: string | null; contract: string | null } | null;
     }[];
     proof: {
@@ -334,4 +334,21 @@ export interface PublicPassport {
       checkedAt: string;
     };
   };
+}
+
+// ---------------- ENS names (ENSv2 on Sepolia) ----------------
+export interface EnsNameView {
+  kind: "site" | "person" | "asset" | "agent";
+  ref: string;
+  name: string;
+  status: "pending" | "issued" | "revoked" | "failed";
+  error: string | null;
+  url: string;
+  txUrl: string | null;
+  records: Record<string, string>;
+}
+export interface EnsNamesResponse {
+  live: boolean;
+  parent: string | null;
+  items: EnsNameView[];
 }

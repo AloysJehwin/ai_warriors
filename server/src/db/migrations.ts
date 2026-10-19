@@ -194,4 +194,18 @@ CREATE INDEX chain_jobs_due ON chain_jobs (status, next_try_at);
 CREATE INDEX chain_jobs_ref ON chain_jobs (kind, ref);
 `,
   },
+  {
+    version: 8,
+    name: "ENS names",
+    sql: `
+CREATE TABLE ens_names (id TEXT PRIMARY KEY, site_id TEXT NOT NULL REFERENCES sites(id), kind TEXT NOT NULL, ref TEXT NOT NULL,
+  label TEXT NOT NULL, name TEXT NOT NULL, registry TEXT, want_json TEXT NOT NULL, have_json TEXT, status TEXT NOT NULL,
+  stage TEXT, sent_json TEXT, pending_txs TEXT, sent_at TIMESTAMPTZ,
+  tx_hash TEXT, error TEXT, attempts INTEGER NOT NULL DEFAULT 0, next_try_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE UNIQUE INDEX ens_names_ref ON ens_names (site_id, kind, ref);
+CREATE UNIQUE INDEX ens_names_name ON ens_names (name);
+CREATE INDEX ens_names_due ON ens_names (status, next_try_at);
+`,
+  },
 ];

@@ -64,16 +64,15 @@ Post the current commit to the HCS build topic every few hours:
 cd server && HEDERA_BUILD_TOPIC_ID=<build topic> pnpm anchor:build
 ```
 
-## ENS (Sepolia)
+## ENS (Sepolia, ENSv2)
 
-Register and wrap a parent name in the ENS app on Sepolia, take the Name Wrapper and Public Resolver addresses from the official ENS deployments list, then:
+ENSv2 gives every name its own registry. `scripts/ens-setup.ts` registers Ordo's parent name once: it deploys Ordo's `PermissionedResolver` and a `UserRegistry` through ENS's `VerifiableFactory`, then registers `<label>.eth` (commit, wait, pay in the testnet's MockUSDC) pointing at both. Run it from the **ENS setup** workflow (put the label in `.github/deploy/ens.request`; needs the `sepolia` environment with `ENS_OWNER_KEY` holding some Sepolia ETH), or locally:
 
 ```bash
-ENS_RPC_URL=... ENS_OWNER_KEY=0x... ENS_PARENT_NAME=ordo-mfg.eth \
-ENS_NAME_WRAPPER=0x... ENS_PUBLIC_RESOLVER=0x... pnpm bootstrap:ens
+ENS_OWNER_KEY=0x... ENS_LABEL=ordo-mfg pnpm setup:ens
 ```
 
-It creates `line-02`, `cnc-04/05/07`, `healer` and `maintenance` subnames with `com.ordo.*` text records. Start the server with `IDENTITY=ens ENS_PARENT_NAME=... ENS_RPC_URL=...` and the console shows the names.
+The app then issues the rest as the site changes: `<site>.<parent>` with its own `UserRegistry`, and in it a name for each person (minted to their wallet with no roles on the token, so it cannot be transferred; revoked when they hold no role), each asset and each agent, with `com.ordo.*` text records in Ordo's resolver. The contract addresses are the Sepolia set ENS deployed on 2026-10-01 (`server/src/chain/ensv2.ts`).
 
 ## 0G
 

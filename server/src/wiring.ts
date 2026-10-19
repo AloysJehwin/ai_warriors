@@ -10,6 +10,7 @@ import { Autonomy } from "./core/autonomy.js";
 import { Inbox } from "./core/inbox.js";
 import { Jobs } from "./core/jobs.js";
 import { Monitor } from "./core/monitor.js";
+import { Names } from "./core/names.js";
 import { Passports } from "./core/passports.js";
 import { Proof } from "./core/proof.js";
 import { Recorder } from "./core/recorder.js";
@@ -55,6 +56,7 @@ export interface System {
   autonomy: Autonomy;
   passports: Passports;
   jobs: Jobs;
+  names: Names;
   /** x402: the paid assessment route's middleware and terms, when Ordo sells assessments */
   x402: { middleware: import("hono").MiddlewareHandler; terms: { network: string; payTo: string; price: string; asset: string } } | null;
   ensNames: { lookup(addresses: string[]): Promise<Record<string, string | null>> } | null;
@@ -63,7 +65,7 @@ export interface System {
   close(): Promise<void>;
 }
 
-export async function buildSystem(cfg: Config, opts: { now?: () => number; policyText?: string; llm?: LlmProvider; trustTransport?: Transport; x402Facilitator?: import("@x402/core/server").FacilitatorClient; x402Fetch?: typeof fetch } = {}): Promise<System> {
+export async function buildSystem(cfg: Config, opts: { now?: () => number; policyText?: string; llm?: LlmProvider; trustTransport?: Transport; x402Facilitator?: import("@x402/core/server").FacilitatorClient; x402Fetch?: typeof fetch; ensTransport?: Transport } = {}): Promise<System> {
   const warnings: string[] = [];
   if (cfg.VERCEL && !cfg.DATABASE_URL) throw new Error("On Vercel, DATABASE_URL is required (add Neon from the Vercel Marketplace)");
   const now = opts.now ?? Date.now;
@@ -207,6 +209,30 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
 
   const passports = new Passports(db, rec, sigs, engine, trust, proof, passportRail, publicBase(cfg), cfg.SIGNATURE_CHAIN_ID, now);
 
+  // ---- ENSv2 names on Sepolia for the site, its people, assets and agents ----
+  let nameRail: import("./core/names.js").NameRail | null = null;
+  const ensParts = [cfg.ENS_PARENT_NAME, cfg.ENS_REGISTRY_ADDRESS, cfg.ENS_RESOLVER_ADDRESS, cfg.ENS_OWNER_KEY];
+  if (ensParts.every(Boolean)) {
+    const { EnsV2 } = await import("./chain/ensv2.js");
+    nameRail = new EnsV2(
+      {
+        rpcUrl: cfg.ENS_SEPOLIA_RPC_URL,
+        ownerKey: cfg.ENS_OWNER_KEY!.replace(/^(0x)?/, "0x") as Hex,
+        parentName: cfg.ENS_PARENT_NAME!,
+        parentRegistry: cfg.ENS_REGISTRY_ADDRESS as Hex,
+        resolver: cfg.ENS_RESOLVER_ADDRESS as Hex,
+        factory: cfg.ENS_FACTORY_ADDRESS as Hex | undefined,
+        userRegistryImpl: cfg.ENS_USER_REGISTRY_IMPL as Hex | undefined,
+        chainId: cfg.ENS_CHAIN_ID,
+      },
+      opts.ensTransport,
+    );
+  } else if (ensParts.some(Boolean)) {
+    warnings.push("ENS names need ENS_PARENT_NAME, ENS_REGISTRY_ADDRESS, ENS_RESOLVER_ADDRESS and ENS_OWNER_KEY together");
+  }
+  const names = new Names(db, rec, nameRail, publicBase(cfg), () => payer?.address ?? null, now);
+  passports.names = names;
+
   const advance = async (force = false) => {
     // throttle: one cycle per 4 s across all instances (the lease is left to expire, not released)
     if (!force && !(await plant.tryLease("advance", 4_000))) return;
@@ -217,6 +243,7 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
     await workOrders.refundExpired().catch((e) => console.error("[ordo] refunds", e));
     await passports.reconcile().catch((e) => console.error("[ordo] passports", e));
     await jobs.run().catch((e) => console.error("[ordo] jobs", e));
+    await names.reconcile().catch((e) => console.error("[ordo] ens", e));
     const head = await ledger.head();
     const last = (await proof.anchors(1))[0];
     if (head && (!last || head.seq - last.toSeq >= cfg.ANCHOR_EVERY || (head.seq > last.toSeq && now() - Date.parse(last.ts) > 30 * 60_000))) await proof.anchorHead(null, null).catch((e) => console.error("[ordo] anchor", e));
@@ -224,7 +251,8 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
 
   const rails: RailStatus[] = [
     { rail: "database", mode: db.kind === "postgres" ? "postgres" : cfg.DATA_DIR === "memory" ? "pglite (memory)" : "pglite (disk)", live: db.kind === "postgres" },
-    { rail: "identity", mode: `SIWE wallet sign-in${ensNames ? " + ENS names" : ""}`, live: true },
+    { rail: "identity", mode: `SIWE wallet sign-in${ensNames ? " + ENS primary names" : ""}`, live: true },
+    { rail: "ens names", mode: nameRail ? `ENSv2 on Sepolia under ${cfg.ENS_PARENT_NAME}` : "off: no names issued", live: Boolean(nameRail) },
     { rail: "signatures", mode: "EIP-712 typed data", live: true },
     { rail: "trust contract", mode: trustChain ? `OrdoTrust ${cfg.TRUST_CONTRACT_ADDRESS} · ${cfg.TRUST_CHAIN_NAME} (${cfg.TRUST_CHAIN_ID})` : "off: validators approved in-app, no stakes", live: Boolean(trustChain) },
     { rail: "ai", mode: llm.name === "gemini" ? `gemini:${cfg.GEMINI_MODEL}` : llm.name, live: llm.name !== "offline" },
@@ -266,6 +294,7 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
     autonomy,
     passports,
     jobs,
+    names,
     x402,
     ensNames,
     advance,

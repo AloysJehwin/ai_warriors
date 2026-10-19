@@ -86,8 +86,18 @@ const Env = z.object({
   X402_ASSESSMENT_URL: z.string().url().optional(),
   X402_MAX_TINYBARS: z.coerce.bigint().default(50_000_000n),
 
+  /** Primary-name lookups for signed-in wallets (Ethereum mainnet) when IDENTITY=ens */
   ENS_RPC_URL: z.string().optional(),
+  /** ENSv2 names on Sepolia: the parent name and its registry and resolver come from the ENS setup workflow */
   ENS_PARENT_NAME: z.string().optional(),
+  ENS_REGISTRY_ADDRESS: z.string().optional(),
+  ENS_RESOLVER_ADDRESS: z.string().optional(),
+  ENS_OWNER_KEY: z.string().optional(),
+  ENS_SEPOLIA_RPC_URL: z.string().default("https://ethereum-sepolia-rpc.publicnode.com"),
+  /** Tests point these at a local chain */
+  ENS_CHAIN_ID: z.coerce.number().int().optional(),
+  ENS_FACTORY_ADDRESS: z.string().optional(),
+  ENS_USER_REGISTRY_IMPL: z.string().optional(),
 
   ZG_RPC_URL: z.string().default("https://evmrpc-testnet.0g.ai"),
   ZG_INDEXER_URL: z.string().default("https://indexer-storage-testnet-turbo.0g.ai"),

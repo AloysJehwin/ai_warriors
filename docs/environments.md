@@ -97,6 +97,7 @@ It validates every variable and checks each configured rail against the real ser
 | `HEDERA_AGENT_ID`, `HEDERA_AGENT_KEY` | – | testnet | testnet | The maintenance agent's own account; it escrows through Hedera Agent Kit. From **Hedera setup** (`agent`), which writes the key to Vercel directly |
 | `X402_PAY_TO`, `X402_PRICE_TINYBARS`, `X402_FACILITATOR_URL`, `X402_ASSESSMENT_URL`, `X402_MAX_TINYBARS` | – | defaults | defaults | x402 pay-per-call: Ordo sells vibration assessments (fees to the operator unless `X402_PAY_TO` is set); the agent buys one per work order, at most `X402_MAX_TINYBARS` a call. The defaults work on testnet with the public facilitator |
 | `IDENTITY`, `ENS_RPC_URL` | plain | ens | ens | `ens` shows people's primary ENS names (mainnet reverse resolution) |
+| `ENS_PARENT_NAME`, `ENS_REGISTRY_ADDRESS`, `ENS_RESOLVER_ADDRESS`, `ENS_OWNER_KEY`, `ENS_SEPOLIA_RPC_URL` | – | sepolia | sepolia | ENSv2 names for the site, people, assets and agents, from the **ENS setup** workflow (which writes all four to Vercel). The RPC defaults to a public Sepolia endpoint |
 | `EVIDENCE_STORE`, `ZG_*` | local | 0g (optional) | 0g (optional) | |
 
 Use separate Hedera accounts for preview and production if several people test at once, so testnet balances and topics don't mix.

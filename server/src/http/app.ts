@@ -241,8 +241,17 @@ export function createApp(sys: System, opts: AppOptions = {}) {
   // ---- Team ----
   site.get("/team", async (c) => {
     const t = await sys.plant.team(sid(c));
+    const issued = await sys.names.ofPeople(sid(c));
     const ens = sys.ensNames ? await sys.ensNames.lookup(t.members.map((m) => m.address)) : {};
-    return c.json({ ...t, members: t.members.map((m) => ({ ...m, ens: ens[m.address] ?? null })) });
+    return c.json({ ...t, members: t.members.map((m) => ({ ...m, ens: issued.get(m.address.toLowerCase()) ?? ens[m.address] ?? null })) });
+  });
+
+  // ---- ENS names (ENSv2 on Sepolia) ----
+  site.get("/names", async (c) => c.json({ live: sys.names.live, parent: sys.names.parent, items: await sys.names.list(sid(c)) }));
+  site.post("/names/:kind/:ref/retry", async (c) => {
+    need(c, "admin");
+    await sys.names.retry(sid(c), c.req.param("kind"), c.req.param("ref"));
+    return c.json({ ok: true });
   });
   site.post("/team/invites", async (c) => {
     need(c, "admin");

@@ -1,0 +1,69 @@
+name: ENS setup
+
+# Registers Ordo's parent name on ENSv2 (Sepolia) with the owner key held in the `sepolia` environment, then sets
+# ENS_PARENT_NAME, ENS_REGISTRY_ADDRESS, ENS_RESOLVER_ADDRESS and ENS_OWNER_KEY in Vercel (the key is never printed).
+# Put the label you want (e.g. ordo-mfg for ordo-mfg.eth) in .github/deploy/ens.request and push, or run it by hand.
+# Needs: the `sepolia` environment with secret ENS_OWNER_KEY (an EVM key holding some Sepolia ETH) and the
+# repository secret VERCEL_TOKEN. Registration is paid in the testnet's MockUSDC, which the script mints.
+on:
+  push:
+    paths: [".github/deploy/ens.request"]
+  workflow_dispatch:
+    inputs:
+      label:
+        description: "Label to register (the name becomes <label>.eth)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    environment: sepolia
+    env:
+      ENS_OWNER_KEY: ${{ secrets.ENS_OWNER_KEY }}
+      ENS_SEPOLIA_RPC_URL: ${{ vars.ENS_SEPOLIA_RPC_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Label
+        id: label
+        env:
+          INPUT_LABEL: ${{ github.event.inputs.label }}
+        run: |
+          label="${INPUT_LABEL:-$(sed 's/#.*//' .github/deploy/ens.request | xargs)}"
+          if [ -z "$label" ]; then echo "Nothing requested."; fi
+          echo "label=$label" >> "$GITHUB_OUTPUT"
+      - name: Register the parent name
+        if: steps.label.outputs.label != ''
+        env:
+          ENS_LABEL: ${{ steps.label.outputs.label }}
+        run: |
+          if [ -z "$ENS_OWNER_KEY" ]; then echo "::error::Add ENS_OWNER_KEY to the sepolia environment first"; exit 1; fi
+          pnpm --filter @ordo/contracts setup:ens | tee setup.log
+      - name: Set the values in Vercel
+        if: steps.label.outputs.label != ''
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_PROJECT_ID: prj_ua7E01jdI0VpLBJvZyqqulOlBzGP
+          VERCEL_ORG_ID: team_8ghjcEpH2t9p2BktkDNQ9ZXm
+        run: |
+          if [ -z "$VERCEL_TOKEN" ]; then echo "::warning::No VERCEL_TOKEN: set the values above in Vercel by hand"; exit 0; fi
+          umask 077
+          grep -E '^ENS_(PARENT_NAME|REGISTRY_ADDRESS|RESOLVER_ADDRESS)=' setup.log > "$RUNNER_TEMP/ens.env"
+          node -e 'const k=process.env.ENS_OWNER_KEY.trim().replace(/^(0x)?/,"0x");require("fs").appendFileSync(process.argv[1],`ENS_OWNER_KEY=${k}\n`)' "$RUNNER_TEMP/ens.env"
+          node scripts/vercel-env.mjs push "$RUNNER_TEMP/ens.env" production,preview
+          rm -f "$RUNNER_TEMP/ens.env"
+      - name: Summary
+        if: always()
+        run: |
+          echo '### ENS setup' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          [ -f setup.log ] && cat setup.log >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

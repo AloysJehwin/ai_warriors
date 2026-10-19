@@ -24,8 +24,10 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Foundry's anvil (runs the ENSv2 contracts, which need Cancun)
+        uses: foundry-rs/foundry-toolchain@v1
       - run: pnpm typecheck
-      - name: Server tests (domain, API, serverless behaviour, ledger, LLM guard)
+      - name: Server tests (domain, API, serverless behaviour, ledger, LLM guard, ENSv2 on anvil)
         run: pnpm --filter @ordo/server test
       - name: Contract tests (in-process EVM)
         run: pnpm --filter @ordo/contracts test

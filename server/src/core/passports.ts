@@ -9,6 +9,7 @@ import { HttpError } from "../engine/errors.js";
 import type { RunEngine } from "../pipelines/engine.js";
 import type { Proof } from "./proof.js";
 import type { Recorder } from "./recorder.js";
+import type { Names } from "./names.js";
 import type { Trust } from "./trust.js";
 
 export type PassportStatus = "in_production" | "held" | "completed" | "aborted" | "shipped";
@@ -68,6 +69,8 @@ export class Passports {
     private chainId: number,
     private now: () => number,
   ) {}
+  /** ENS names of the site's people, when names are issued */
+  names: Names | null = null;
 
   /** The public page for a lot; relative when the deployment does not know its own URL. */
   pageUrl(runId: string) {
@@ -190,18 +193,20 @@ export class Passports {
 
   /**
    * What anyone holding the lot (or scanning its QR code) may see, without signing in: HIP-412 NFT metadata plus
-   * the evidence. People appear by wallet address and role, never by name.
+   * the evidence. People appear by wallet address and role, and by the ENS name the site issued them, never by
+   * their account name.
    */
   async publicView(runId: string) {
     const p = await this.row(null, runId);
+    const ens = (await this.names?.ofPeople(p.site_id)) ?? new Map<string, string>();
     const run = await this.engine.view(p.site_id, runId);
     const site = (await this.db.query<{ name: string }>("SELECT name FROM sites WHERE id = $1", [p.site_id])).rows[0];
     const decisions = await this.rec.decisions(p.site_id, { runId, limit: 200 });
     const signed = decisions
       .filter((d) => d.agent.startsWith("user:") && typeof (d.data as { signatureId?: unknown }).signatureId === "string")
-      .map((d) => ({ kind: d.kind, summary: d.summary, stageCode: d.stageCode, by: d.agent.slice(5), at: d.ts, ledgerSeq: d.ledgerSeq }));
+      .map((d) => ({ kind: d.kind, summary: d.summary, stageCode: d.stageCode, by: d.agent.slice(5), ens: ens.get(d.agent.slice(5).toLowerCase()) ?? null, at: d.ts, ledgerSeq: d.ledgerSeq }));
     const agents = decisions.filter((d) => !d.agent.startsWith("user:")).length;
-    const releases = await this.releases(p.site_id, runId);
+    const releases = await this.releases(p.site_id, runId, ens);
     const lastSeq = Math.max(0, ...decisions.map((d) => d.ledgerSeq ?? 0));
     const view = this.view(p);
     const name = `Lot ${run.orderRef}`;
@@ -245,7 +250,7 @@ export class Passports {
   }
 
   /** Validation packages that released this lot: who signed, whether it is on-chain, and the signers' stake now. */
-  private async releases(siteId: string, runId: string) {
+  private async releases(siteId: string, runId: string, ens: Map<string, string>) {
     const pkgs = await this.db.query<{ id: string; number: number; type: string; title: string; updated_at: string }>(
       "SELECT id, number, type, title, updated_at::text AS updated_at FROM validation_packages WHERE site_id = $1 AND run_id = $2 AND status = 'released' ORDER BY number",
       [siteId, runId],
@@ -261,6 +266,7 @@ export class Passports {
           sigs.rows.map(async (s) => ({
             meaning: s.meaning,
             address: s.address,
+            ens: ens.get(s.address.toLowerCase()) ?? null,
             stake:
               chain && s.meaning !== "performed"
                 ? await Promise.all([chain.stakeOf(siteId, s.address), chain.isActiveValidator(siteId, s.address)])
