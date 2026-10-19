@@ -55,6 +55,8 @@ export interface Status {
   signatureChainId: number;
   restrictedSiteCreation: boolean;
   trust: TrustChainInfo | null;
+  /** set when validators must prove with World ID that they are one person */
+  worldId: { appId: string; action: string; environment: string } | null;
 }
 export interface TrustChainInfo {
   chainId: number;
@@ -105,8 +107,8 @@ export interface ChainStatus {
   registeredAt?: string | null;
 }
 export interface ValidatorsView {
-  validators: { userId: string; address: string; name: string | null; scope: string; scopeLabel: string; status: string; approvedAt: string; onchain: { stake: string; unlockAt: number; active: boolean; payout: ScheduleView | null } | null }[];
-  me: { ok: boolean; reason: string | null; row: { scope: string; status: string } | null };
+  validators: { userId: string; address: string; name: string | null; scope: string; scopeLabel: string; status: string; approvedAt: string; human: boolean; onchain: { stake: string; unlockAt: number; active: boolean; payout: ScheduleView | null } | null }[];
+  me: { ok: boolean; reason: string | null; row: { scope: string; status: string } | null; human: boolean };
   chain: ChainStatus;
   proposals: {
     id: string;
@@ -165,6 +167,51 @@ export interface AgentRow {
     data: { dataDescription: string; dataHash: string }[];
     authorizedUsers: string[];
   } | null;
+  /** How often people accepted what it recommended; proven agents can be licensed to other sites */
+  record: TrackRecord;
+  /** Agents of the same kind this site licenses from other sites (their playbooks feed this agent) */
+  licensedFrom: { id: string; site: string; tokenId: number | null; tokenUrl: string | null; expiresAt: string | null }[];
+}
+export interface TrackRecord {
+  recommended: number;
+  decided: number;
+  accepted: number;
+  overridden: number;
+  rate: number | null;
+  proven: boolean;
+}
+export type LicenseStatus = "requested" | "declined" | "signed" | "active" | "revoking" | "revoked" | "expired" | "failed";
+export interface AgentLicense {
+  id: string;
+  agent: AgentKey;
+  agentLabel: string;
+  licensor: { id: string; name: string };
+  licensee: { id: string; name: string };
+  tokenId: number | null;
+  tokenUrl: string | null;
+  status: LicenseStatus;
+  days: number;
+  expiresAt: string | null;
+  termsHash: string | null;
+  record: TrackRecord | null;
+  cases: number;
+  playbookSha256: string | null;
+  storage: { root: string; url: string } | null;
+  txUrl: string | null;
+  error: string | null;
+  requestedBy: string;
+  grantedBy: string | null;
+  createdAt: string;
+}
+export interface MarketAgent {
+  site: { id: string; name: string };
+  agent: AgentKey;
+  label: string;
+  scope: string;
+  tokenId: number | null;
+  tokenUrl: string | null;
+  record: TrackRecord;
+  license: AgentLicense | null;
 }
 export interface Incident {
   id: string;
@@ -301,6 +348,19 @@ export interface PassportView {
   pageUrl: string;
   nft: { tokenId: string; serial: number | null; url: string | null; onchainStatus: string | null; mintTxUrl: string | null; error: string | null } | null;
   shipment: { to: string; at: string; txUrl: string | null; pending: boolean | null } | null;
+  /** the lot's own ENS name, and its releases recorded there against the signers' ENS credentials */
+  ens?: { name: string; url: string; releases: { packageId: string; status: "pending" | "done" | "failed"; txUrl: string | null; error: string | null }[] } | null;
+}
+export interface SpecProof {
+  status: "proven" | "pending" | "failed";
+  system: "groth16-bn254";
+  circuit: "spec_check";
+  /** [subject, target × 10⁴, op, commitment] */
+  publicSignals: string[] | null;
+  proof: unknown;
+  ledgerSeq: number | null;
+  verified: boolean | null;
+  detail: string;
 }
 export interface PublicPassport {
   name: string;
@@ -314,7 +374,6 @@ export interface PublicPassport {
     product: { name: string; category: string; version: number };
     startedAt: string;
     finishedAt: string | null;
-    rolledYield: number | null;
     stages: {
       code: string;
       name: string;
@@ -323,9 +382,8 @@ export interface PublicPassport {
       resource: string;
       startedAt: string | null;
       endedAt: string | null;
-      unitsGood: number;
-      unitsScrap: number;
-      criteria: { label: string; target: string; actual: string | null; ok: boolean | null }[];
+      /** whether each criterion was met; the measurement stays private, with a zero-knowledge proof where it was met */
+      criteria: { label: string; target: string; ok: boolean | null; zk: SpecProof | null }[];
       deviation: boolean;
     }[];
     signed: { kind: string; summary: string; stageCode: string | null; by: string; ens: string | null; at: string; ledgerSeq: number | null }[];

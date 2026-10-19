@@ -320,6 +320,36 @@ describe("lot passports", () => {
     expect((await app.request("/v1/public/passports/run_unknown", { headers: { host: "localhost" } })).status).toBe(404);
   });
 
+  it("the public passport proves each passed criterion in zero knowledge and never shows the measurements", async () => {
+    await sys.passports.specs!.reconcile(50);
+    const pub = (await (await app.request(`/v1/public/passports/${runId}`, { headers: { host: "localhost" } })).json()) as any;
+    const criteria = pub.passport.stages.flatMap((s: any) => s.criteria.map((c: any) => ({ ...c, stage: s.code })));
+    const passed = criteria.filter((c: any) => c.ok === true && c.zk);
+    expect(passed.length).toBeGreaterThan(0);
+    for (const c of passed) {
+      expect(c).not.toHaveProperty("actual");
+      expect(c.zk).toMatchObject({ status: "proven", system: "groth16-bn254", verified: true });
+      expect(c.zk.publicSignals).toHaveLength(4);
+    }
+    for (const s of pub.passport.stages) expect(s).not.toHaveProperty("unitsGood");
+    expect(pub.passport).not.toHaveProperty("rolledYield");
+    // the measured values are not anywhere on the page
+    const internal = (await admin.call("GET", `${S()}/runs/${runId}`)).json.run;
+    const actuals = internal.stages.flatMap((s: any) => s.criteriaResults.map((c: any) => c.actual)).filter(Boolean);
+    expect(actuals.length).toBeGreaterThan(0);
+    for (const a of actuals) expect(JSON.stringify(pub)).not.toContain(a);
+
+    // the proof checks out independently, with the published key, and is bound to its commitment in the ledger
+    const snarkjs = await import("snarkjs");
+    const vk = (await (await app.request("/v1/public/zk/spec-check", { headers: { host: "localhost" } })).json()) as any;
+    const z = passed[0].zk;
+    expect(await snarkjs.groth16.verify(vk.verificationKey, z.publicSignals, z.proof)).toBe(true);
+    const entry = (await sys.rec.ledger.range(z.ledgerSeq, z.ledgerSeq))[0]!;
+    expect(entry).toMatchObject({ type: "passport.spec_committed", payload: { commitment: z.publicSignals[3], target: z.publicSignals[1] } });
+    // a proof replayed against another target does not verify
+    expect(await snarkjs.groth16.verify(vk.verificationKey, [z.publicSignals[0], "0", z.publicSignals[2], z.publicSignals[3]], z.proof)).toBe(false);
+  });
+
   it("a supervisor or plant manager ships a completed lot with a signature", async () => {
     expect((await operator.call("POST", `${S()}/runs/${runId}/ship/sign-request`, { to: "0.0.4242" })).status).toBe(403);
     expect((await admin.call("POST", `${S()}/runs/${runId}/ship/sign-request`, { to: "not-an-account" })).status).toBe(400);

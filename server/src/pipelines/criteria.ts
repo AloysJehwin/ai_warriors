@@ -7,11 +7,20 @@ export interface StageMeasurements {
   activeOee: number | null;
 }
 
+export interface CriterionResult {
+  label: string;
+  target: string;
+  actual: string | null;
+  ok: boolean | null;
+  /** the number compared against the target (after `abs`): what a zero-knowledge proof of the result commits to */
+  measured?: { value: number; op: Criterion["op"]; target: number };
+}
+
 /**
  * Evaluate success criteria against what was actually measured. A criterion with no measurement
  * returns ok = null: a person must confirm it, it is never assumed to pass.
  */
-export function evaluateCriteria(criteria: Criterion[], m: StageMeasurements): { label: string; target: string; actual: string | null; ok: boolean | null }[] {
+export function evaluateCriteria(criteria: Criterion[], m: StageMeasurements): CriterionResult[] {
   const total = m.good + m.scrap;
   return criteria.map((c) => {
     const target = `${c.op === ">=" ? "≥" : c.op === "<=" ? "≤" : "="} ${c.abs ? "±" : ""}${c.target}${c.unit ? ` ${c.unit}` : ""}`.trim();
@@ -37,6 +46,6 @@ export function evaluateCriteria(criteria: Criterion[], m: StageMeasurements): {
     if (value === null) return { label: c.label, target, actual: null, ok: null };
     const v = c.abs ? Math.abs(value) : value;
     const ok = c.op === ">=" ? v >= c.target : c.op === "<=" ? v <= c.target : v === c.target;
-    return { label: c.label, target, actual: shown, ok };
+    return { label: c.label, target, actual: shown, ok, measured: { value: v, op: c.op, target: c.target } };
   });
 }

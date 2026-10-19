@@ -3,7 +3,8 @@ import { api } from "../api";
 import { useApp } from "../lib/app";
 import { ago, AGENT_LABEL, dateTime, LEVEL_LABEL, pct, signalLabel, STATUS_LABEL } from "../lib/format";
 import { href, useRoute } from "../lib/router";
-import type { AgentKey, AgentRow, AssetKind, AssetView, DataSource, Incident, SignalLimit } from "../types";
+import { useSign } from "../lib/sign";
+import type { AgentKey, AgentLicense, AgentRow, AssetKind, AssetView, DataSource, Incident, LicenseStatus, MarketAgent, SignalLimit, TrackRecord, TypedSignature } from "../types";
 import { Action, Drawer, Empty, Field, Loading, Menu, Modal, Segmented, Tabs, useToast } from "../ui/kit";
 import { Select } from "../ui/Select";
 import { Spark } from "../ui/Spark";
@@ -120,55 +121,283 @@ function Agents() {
   }, [path, live?.headSeq]);
   if (!rows) return <Loading />;
   return (
-    <div className="card scroll-x section">
-      <table className="t">
-        <thead>
-          <tr>
-            <th>Agent</th>
-            <th>Scope</th>
-            <th>Autonomy</th>
-            <th>Current task</th>
-            <th className="r">Decisions 24 h</th>
-            <th className="r">Escalations</th>
-            <th className="r">Avg. confidence</th>
-            <th>Assets</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((a) => (
-            <tr key={a.key}>
-              <td>
-                <b>{a.label}</b>
-                {a.inft && (
-                  <div className="small" title={a.inft.data.map((d) => `${d.dataDescription} · ${d.dataHash.slice(0, 10)}…`).join("\n")}>
-                    {a.inft.tokenId === null ? (
-                      <span className={a.inft.status === "failed" ? "field-e" : "faint"}>{a.inft.status === "failed" ? `iNFT mint failed: ${a.inft.error}` : "minting iNFT on 0G…"}</span>
-                    ) : (
-                      <a href={a.inft.url ?? a.inft.txUrl ?? undefined} target="_blank" rel="noreferrer">
-                        iNFT #{a.inft.tokenId}
-                        {a.inft.status === "pending" ? " · updating" : ""}
-                      </a>
-                    )}
-                  </div>
-                )}
-              </td>
-              <td className="muted">{a.scope}</td>
-              <td>
-                {a.autonomy} · {LEVEL_LABEL[a.autonomy]}
-              </td>
-              <td>
-                {a.currentTask ?? <span className="faint">idle</span>}
-                {a.activeStages > 1 && <span className="faint small"> +{a.activeStages - 1}</span>}
-              </td>
-              <td className="r">{a.decisionsToday}</td>
-              <td className="r">{a.escalationsToday}</td>
-              <td className="r">{a.avgConfidence === null ? "—" : a.avgConfidence.toFixed(2)}</td>
-              <td className="small">{a.assets.length ? a.assets.map((x) => x.name).join(", ") : <span className="faint">none</span>}</td>
+    <>
+      <div className="card scroll-x section">
+        <table className="t">
+          <thead>
+            <tr>
+              <th>Agent</th>
+              <th>Scope</th>
+              <th>Autonomy</th>
+              <th>Current task</th>
+              <th className="r">Decisions 24 h</th>
+              <th className="r">Escalations</th>
+              <th className="r">Avg. confidence</th>
+              <th>Assets</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+          </thead>
+          <tbody>
+            {rows.map((a) => (
+              <tr key={a.key}>
+                <td>
+                  <b>{a.label}</b>
+                  {a.inft && (
+                    <div className="small" title={a.inft.data.map((d) => `${d.dataDescription} · ${d.dataHash.slice(0, 10)}…`).join("\n")}>
+                      {a.inft.tokenId === null ? (
+                        <span className={a.inft.status === "failed" ? "field-e" : "faint"}>{a.inft.status === "failed" ? `iNFT mint failed: ${a.inft.error}` : "minting iNFT on 0G…"}</span>
+                      ) : (
+                        <a href={a.inft.url ?? a.inft.txUrl ?? undefined} target="_blank" rel="noreferrer">
+                          iNFT #{a.inft.tokenId}
+                          {a.inft.status === "pending" ? " · updating" : ""}
+                        </a>
+                      )}
+                    </div>
+                  )}
+                  {a.record.proven && (
+                    <div className="small">
+                      <span className="pill ok" title={recordTitle(a.record)}>
+                        Proven · {pct(a.record.rate, 0)} accepted
+                      </span>
+                    </div>
+                  )}
+                  {a.licensedFrom.map((l) => (
+                    <div key={l.id} className="small muted">
+                      Licensed from {l.site}
+                      {l.tokenId !== null && (
+                        <>
+                          {" "}
+                          ·{" "}
+                          <a href={l.tokenUrl ?? undefined} target="_blank" rel="noreferrer">
+                            iNFT #{l.tokenId}
+                          </a>
+                        </>
+                      )}{" "}
+                      · until {dateTime(l.expiresAt)}
+                    </div>
+                  ))}
+                </td>
+                <td className="muted">{a.scope}</td>
+                <td>
+                  {a.autonomy} · {LEVEL_LABEL[a.autonomy]}
+                </td>
+                <td>
+                  {a.currentTask ?? <span className="faint">idle</span>}
+                  {a.activeStages > 1 && <span className="faint small"> +{a.activeStages - 1}</span>}
+                </td>
+                <td className="r">{a.decisionsToday}</td>
+                <td className="r">{a.escalationsToday}</td>
+                <td className="r">{a.avgConfidence === null ? "—" : a.avgConfidence.toFixed(2)}</td>
+                <td className="small">{a.assets.length ? a.assets.map((x) => x.name).join(", ") : <span className="faint">none</span>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <Licenses />
+    </>
+  );
+}
+
+const recordTitle = (r: TrackRecord) => `${r.accepted} of ${r.decided} decided recommendations accepted (${r.recommended} made)`;
+const LICENSE_STATUS: Record<LicenseStatus, [string, string]> = {
+  requested: ["Requested", "warn"],
+  declined: ["Declined", ""],
+  signed: ["Signed · sending to 0G", "warn"],
+  active: ["Active", "ok"],
+  revoking: ["Revoking on 0G", "warn"],
+  revoked: ["Revoked", ""],
+  expired: ["Expired", ""],
+  failed: ["Failed", "bad"],
+};
+const DAYS = [7, 30, 90] as const;
+
+/** Licensing proven agents between sites through their iNFTs on 0G. */
+function Licenses() {
+  const { path, live, can } = useApp();
+  const sign = useSign();
+  const toast = useToast();
+  const [market, setMarket] = useState<MarketAgent[] | null>(null);
+  const [mine, setMine] = useState<{ incoming: AgentLicense[]; outgoing: AgentLicense[] } | null>(null);
+  const [days, setDays] = useState<string>("30");
+  const load = async () => {
+    const [m, l] = await Promise.all([api.get<MarketAgent[]>(path("/agents/market")), api.get<{ incoming: AgentLicense[]; outgoing: AgentLicense[] }>(path("/agents/licenses"))]);
+    setMarket(m);
+    setMine(l);
+  };
+  useEffect(() => {
+    void load();
+  }, [path, live?.headSeq]);
+  if (!market || !mine) return null;
+  const pm = can("plant_manager");
+  const chainLinks = (l: AgentLicense) => (
+    <>
+      {l.tokenId !== null && (
+        <a href={l.tokenUrl ?? undefined} target="_blank" rel="noreferrer">
+          iNFT #{l.tokenId}
+        </a>
+      )}
+      {l.txUrl && (
+        <>
+          {" · "}
+          <a href={l.txUrl} target="_blank" rel="noreferrer">
+            licence tx
+          </a>
+        </>
+      )}
+      {l.storage && <span title={`Playbook on 0G Storage, root ${l.storage.root}`}> · playbook on 0G Storage</span>}
+    </>
+  );
+  const status = (l: AgentLicense) => <span className={`pill ${LICENSE_STATUS[l.status][1]}`}>{LICENSE_STATUS[l.status][0]}</span>;
+  return (
+    <>
+      <section className="section">
+        <div className="section-h">
+          <h2>Requests for your agents</h2>
+          <span className="muted small">A plant manager here signs a grant; the agent's iNFT on 0G records it</span>
+        </div>
+        {mine.incoming.length === 0 ? (
+          <p className="muted small">No site has asked to license your agents. Once people accept enough of an agent's recommendations it is listed as proven to other sites that list publicly.</p>
+        ) : (
+          <div className="card scroll-x">
+            <table className="t">
+              <tbody>
+                {mine.incoming.map((l) => (
+                  <tr key={l.id}>
+                    <td>
+                      <b>{l.agentLabel}</b> to {l.licensee.name}
+                      <div className="small muted">
+                        {l.days} days{l.expiresAt && l.status !== "requested" ? ` · until ${dateTime(l.expiresAt)}` : ""} · {chainLinks(l)}
+                      </div>
+                      {l.error && <div className="small field-e">{l.error}</div>}
+                    </td>
+                    <td>{status(l)}</td>
+                    <td className="r">
+                      {pm && l.status === "requested" && (
+                        <div className="btns end">
+                          <Action
+                            className="btn sm"
+                            onClick={async () => {
+                              await api.post(path(`/agents/licenses/${l.id}/decline`));
+                              await load();
+                            }}
+                          >
+                            Decline
+                          </Action>
+                          <Action
+                            className="btn accent sm"
+                            onClick={async () => {
+                              const r = await sign({
+                                title: `License the ${l.agentLabel.toLowerCase()} to ${l.licensee.name} for ${l.days} days`,
+                                request: (chainId) => api.post<TypedSignature>(path(`/agents/licenses/${l.id}/sign-request`), { kind: "grant", chainId }),
+                                submit: (proof) => api.post<AgentLicense>(path(`/agents/licenses/${l.id}/grant`), proof),
+                                done: "Licence signed",
+                              });
+                              if (r) await load();
+                            }}
+                          >
+                            Sign grant
+                          </Action>
+                        </div>
+                      )}
+                      {pm && l.status === "active" && (
+                        <Action
+                          className="btn danger sm"
+                          onClick={async () => {
+                            const r = await sign({
+                              title: `End ${l.licensee.name}'s licence to the ${l.agentLabel.toLowerCase()}`,
+                              request: (chainId) => api.post<TypedSignature>(path(`/agents/licenses/${l.id}/sign-request`), { kind: "revoke", chainId }),
+                              submit: (proof) => api.post<AgentLicense>(path(`/agents/licenses/${l.id}/revoke`), proof),
+                              done: "Licence revoked",
+                            });
+                            if (r) await load();
+                          }}
+                        >
+                          Revoke
+                        </Action>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+      <section className="section">
+        <div className="section-h">
+          <h2>Proven agents at other sites</h2>
+          {pm && <Segmented size="sm" label="Licence length" value={days} onChange={setDays} options={DAYS.map((d) => ({ value: String(d), label: `${d} days` }))} />}
+        </div>
+        {market.length === 0 && mine.outgoing.length === 0 ? (
+          <p className="muted small">No other site has a proven agent to license yet.</p>
+        ) : (
+          <div className="card scroll-x">
+            <table className="t">
+              <thead>
+                <tr>
+                  <th>Agent</th>
+                  <th>Track record</th>
+                  <th>Licence</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {market.map((m) => (
+                  <tr key={`${m.site.id}/${m.agent}`}>
+                    <td>
+                      <b>{m.label}</b> at {m.site.name}
+                      <div className="small muted">
+                        {m.scope}
+                        {m.tokenId !== null && (
+                          <>
+                            {" · "}
+                            <a href={m.tokenUrl ?? undefined} target="_blank" rel="noreferrer">
+                              iNFT #{m.tokenId}
+                            </a>
+                          </>
+                        )}
+                      </div>
+                    </td>
+                    <td title={recordTitle(m.record)}>
+                      {pct(m.record.rate, 0)} of {m.record.decided} accepted
+                    </td>
+                    <td>{m.license ? <>{status(m.license)} {m.license.status === "active" && <span className="small muted">until {dateTime(m.license.expiresAt)}</span>}</> : <span className="faint">none</span>}</td>
+                    <td className="r">
+                      {pm && (!m.license || ["declined", "revoked", "expired", "failed"].includes(m.license.status)) && (
+                        <Action
+                          className="btn accent sm"
+                          onClick={async () => {
+                            await api.post(path("/agents/licenses"), { site: m.site.id, agent: m.agent, days: Number(days) });
+                            toast(`Asked ${m.site.name} to license its ${m.label.toLowerCase()}`, "ok");
+                            await load();
+                          }}
+                        >
+                          Request {days}-day licence
+                        </Action>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+                {mine.outgoing
+                  .filter((l) => !market.some((m) => m.site.id === l.licensor.id && m.agent === l.agent))
+                  .filter((l) => ["requested", "signed", "active", "revoking", "failed"].includes(l.status))
+                  .map((l) => (
+                    <tr key={l.id}>
+                      <td>
+                        <b>{l.agentLabel}</b> at {l.licensor.name}
+                        <div className="small muted">{chainLinks(l)}</div>
+                      </td>
+                      <td>{l.record ? `${pct(l.record.rate, 0)} of ${l.record.decided} accepted when licensed` : "—"}</td>
+                      <td>{status(l)}</td>
+                      <td />
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+    </>
   );
 }
 

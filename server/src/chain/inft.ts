@@ -1,6 +1,7 @@
 import { createPublicClient, createWalletClient, decodeEventLog, defineChain, http, type Address, type Hex, type Transport } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { ORDO_AGENT_NFT_ABI } from "./ordo-agent-nft-abi.js";
+import type { SigArg } from "./trust.js";
 import { ZG_EXPLORER } from "./zerog.js";
 
 export interface IntelligentData {
@@ -72,6 +73,16 @@ export class AgentNftChain {
   }
   async revoke(tokenId: number, user: Address): Promise<Hex> {
     return (await this.write("revokeAuthorization", [BigInt(tokenId), user])).transactionHash;
+  }
+  async grantLicense(tokenId: number, licensee: string, expiresAt: number, termsHash: Hex, sig: SigArg): Promise<Hex> {
+    return (await this.write("grantLicense", [BigInt(tokenId), licensee, BigInt(expiresAt), termsHash, sig])).transactionHash;
+  }
+  async revokeLicense(tokenId: number, licensee: string, sig: SigArg): Promise<Hex> {
+    return (await this.write("revokeLicense", [BigInt(tokenId), licensee, sig])).transactionHash;
+  }
+  async licenseOf(tokenId: number, licensee: string): Promise<{ active: boolean; expiresAt: number; termsHash: Hex }> {
+    const [active, expiresAt, termsHash] = await this.read<[boolean, bigint, Hex]>("licenseOf", [BigInt(tokenId), licensee]);
+    return { active, expiresAt: Number(expiresAt), termsHash };
   }
   datas(tokenId: number): Promise<readonly IntelligentData[]> {
     return this.read("intelligentDatasOf", [BigInt(tokenId)]);

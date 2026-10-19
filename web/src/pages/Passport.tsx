@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import { dateTime, shortAddr } from "../lib/format";
 import { fromUnits } from "../lib/wallet";
-import type { PassportStatus, PublicPassport } from "../types";
+import type { PassportStatus, PublicPassport, SpecProof } from "../types";
 import { QR } from "../ui/QR";
 
 const STATUS: Record<PassportStatus, [string, string]> = {
@@ -21,10 +21,24 @@ const Check = ({ ok, children }: { ok: boolean | null; children: React.ReactNode
   </li>
 );
 
+type BrowserCheck = { state: "idle" } | { state: "checking" } | { state: "done"; ok: number; of: number } | { state: "error"; message: string };
+
+/**
+ * Re-check every proof here, with snarkjs and the published verification key, so a buyer need not trust Ordo's
+ * server: each proof must verify, and its public signals must be the subject, target and commitment shown.
+ */
+async function verifyInBrowser(proofs: SpecProof[]): Promise<{ ok: number; of: number }> {
+  const [{ groth16 }, key] = await Promise.all([import("snarkjs"), api.get<{ verificationKey: unknown }>("/v1/public/zk/spec-check")]);
+  let ok = 0;
+  for (const z of proofs) if (z.publicSignals && (await groth16.verify(key.verificationKey, z.publicSignals, z.proof as never).catch(() => false))) ok++;
+  return { ok, of: proofs.length };
+}
+
 /** The lot's public passport: what anyone scanning the QR code on a shipped lot sees, without signing in. */
 export function Passport({ runId }: { runId: string }) {
   const [p, setP] = useState<PublicPassport | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [browser, setBrowser] = useState<BrowserCheck>({ state: "idle" });
   useEffect(() => {
     api
       .get<PublicPassport>(`/v1/public/passports/${encodeURIComponent(runId)}`)
@@ -43,6 +57,15 @@ export function Passport({ runId }: { runId: string }) {
   const x = p.passport;
   const [label, tone] = STATUS[x.status];
   const proof = x.proof;
+  const criteria = x.stages.flatMap((s) => s.criteria);
+  const met = criteria.filter((c) => c.ok === true);
+  const proven = met.flatMap((c) => (c.zk?.status === "proven" ? [c.zk] : []));
+  const runBrowserCheck = () => {
+    setBrowser({ state: "checking" });
+    verifyInBrowser(proven)
+      .then((r) => setBrowser({ state: "done", ...r }))
+      .catch((e) => setBrowser({ state: "error", message: e instanceof Error ? e.message : String(e) }));
+  };
   const pageUrl = x.pageUrl.startsWith("http") ? x.pageUrl : `${window.location.origin}${x.pageUrl}`;
   return (
     <div className="pp">
@@ -57,7 +80,6 @@ export function Passport({ runId }: { runId: string }) {
           <p className="small muted">
             Started {dateTime(x.startedAt)}
             {x.finishedAt ? ` · finished ${dateTime(x.finishedAt)}` : ""}
-            {x.rolledYield !== null ? ` · rolled yield ${(x.rolledYield * 100).toFixed(1)}%` : ""}
           </p>
           <span className={`tag ${tone}`}>{label}</span>
         </div>
@@ -88,6 +110,26 @@ export function Passport({ runId }: { runId: string }) {
           ) : (
             <Check ok={null}>Not anchored yet: the ledger is anchored every few minutes</Check>
           )}
+          {met.length > 0 && (
+            <Check ok={proven.length === met.length && proven.every((z) => z.verified) ? true : proven.some((z) => z.verified === false) ? false : null}>
+              {proven.length} of {met.length} criteria met are proven in zero knowledge: each proof shows the measurement meets its target without revealing it, against a
+              commitment recorded in the ledger when the stage closed.{" "}
+              {proven.length > 0 &&
+                (browser.state === "idle" ? (
+                  <button type="button" className="link" onClick={runBrowserCheck}>
+                    Verify in this browser
+                  </button>
+                ) : browser.state === "checking" ? (
+                  <span className="muted">Verifying…</span>
+                ) : browser.state === "done" ? (
+                  <b>
+                    {browser.ok} of {browser.of} verified in this browser
+                  </b>
+                ) : (
+                  <span className="field-e">{browser.message}</span>
+                ))}
+            </Check>
+          )}
           {x.nft ? (
             <Check ok={x.nft.serial !== null && !x.nft.error}>
               Passport NFT{" "}
@@ -102,6 +144,30 @@ export function Passport({ runId }: { runId: string }) {
             </Check>
           ) : (
             <Check ok={null}>No NFT: this deployment keeps passports in Ordo only</Check>
+          )}
+          {x.ens && (
+            <Check ok={x.ens.releases.every((r) => r.status === "done") ? true : x.ens.releases.some((r) => r.status === "failed") ? false : null}>
+              ENS name{" "}
+              <a href={x.ens.url} target="_blank" rel="noreferrer" className="mono">
+                {x.ens.name}
+              </a>
+              {x.ens.releases.length === 0
+                ? " · resolves to this passport"
+                : x.ens.releases.map((r) => (
+                    <span key={r.packageId}>
+                      {" · "}
+                      {r.txUrl ? (
+                        <a href={r.txUrl} target="_blank" rel="noreferrer">
+                          release recorded against the signers' ENS credentials
+                        </a>
+                      ) : r.status === "failed" ? (
+                        `release not recorded: ${r.error}`
+                      ) : (
+                        "recording the release on ENS"
+                      )}
+                    </span>
+                  ))}
+            </Check>
           )}
           {x.shipment && (
             <Check ok>
@@ -169,8 +235,6 @@ export function Passport({ runId }: { runId: string }) {
             <thead>
               <tr>
                 <th>Stage</th>
-                <th className="r">Good</th>
-                <th className="r">Scrap</th>
                 <th>State</th>
               </tr>
             </thead>
@@ -183,12 +247,17 @@ export function Passport({ runId }: { runId: string }) {
                     {s.criteria.map((c) => (
                       <div key={c.label} className="small">
                         {c.ok === null ? "·" : c.ok ? "✓" : "✕"} {c.label} {c.target}
-                        {c.actual ? ` (${c.actual})` : ""}
+                        {c.zk && (
+                          <>
+                            {" "}
+                            <span className={`tag ${c.zk.verified ? "ok" : c.zk.status === "pending" ? "warn" : "bad"}`} title={c.zk.detail}>
+                              {c.zk.status === "proven" ? (c.zk.verified ? "ZK proof verified" : "ZK proof invalid") : c.zk.status === "pending" ? "ZK proof pending" : "no ZK proof"}
+                            </span>
+                          </>
+                        )}
                       </div>
                     ))}
                   </td>
-                  <td className="r">{s.unitsGood}</td>
-                  <td className="r">{s.unitsScrap}</td>
                   <td>{s.state.replaceAll("_", " ")}</td>
                 </tr>
               ))}

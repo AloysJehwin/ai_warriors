@@ -9,6 +9,7 @@ import { HttpError } from "../engine/errors.js";
 import type { RunEngine } from "../pipelines/engine.js";
 import { newId } from "../plant/plant.js";
 import type { Inbox } from "./inbox.js";
+import type { LotNames } from "./lot-names.js";
 import type { Replicas, ReplicaView } from "./replicas.js";
 import type { Trust } from "./trust.js";
 import type { Recorder } from "./recorder.js";
@@ -77,6 +78,8 @@ export class Validation {
   ) {}
   /** Copies of evidence on 0G Storage, when configured */
   replicas: Replicas | null = null;
+  /** Lot names on ENS: releases are recorded there against the signers' ENS credentials */
+  lots: LotNames | null = null;
 
   private async row(siteId: string, id: string): Promise<PkgRow> {
     const r = await this.db.query<PkgRow>("SELECT id, site_id, number, type, title, owner_id, status, step, objective, acceptance, sample_plan, run_id, stage_code, template_id, asset_id, outcome, precheck_json, returned_comment, created_at::text AS created_at, updated_at::text AS updated_at, window_start::text AS window_start, window_end::text AS window_end FROM validation_packages WHERE id = $1 AND site_id = $2", [id, siteId]);
@@ -361,7 +364,9 @@ export class Validation {
     await this.db.query("UPDATE validation_packages SET outcome = $1 WHERE id = $2", [outcome, p.id]);
     await this.audit(siteId, actor, p.id, "released", { outcome });
     const full = await this.get(siteId, p.id);
-    const relay = await this.trust.recordRelease(siteId, p.id, { packageId: p.id, type: p.type, title: p.title, checks: full.checks.map((c) => [c.criterion, c.target, c.status, c.actual]), evidence: full.evidence.filter((e) => e.sha256 && !e.removedAt).map((e) => e.sha256) });
+    const content = { packageId: p.id, type: p.type, title: p.title, checks: full.checks.map((c) => [c.criterion, c.target, c.status, c.actual]), evidence: full.evidence.filter((e) => e.sha256 && !e.removedAt).map((e) => e.sha256) };
+    const relay = await this.trust.recordRelease(siteId, p.id, content);
+    await this.lots?.release(siteId, p.id, p.run_id, content).catch((e: unknown) => console.error("[ordo] ens release", e));
     if (relay) await this.audit(siteId, "system:relayer", p.id, relay.status === "done" ? "recorded_onchain" : "onchain_failed", { txHash: relay.txHash, error: relay.error });
   }
 

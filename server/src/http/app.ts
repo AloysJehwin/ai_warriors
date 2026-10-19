@@ -9,6 +9,7 @@ import { SESSION_COOKIE, type Principal } from "../auth/auth.js";
 import { ASSESSMENT_PATH, assessVibration } from "../chain/x402.js";
 import { CATEGORIES } from "../core/templates.js";
 import { REJECT } from "../core/inbox.js";
+import { LICENSE_DAYS } from "../core/agent-licenses.js";
 import { ONBOARDING_KINDS } from "../core/trust.js";
 import { canApproveAny } from "../domain/policy.js";
 import { AGENT_INFO, AGENTS, ASSET_KIND_LABEL, ASSET_KINDS, AgentKey, AssetKind, AutonomyLevel, DataSource, PackageType, Role, ROLE_LABEL, ROLES, SignalLimit, TemplateSpec } from "../domain/types.js";
@@ -89,6 +90,7 @@ export function createApp(sys: System, opts: AppOptions = {}) {
         ? { chainId: sys.trust.chain.cfg.chainId, name: sys.trust.chain.cfg.name, rpcUrl: sys.trust.chain.cfg.rpcUrl, explorerUrl: sys.trust.chain.cfg.explorerUrl, address: sys.trust.chain.cfg.address, symbol: sys.trust.chain.cfg.symbol, decimals: sys.trust.chain.cfg.decimals, workOrders: sys.trust.chain.cfg.workOrders ?? null, policies: sys.trust.chain.cfg.policies ?? null }
         : null,
       restrictedSiteCreation: Boolean(sys.cfg.BOOTSTRAP_ADMIN_ADDRESS),
+      worldId: sys.trust.worldId ? { appId: sys.trust.worldId.cfg.appId, action: sys.trust.worldId.cfg.action, environment: sys.trust.worldId.cfg.environment } : null,
     }),
   );
   app.get("/v1/meta", (c) =>
@@ -148,6 +150,14 @@ export function createApp(sys: System, opts: AppOptions = {}) {
     kind: z.enum(ONBOARDING_KINDS),
     role: z.string().min(2).max(40),
     form: z.record(z.string(), z.string().max(2000)).refine((f) => Object.keys(f).length <= 20, "Too many fields"),
+    /** the IDKit result, for validators when World ID is configured */
+    worldId: z.record(z.string(), z.unknown()).optional(),
+  });
+  // a fresh RP-signed World ID request for this wallet (the proof's signal is the wallet address)
+  app.get("/v1/world-id/request", async (c) => {
+    const p = me(c);
+    if (!sys.trust.worldId) throw new HttpError(404, "World ID is not configured");
+    return c.json({ ...sys.trust.worldId.request(), signal: p.user.address.toLowerCase() });
   });
   app.get("/v1/onboarding/site/:siteId", async (c) => {
     me(c);
@@ -172,6 +182,31 @@ export function createApp(sys: System, opts: AppOptions = {}) {
     c.header("access-control-allow-origin", "*");
     c.header("cache-control", "public, max-age=30");
     return c.json(await sys.passports.publicView(id));
+  });
+
+  // ---------------- ENS lot names: the CCIP-Read gateway (EIP-3668) OrdoLotResolver sends clients to ----------------
+  const ensGateway = async (c: Context, sender: string, data: string) => {
+    if (!/^0x[0-9a-fA-F]{40}$/.test(sender) || !/^0x([0-9a-fA-F]{2})*$/.test(data)) throw new HttpError(400, "Expected a resolver address and calldata");
+    c.header("access-control-allow-origin", "*");
+    c.header("cache-control", "public, max-age=60");
+    return c.json({ data: await sys.lotNames.answer(sender, data as `0x${string}`) });
+  };
+  app.get("/v1/public/ens/:sender/:data", (c) => ensGateway(c, c.req.param("sender"), c.req.param("data").replace(/\.json$/, "")));
+  app.post("/v1/public/ens/:sender", async (c) => ensGateway(c, c.req.param("sender"), String(((await c.req.json().catch(() => ({}))) as { data?: unknown }).data ?? "")));
+
+  app.get("/v1/public/zk/spec-check", (c) => {
+    const vkey = sys.passports.specs?.verificationKey();
+    if (!vkey) throw new HttpError(404, "This deployment does not prove criteria");
+    c.header("access-control-allow-origin", "*");
+    c.header("cache-control", "public, max-age=3600");
+    return c.json({
+      circuit: "spec_check",
+      system: "groth16-bn254",
+      publicSignals: ["subject", "target", "op", "commitment"],
+      statement: "The prover knows value and salt with Poseidon(subject, value, salt) = commitment and value ≥ target (op 0), ≤ target (op 1) or = target (op 2), fixed point ×10⁴.",
+      subject: "sha256('ordo:spec:<runId>:<stageCode>:<criterion label>') mod the BN254 scalar field",
+      verificationKey: vkey,
+    });
   });
 
   // ---------------- Running pipelines: public, no sign-in, so a newcomer can see what a site runs and apply for a role ----------------
@@ -443,6 +478,8 @@ export function createApp(sys: System, opts: AppOptions = {}) {
     );
     const views = await sys.plant.views(sid(c));
     const nfts = await sys.agentNfts.ofSite(sid(c));
+    const records = new Map(await Promise.all(AGENTS.map(async (a) => [a, await sys.agentLicenses.record(sid(c), a)] as const)));
+    const licensed = (await sys.agentLicenses.list(sid(c))).outgoing.filter((l) => l.status === "active");
     return c.json(
       AGENTS.map((a) => {
         const st = stats.rows.find((x) => x.agent === `agent:${a}`);
@@ -451,6 +488,8 @@ export function createApp(sys: System, opts: AppOptions = {}) {
           key: a,
           ...AGENT_INFO[a],
           inft: nfts.get(a) ?? null,
+          record: records.get(a)!,
+          licensedFrom: licensed.filter((l) => l.agent === a).map((l) => ({ id: l.id, site: l.licensor.name, tokenId: l.tokenId, tokenUrl: l.tokenUrl, expiresAt: l.expiresAt })),
           autonomy: level,
           assets: views.filter((v) => v.owningAgent === a).map((v) => ({ id: v.id, name: v.name, status: v.status })),
           currentTask: current[0] ? `${current[0].run_id} · ${current[0].code} ${current[0].name ?? ""}`.trim() : null,
@@ -462,6 +501,21 @@ export function createApp(sys: System, opts: AppOptions = {}) {
       }),
     );
   });
+
+  // ---- Licensing proven agents between sites (their iNFTs on 0G) ----
+  site.get("/agents/market", async (c) => c.json(await sys.agentLicenses.market(sid(c))));
+  site.get("/agents/licenses", async (c) => c.json(await sys.agentLicenses.list(sid(c))));
+  site.post("/agents/licenses", async (c) => {
+    const b = await body(c, z.object({ site: z.string().min(1), agent: AgentKey, days: z.number().int().refine((d) => (LICENSE_DAYS as readonly number[]).includes(d), `days: one of ${LICENSE_DAYS.join(", ")}`) }));
+    return c.json(await sys.agentLicenses.request(sid(c), me(c).user, c.get("roles"), b), 201);
+  });
+  site.post("/agents/licenses/:id/sign-request", async (c) => {
+    const b = await body(c, z.object({ kind: z.enum(["grant", "revoke"]), comment: z.string().max(500).default(""), chainId: z.number().int().optional() }));
+    return c.json(await sys.agentLicenses.signRequest(sid(c), me(c).user, c.get("roles"), c.req.param("id"), b));
+  });
+  site.post("/agents/licenses/:id/grant", async (c) => c.json(await sys.agentLicenses.grant(sid(c), me(c).user, c.get("roles"), c.req.param("id"), await body(c, SignedBody))));
+  site.post("/agents/licenses/:id/revoke", async (c) => c.json(await sys.agentLicenses.revoke(sid(c), me(c).user, c.get("roles"), c.req.param("id"), await body(c, SignedBody))));
+  site.post("/agents/licenses/:id/decline", async (c) => c.json(await sys.agentLicenses.decline(sid(c), me(c).user, c.get("roles"), c.req.param("id"))));
 
   // ---- Validation packages ----
   site.get("/validation", async (c) => c.json(await sys.validation.list(sid(c), me(c).user, c.get("roles"))));
@@ -537,10 +591,11 @@ export function createApp(sys: System, opts: AppOptions = {}) {
       sys.trust.chainStatus(sid(c)),
       sys.trust.proposals(sid(c)),
     ]);
-    return c.json({ validators, me: { ...mine, row: await sys.trust.validatorRow(sid(c), me(c).user.id) }, chain, proposals });
+    return c.json({ validators, me: { ...mine, row: await sys.trust.validatorRow(sid(c), me(c).user.id), human: await sys.trust.isHuman(sid(c), me(c).user.id) }, chain, proposals });
   });
   // after a stake or unstake from the wallet: schedule (or delete) the payout at the end of the cooldown on Hedera
   site.post("/validators/me/payout-schedule", async (c) => c.json({ payout: (await sys.schedules?.syncStake(sid(c), me(c).user.address)) ?? null }));
+  site.post("/validators/world-id", async (c) => c.json(await sys.trust.verifyHuman(sid(c), me(c).user, await body(c, z.object({ worldId: z.record(z.string(), z.unknown()) })).then((b) => b.worldId))));
   site.get("/vendors", async (c) => c.json(await sys.trust.vendors(sid(c))));
   site.get("/chain", async (c) => c.json(await sys.trust.chainStatus(sid(c))));
   site.post("/chain/register/sign-request", async (c) => {

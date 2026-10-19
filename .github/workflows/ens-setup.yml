@@ -6,6 +6,11 @@ name: ENS setup
 #   label <name>   register <name>.eth with the owner key, then set ENS_PARENT_NAME, ENS_REGISTRY_ADDRESS,
 #                  ENS_RESOLVER_ADDRESS and ENS_OWNER_KEY in Vercel. Registration is paid in the testnet's MockUSDC,
 #                  which the script mints; gas needs the Sepolia ETH.
+#   contracts <url> deploy OrdoEnsRoles and OrdoLotResolver under the parent name, with lot names answered by the
+#                  CCIP-Read gateway at <url> (Ordo's public URL), then set ENS_ROLES_ADDRESS and
+#                  ENS_LOT_RESOLVER_ADDRESS in Vercel. The parent name, registry and resolver come from the
+#                  ENS_PARENT_NAME, ENS_REGISTRY_ADDRESS and ENS_RESOLVER_ADDRESS variables of this environment, or
+#                  default to ordo-mfg.eth's.
 # Runs in the `hedera-testnet` environment, which holds VERCEL_TOKEN. The owner key comes from an ENS_OWNER_KEY secret
 # there if one is set, otherwise from Vercel.
 on:
@@ -25,6 +30,9 @@ jobs:
       VERCEL_PROJECT_ID: prj_ua7E01jdI0VpLBJvZyqqulOlBzGP
       VERCEL_ORG_ID: team_8ghjcEpH2t9p2BktkDNQ9ZXm
       ENS_SEPOLIA_RPC_URL: ${{ vars.ENS_SEPOLIA_RPC_URL }}
+      ENS_PARENT_NAME: ${{ vars.ENS_PARENT_NAME || 'ordo-mfg.eth' }}
+      ENS_REGISTRY_ADDRESS: ${{ vars.ENS_REGISTRY_ADDRESS || '0x1F621f14718a9251b74F1683D6F1D5F8E9889358' }}
+      ENS_RESOLVER_ADDRESS: ${{ vars.ENS_RESOLVER_ADDRESS || '0xC2992b48350F642cd820a22DAf5ffaDB6e26566C' }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -39,12 +47,14 @@ jobs:
           body="$(sed 's/#.*//' .github/deploy/ens.request)"
           key=$(echo "$body" | grep -qw '^ *key' && echo true || echo false)
           label=$(echo "$body" | sed -n 's/^ *label[: ]\+\([a-z0-9-]*\).*/\1/p' | head -1)
+          contracts=$(echo "$body" | sed -n 's|^ *contracts[: ]\+\(https://[^ ]*\).*|\1|p' | head -1)
           echo "key=$key" >> "$GITHUB_OUTPUT"
           echo "label=$label" >> "$GITHUB_OUTPUT"
-          echo "generate key: $key · label: ${label:-none}"
+          echo "contracts=$contracts" >> "$GITHUB_OUTPUT"
+          echo "generate key: $key · label: ${label:-none} · contracts: ${contracts:-no}"
       - name: Owner key
         id: owner
-        if: steps.what.outputs.key == 'true' || steps.what.outputs.label != ''
+        if: steps.what.outputs.key == 'true' || steps.what.outputs.label != '' || steps.what.outputs.contracts != ''
         env:
           SECRET_KEY: ${{ secrets.ENS_OWNER_KEY }}
           WANT_KEY: ${{ steps.what.outputs.key }}
@@ -95,6 +105,18 @@ jobs:
           node -e 'require("fs").writeFileSync(process.argv[1],`ENS_OWNER_KEY=${process.env.ENS_OWNER_KEY.trim().replace(/^(0x)?/,"0x")}\n`,{mode:0o600})' "$RUNNER_TEMP/ens-key.env"
           node scripts/vercel-env.mjs push "$RUNNER_TEMP/ens-key.env" production,preview --readable
           rm -f "$RUNNER_TEMP/ens.env" "$RUNNER_TEMP/ens-key.env"
+      - name: Deploy the credential and lot-name contracts
+        if: steps.what.outputs.contracts != ''
+        env:
+          PUBLIC_URL: ${{ steps.what.outputs.contracts }}
+        run: pnpm --filter @ordo/contracts setup:ens-contracts | tee -a setup.log
+      - name: Set the contract addresses in Vercel
+        if: steps.what.outputs.contracts != ''
+        run: |
+          umask 077
+          grep -E '^ENS_(ROLES|LOT_RESOLVER)_ADDRESS=' setup.log > "$RUNNER_TEMP/ens-contracts.env"
+          node scripts/vercel-env.mjs push "$RUNNER_TEMP/ens-contracts.env" production,preview
+          rm -f "$RUNNER_TEMP/ens-contracts.env"
       - name: Summary
         if: always()
         run: |

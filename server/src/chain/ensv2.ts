@@ -15,17 +15,21 @@ import {
   decodeEventLog,
   decodeFunctionResult,
   encodeFunctionData,
+  encodePacked,
   http,
+  keccak256,
   labelhash,
   namehash,
   parseAbi,
   stringToBytes,
+  type Abi,
   type Address,
   type Hex,
   type Transport,
 } from "viem";
 import { nonceManager, privateKeyToAccount } from "viem/accounts";
 import { sepolia } from "viem/chains";
+import { ORDO_ENS_ROLES_ABI, ORDO_LOT_RESOLVER_ABI } from "./ordo-ens-abi.js";
 
 /** The contracts ENS Labs deployed on Sepolia on 2026-10-01 (contracts-v2, deploy/mainnet-v2-20261002). */
 export const ENSV2_SEPOLIA = {
@@ -53,6 +57,7 @@ export const ENSV2_ABI = parseAbi([
   "function findOwner(string label) view returns (address)",
   "function getSubregistry(string label) view returns (address)",
   "function getResolver(string label) view returns (address)",
+  "function setResolver(uint256 anyId, address resolver)",
   "function setText(bytes name, string key, string value)",
   "function setAddress(bytes name, uint256 coinType, bytes addressBytes)",
   "function multicall(bytes[] calls) returns (bytes[])",
@@ -96,6 +101,9 @@ export interface EnsV2Config {
   userRegistryImpl?: Address;
   /** Tests run against anvil (chain 31337) */
   chainId?: number;
+  /** OrdoEnsRoles (roles read from member names) and OrdoLotResolver (lot names), once deployed */
+  credentials?: Address;
+  lotResolver?: Address;
 }
 
 export type TxState = { state: "pending" } | { state: "success"; logs: { data: Hex; topics: Hex[] }[] } | { state: "reverted"; hash: Hex };
@@ -107,6 +115,7 @@ export type TxState = { state: "pending" } | { state: "success"; logs: { data: H
 export class EnsV2 {
   private pub;
   private wallet;
+  private account;
   readonly owner: Address;
   readonly factory: Address;
   readonly userRegistryImpl: Address;
@@ -118,6 +127,7 @@ export class EnsV2 {
     const chain = { ...sepolia, id: cfg.chainId ?? sepolia.id };
     const t = transport ?? http(cfg.rpcUrl, { timeout: 30_000 });
     const account = privateKeyToAccount(cfg.ownerKey, { nonceManager });
+    this.account = account;
     this.owner = account.address;
     this.pub = createPublicClient({ chain, transport: t });
     this.wallet = createWalletClient({ chain, transport: t, account });
@@ -125,12 +135,12 @@ export class EnsV2 {
     this.userRegistryImpl = cfg.userRegistryImpl ?? ENSV2_SEPOLIA.userRegistryImpl;
   }
 
-  private async send(address: Address, functionName: string, args: unknown[]): Promise<Hex> {
-    const { request } = await this.pub.simulateContract({ address, abi: ENSV2_ABI, functionName, args, account: this.wallet.account } as never);
+  private async send(address: Address, functionName: string, args: unknown[], abi: Abi = ENSV2_ABI): Promise<Hex> {
+    const { request } = await this.pub.simulateContract({ address, abi, functionName, args, account: this.wallet.account } as never);
     return this.wallet.writeContract(request as never);
   }
-  private read<T>(address: Address, functionName: string, args: unknown[]): Promise<T> {
-    return this.pub.readContract({ address, abi: ENSV2_ABI, functionName, args } as never) as Promise<T>;
+  private read<T>(address: Address, functionName: string, args: unknown[], abi: Abi = ENSV2_ABI): Promise<T> {
+    return this.pub.readContract({ address, abi, functionName, args } as never) as Promise<T>;
   }
 
   /** Where a set of transactions stands: pending until all are mined; reverted names the first that failed. */
@@ -217,6 +227,44 @@ export class EnsV2 {
     const data = encodeFunctionData({ abi: ENSV2_ABI, functionName: "addr", args: [namehash(name)] });
     const out = await this.read<Hex>(this.cfg.resolver, "resolve", [dnsEncode(name), data]);
     return decodeFunctionResult({ abi: ENSV2_ABI, functionName: "addr", data: out }) as Address;
+  }
+
+  // ---------------------------------------------------------------- credentials and lot names (OrdoEnsRoles, OrdoLotResolver)
+  get credentialsLive() {
+    return Boolean(this.cfg.credentials && this.cfg.lotResolver);
+  }
+  private need(a: Address | undefined, what: string): Address {
+    if (!a) throw new Error(`${what} is not configured`);
+    return a;
+  }
+  /** The site label OrdoEnsRoles has for an Ordo site id ("" when not linked). */
+  linkedLabel(siteId: string): Promise<string> {
+    return this.read<string>(this.need(this.cfg.credentials, "ENS_ROLES_ADDRESS"), "siteLabel", [keccak256(stringToBytes(siteId))], ORDO_ENS_ROLES_ABI as Abi);
+  }
+  /** Tie a site id to its name in OrdoEnsRoles (Ordo owns the site name, so it may). */
+  sendLinkSite(siteId: string, label: string): Promise<Hex> {
+    return this.send(this.need(this.cfg.credentials, "ENS_ROLES_ADDRESS"), "linkSite", [siteId, label], ORDO_ENS_ROLES_ABI as Abi);
+  }
+  /** The resolver a name in a registry points at. */
+  resolverOf(registry: Address, label: string): Promise<Address> {
+    return this.read<Address>(registry, "getResolver", [label]);
+  }
+  /** Point a site name at the lot resolver, which answers its lot-… names and passes the rest to Ordo's resolver. */
+  sendUseLotResolver(label: string): Promise<Hex> {
+    return this.send(this.cfg.parentRegistry, "setResolver", [BigInt(labelhash(label)), this.need(this.cfg.lotResolver, "ENS_LOT_RESOLVER_ADDRESS")]);
+  }
+  /** Role bits a wallet holds at a site through its member name, as the contracts see them. */
+  async rolesOf(siteId: string, label: string, account: Address): Promise<number> {
+    return Number(await this.read<number>(this.need(this.cfg.credentials, "ENS_ROLES_ADDRESS"), "rolesOf", [keccak256(stringToBytes(siteId)), label, account], ORDO_ENS_ROLES_ABI as Abi));
+  }
+  sendRecordRelease(i: { siteId: string; lotLabel: string; packageId: string; contentHash: Hex; chainIds: number[]; sigs: unknown[] }): Promise<Hex> {
+    return this.send(this.need(this.cfg.lotResolver, "ENS_LOT_RESOLVER_ADDRESS"), "recordRelease", [i.siteId, i.lotLabel, i.packageId, i.contentHash, i.chainIds.map(BigInt), i.sigs], ORDO_LOT_RESOLVER_ABI as Abi);
+  }
+  /** Sign a CCIP-Read answer the way OrdoLotResolver.resolveWithProof checks it. */
+  signAnswer(request: Hex, result: Hex, expires: bigint): Promise<Hex> {
+    const resolver = this.need(this.cfg.lotResolver, "ENS_LOT_RESOLVER_ADDRESS");
+    const hash = keccak256(encodePacked(["bytes2", "address", "uint64", "bytes32", "bytes32"], ["0x1900", resolver, expires, keccak256(request), keccak256(result)]));
+    return this.account.sign!({ hash });
   }
 }
 

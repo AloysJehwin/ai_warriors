@@ -6,6 +6,7 @@ import { forecast } from "../domain/forecast.js";
 import { evaluate, type Policy } from "../domain/policy.js";
 import { ROLE_RANK, type Anomaly, type AssetView, type AutonomyLevel, type InboxOption, type ToolCall } from "../domain/types.js";
 import type { PlantService } from "../plant/plant.js";
+import type { AgentLicenses } from "./agent-licenses.js";
 import type { Inbox } from "./inbox.js";
 import type { Recorder } from "./recorder.js";
 
@@ -16,6 +17,9 @@ const CLEAR_AFTER_MIN = 10;
  * act (in policy) or escalate to the inbox (needs a person). One open incident per asset.
  */
 export class Monitor {
+  /** Playbooks this site licenses from other sites' proven agents (set by the wiring) */
+  licenses: AgentLicenses | null = null;
+
   constructor(
     private db: Db,
     private plant: PlantService,
@@ -97,6 +101,7 @@ export class Monitor {
         [siteId, a.id],
       )
     ).rows[0];
+    const licensed = (await this.licenses?.playbooksFor(siteId, a.owningAgent, { assetKind: a.kind, signal: anomaly.signal }))?.[0] ?? null;
     const rec = await this.agents.recommend({
       asset: { id: a.id, name: a.name, kind: a.kind, status: a.status },
       anomaly,
@@ -105,6 +110,7 @@ export class Monitor {
       activeStage: stage ? { runId: stage.run_id, stageCode: stage.code, stageName: stage.name ?? stage.code, unitsLeft: Math.max(0, Number(stage.quantity) - Number(stage.good) - Number(stage.scrap)) } : null,
       alternativeAssets: views.filter((v) => v.id !== a.id && v.kind === a.kind && !["offline", "alarm", "no_data"].includes(v.status)).map((v) => ({ id: v.id, name: v.name, status: v.status })),
       tools: "",
+      ...(licensed ? { licensedPlaybook: { from: licensed.from, tokenId: licensed.tokenId, record: licensed.record, cases: licensed.cases } } : {}),
     });
     const level = await this.level(siteId);
     const quality = samples.filter((s) => s.signal === anomaly.signal).slice(-10).map((s) => s.quality);
@@ -119,7 +125,7 @@ export class Monitor {
       summary: rec.value.reason,
       confidence: rec.value.confidence,
       modelId: rec.modelId,
-      data: { ...rec.value, grounding: rec.grounding, verdicts: verdicts.map((v) => ({ tool: v.action.tool, ...v.verdict })), autonomy: level, provider: rec.provider, attestation: rec.attestation ?? null },
+      data: { ...rec.value, grounding: rec.grounding, verdicts: verdicts.map((v) => ({ tool: v.action.tool, ...v.verdict })), autonomy: level, provider: rec.provider, attestation: rec.attestation ?? null, licensed: licensed ? { licenseId: licensed.licenseId, from: licensed.from, tokenId: licensed.tokenId, cases: licensed.cases.length } : null },
     });
 
     const needs = verdicts.filter((v) => v.verdict.outcome === "require_approval");

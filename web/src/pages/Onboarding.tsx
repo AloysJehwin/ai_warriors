@@ -5,6 +5,7 @@ import { ago, shortAddr } from "../lib/format";
 import type { OnboardingKind, OnboardingView, TypedSignature } from "../types";
 import { Action, Field, Segmented, useToast } from "../ui/kit";
 import { Select } from "../ui/Select";
+import { useWorldIdEnabled, WorldIdButton } from "../ui/WorldId";
 
 const MEMBER_ROLES = [
   { value: "operator", label: "Operator", hint: "Executes manual stages, records units, raises holds" },
@@ -41,9 +42,11 @@ export function ApplyForm({
   const [role, setRole] = useState<string>(initialRole ?? (kind === "validator" ? "quality" : kind === "vendor" ? "vendor" : "operator"));
   const [form, setForm] = useState<Record<string, string>>({ ...context, fullName: "" });
   const [files, setFiles] = useState<File[]>([]);
+  const [worldId, setWorldId] = useState<unknown>(null);
+  const needsWorldId = useWorldIdEnabled() === true && kind === "validator";
   const toast = useToast();
   const set = (k: string) => (e: { target: { value: string } }) => setForm({ ...form, [k]: e.target.value });
-  const valid = form.fullName?.trim() && (kind !== "validator" || form.qualifications?.trim()) && (kind !== "vendor" || form.company?.trim());
+  const valid = form.fullName?.trim() && (kind !== "validator" || form.qualifications?.trim()) && (kind !== "vendor" || form.company?.trim()) && (!needsWorldId || worldId);
   return (
     <div className="apply">
       <div className="form-grid two">
@@ -67,6 +70,11 @@ export function ApplyForm({
           <Field label="Qualifications" hint="Certifications, audits led, years in quality or process roles. The admin sees this with your files.">
             <textarea value={form.qualifications ?? ""} onChange={set("qualifications")} maxLength={2000} />
           </Field>
+          {needsWorldId && (
+            <Field label="One person, one validator">
+              <WorldIdButton done={Boolean(worldId)} onProof={setWorldId} />
+            </Field>
+          )}
         </>
       )}
       {kind === "vendor" && (
@@ -103,7 +111,7 @@ export function ApplyForm({
           className="btn accent"
           disabled={!valid}
           onClick={async () => {
-            let r = await api.post<OnboardingView>("/v1/onboarding", { siteId, kind, role, form });
+            let r = await api.post<OnboardingView>("/v1/onboarding", { siteId, kind, role, form, ...(needsWorldId ? { worldId } : {}) });
             for (const f of files) {
               const fd = new FormData();
               fd.set("file", f);
