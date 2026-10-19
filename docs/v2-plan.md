@@ -38,6 +38,13 @@ When a value can't be measured from real data, the UI shows "—" and asks a per
 ## 3. Screens (from the Claude Design prototype and mockups 01–13)
 Pipelines (Flow · Graph · Ledger, node block, stage panel, decision stream), Validation (list, step tracker, readiness, checks, evidence, signature chain, audit trail), Templates, Run history, Floor & fleet (Assets by zone, Agents), Approvals & exceptions (options with recommendation), Builder (stages, mode, criteria, timeout, escalation, publish version), plus Sign-in, Setup (site/zones/assets/data sources) and Team (roles, invites).
 
+## 3a. Design system components (no browser-default controls)
+Every dropdown and date field uses Ordo components styled with the design tokens (IBM Plex, gold accent, hairline borders):
+- **Select**: custom listbox with search for long lists, keyboard navigation (↑ ↓ Enter Esc, type-ahead), grouped options, descriptions under labels, disabled options, clear button; ARIA `combobox`/`listbox`.
+- **DatePicker**: calendar popover (month grid, today marker, min/max, keyboard arrows, Esc), typed input fallback.
+- **DateTimePicker**: calendar + hour/minute columns, for due times and trial windows; **DateRangePicker** for trial windows and history filters.
+- Also: Segmented control, Tabs, Modal, Drawer (stage panel), Popover (node block), Toasts, Empty states.
+
 ## 4. Build order
 1. Schema v2 with versioned migrations.
 2. Wallet auth, sessions, roles, invites, EIP-712 signatures.

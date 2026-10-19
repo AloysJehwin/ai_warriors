@@ -1,7 +1,7 @@
 /** ENS names for assets and agents, e.g. cnc-05.ordo-mfg.eth, resolved on Sepolia with viem. */
 import { createPublicClient, http } from "viem";
 import { normalize } from "viem/ens";
-import { sepolia } from "viem/chains";
+import { mainnet, sepolia } from "viem/chains";
 import type { Config } from "../config.js";
 import type { IdentityResolver } from "../adapters/rails.js";
 
@@ -32,6 +32,31 @@ export class EnsIdentity implements IdentityResolver {
         const type = await this.client.getEnsText({ name, key: "com.ordo.type" }).catch(() => null);
         out[id] = type ? name : null;
         this.cache.set(id, { name: out[id] ?? null, at: Date.now() });
+      }),
+    );
+    return out;
+  }
+}
+
+/** Primary ENS names for the wallets that sign in (reverse resolution on Ethereum mainnet). */
+export class EnsNames {
+  private client;
+  private cache = new Map<string, { name: string | null; at: number }>();
+  constructor(rpcUrl?: string) {
+    this.client = createPublicClient({ chain: mainnet, transport: http(rpcUrl) });
+  }
+  async lookup(addresses: string[]): Promise<Record<string, string | null>> {
+    const out: Record<string, string | null> = {};
+    await Promise.all(
+      [...new Set(addresses.map((a) => a.toLowerCase()))].map(async (a) => {
+        const hit = this.cache.get(a);
+        if (hit && Date.now() - hit.at < 30 * 60_000) {
+          out[a] = hit.name;
+          return;
+        }
+        const name = await Promise.race([this.client.getEnsName({ address: a as `0x${string}` }).catch(() => null), new Promise<null>((r) => setTimeout(() => r(null), 4000))]);
+        out[a] = name;
+        this.cache.set(a, { name, at: Date.now() });
       }),
     );
     return out;

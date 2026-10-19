@@ -34,7 +34,7 @@ describe("guarded LLM", () => {
     const s = JSON.stringify(toModelSchema(Recommendation));
     expect(s).not.toContain('"const"');
     expect(s).not.toContain("$schema");
-    expect(s).toContain("reroute_batch");
+    expect(s).toContain("reassign_stage");
   });
 });
 

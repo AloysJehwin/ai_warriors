@@ -1,4 +1,5 @@
 import { mkdirSync } from "node:fs";
+import { MIGRATIONS } from "./migrations.js";
 
 export interface Queryable {
   query<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<{ rows: T[] }>;
@@ -47,77 +48,27 @@ export async function openDb(opts: { url?: string; dataDir?: string }): Promise<
   };
 }
 
-export const SCHEMA = `
-CREATE TABLE IF NOT EXISTS ledger (
-  seq          INTEGER PRIMARY KEY,
-  ts           TEXT NOT NULL,
-  actor        TEXT NOT NULL,
-  type         TEXT NOT NULL,
-  incident_id  TEXT,
-  payload_json TEXT NOT NULL,
-  payload_hash TEXT NOT NULL,
-  prev_hash    TEXT NOT NULL,
-  entry_hash   TEXT NOT NULL UNIQUE
-);
-CREATE INDEX IF NOT EXISTS ledger_incident ON ledger (incident_id);
-CREATE TABLE IF NOT EXISTS anchors (
-  id         SERIAL PRIMARY KEY,
-  kind       TEXT NOT NULL,
-  to_seq     INTEGER NOT NULL,
-  entry_hash TEXT NOT NULL,
-  ref        TEXT NOT NULL,
-  url        TEXT,
-  data_json  TEXT NOT NULL,
-  ts         TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS incidents (
-  id         TEXT PRIMARY KEY,
-  data_json  TEXT NOT NULL,
-  opened_at  TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS decisions (
-  id          TEXT PRIMARY KEY,
-  incident_id TEXT NOT NULL,
-  data_json   TEXT NOT NULL,
-  ledger_seq  INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS decisions_incident ON decisions (incident_id);
-CREATE TABLE IF NOT EXISTS approvals (
-  id          TEXT PRIMARY KEY,
-  incident_id TEXT NOT NULL,
-  status      TEXT NOT NULL,
-  data_json   TEXT NOT NULL,
-  created_at  TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS sim_state (
-  id               INTEGER PRIMARY KEY,
-  generation       INTEGER NOT NULL,
-  scenario         TEXT NOT NULL,
-  seed             INTEGER NOT NULL,
-  started_at       BIGINT NOT NULL,
-  tick_ms          INTEGER NOT NULL,
-  paused_minute    INTEGER,
-  processed_minute INTEGER NOT NULL,
-  failures_logged  INTEGER NOT NULL,
-  lease_until      BIGINT
-);
-CREATE TABLE IF NOT EXISTS sim_actions (
-  id          SERIAL PRIMARY KEY,
-  generation  INTEGER NOT NULL,
-  minute      INTEGER NOT NULL,
-  action_json TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS sim_suppressed (
-  generation INTEGER NOT NULL,
-  asset_id   TEXT NOT NULL,
-  PRIMARY KEY (generation, asset_id)
-);
-CREATE TABLE IF NOT EXISTS settings (
-  key   TEXT PRIMARY KEY,
-  value TEXT NOT NULL
-);
-`;
-
-export async function migrate(db: Db): Promise<void> {
-  for (const stmt of SCHEMA.split(";").map((s) => s.trim()).filter(Boolean)) await db.query(stmt);
+/** Apply pending migrations in order. Databases created by the v1 demo are detected and upgraded. */
+export async function migrate(db: Db): Promise<number> {
+  await db.query("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())");
+  const done = new Set((await db.query<{ version: number }>("SELECT version FROM schema_migrations")).rows.map((r) => Number(r.version)));
+  if (done.size === 0) {
+    // A v1 database (pre-migrations) already has the ledger table: mark v1 as applied.
+    const v1 = await db.query<{ n: string }>("SELECT COUNT(*)::text AS n FROM information_schema.tables WHERE table_name = 'ledger'");
+    if (Number(v1.rows[0]?.n ?? 0) > 0) {
+      await db.query("INSERT INTO schema_migrations (version, name) VALUES (1, 'demo schema (pre-existing)')");
+      done.add(1);
+    }
+  }
+  let applied = 0;
+  for (const m of MIGRATIONS) {
+    if (done.has(m.version)) continue;
+    await db.tx(async (q) => {
+      const sql = m.sql.split("\n").filter((l) => !l.trim().startsWith("--")).join("\n");
+      for (const stmt of sql.split(";").map((x) => x.trim()).filter(Boolean)) await q.query(stmt);
+      await q.query("INSERT INTO schema_migrations (version, name) VALUES ($1, $2)", [m.version, m.name]);
+    });
+    applied += 1;
+  }
+  return applied;
 }

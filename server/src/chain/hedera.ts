@@ -8,17 +8,12 @@ import {
   Client,
   Hbar,
   PrivateKey,
-  ScheduleCreateTransaction,
-  ScheduleId,
-  ScheduleInfoQuery,
-  ScheduleSignTransaction,
   TopicId,
   TopicMessageSubmitTransaction,
   TransferTransaction,
 } from "@hiero-ledger/sdk";
 import type { Config } from "../config.js";
-import type { Approval, Role } from "../domain/types.js";
-import type { AnchorAdapter, AnchorInput, ApprovalRail, ExternalRef, PaymentRail } from "../adapters/rails.js";
+import type { AnchorAdapter, AnchorInput, PaymentRail } from "../adapters/rails.js";
 
 interface Account {
   id: AccountId;
@@ -38,11 +33,6 @@ export function hederaFromConfig(cfg: Config) {
   const client = Client.forName(network).setOperator(operator.id, operator.key);
   const mirror = (cfg.HEDERA_MIRROR_URL ?? `https://${network}.mirrornode.hedera.com`).replace(/\/$/, "");
   const hashscan = `https://hashscan.io/${network}`;
-  const roles: Partial<Record<Role, Account>> = {};
-  if (cfg.HEDERA_ROLE_ACCOUNTS) {
-    const parsed = JSON.parse(cfg.HEDERA_ROLE_ACCOUNTS) as Record<string, { id: string; key: string }>;
-    for (const [role, v] of Object.entries(parsed)) roles[role as Role] = acct(v.id, v.key);
-  }
 
   return {
     anchor(): AnchorAdapter {
@@ -51,7 +41,7 @@ export function hederaFromConfig(cfg: Config) {
       return {
         kind: "hedera-hcs",
         async anchor(i: AnchorInput) {
-          const message = JSON.stringify({ v: 1, line: i.lineId, toSeq: i.toSeq, entryHash: i.entryHash, incident: i.incidentId, evidence: i.evidence });
+          const message = JSON.stringify({ v: 2, app: "ordo", site: i.siteId, toSeq: i.toSeq, entryHash: i.entryHash, subject: i.subject });
           const tx = await new TopicMessageSubmitTransaction({ topicId, message }).execute(client);
           const receipt = await tx.getReceipt(client);
           const sequence = receipt.topicSequenceNumber?.toString() ?? "?";
@@ -69,37 +59,6 @@ export function hederaFromConfig(cfg: Config) {
           const msg = JSON.parse(Buffer.from(body.message, "base64").toString("utf8")) as { toSeq: number; entryHash: string };
           const ok = msg.toSeq === s.toSeq && msg.entryHash === s.entryHash;
           return { ok, detail: ok ? `Matches HCS message #${seq}, consensus ${body.consensus_timestamp}` : `HCS message #${seq} does not match the stored anchor` };
-        },
-      };
-    },
-
-    /** Approval = a scheduled 1-tinybar transfer that only the required role's key can release. */
-    approvals(): ApprovalRail {
-      return {
-        kind: "hedera-scheduled",
-        async request(a: Approval): Promise<ExternalRef | null> {
-          const signer = roles[a.requiredRole];
-          if (!signer) throw new Error(`No Hedera account configured for role ${a.requiredRole}`);
-          const inner = new TransferTransaction()
-            .addHbarTransfer(signer.id, Hbar.fromTinybars(-1))
-            .addHbarTransfer(operator.id, Hbar.fromTinybars(1))
-            .setTransactionMemo(`ordo:approval:${a.id}`);
-          const tx = await new ScheduleCreateTransaction().setScheduledTransaction(inner).setScheduleMemo(`ordo:approval:${a.id}`).execute(client);
-          const receipt = await tx.getReceipt(client);
-          const scheduleId = receipt.scheduleId?.toString();
-          if (!scheduleId) throw new Error("Schedule was not created");
-          return { ref: scheduleId, url: `${hashscan}/schedule/${scheduleId}` };
-        },
-        async confirm(a: Approval, signerRole: Role): Promise<ExternalRef | null> {
-          if (!a.externalRef) return null;
-          if (signerRole !== a.requiredRole) throw new Error(`On-chain approval must be signed by ${a.requiredRole}`);
-          const signer = roles[signerRole];
-          if (!signer) throw new Error(`No Hedera account configured for role ${signerRole}`);
-          const scheduleId = ScheduleId.fromString(a.externalRef);
-          const tx = await (await new ScheduleSignTransaction().setScheduleId(scheduleId).freezeWith(client).sign(signer.key)).execute(client);
-          await tx.getReceipt(client);
-          const info = await new ScheduleInfoQuery().setScheduleId(scheduleId).execute(client);
-          return { ref: `${a.externalRef} executed=${info.executed ? "yes" : "no"}`, url: `${hashscan}/schedule/${a.externalRef}` };
         },
       };
     },
@@ -149,8 +108,8 @@ export function hederaFromConfig(cfg: Config) {
       };
     },
 
-    /** Compares the local policy hash with OrdoPolicyRegistry.policies(keccak("LINE-02")) over JSON-RPC. */
-    policyRegistryCheck(policyHash: string): (() => Promise<{ ok: boolean; detail: string }>) | undefined {
+    /** Compares the local policy hash with OrdoPolicyRegistry.policies(keccak(policyId)) over JSON-RPC. */
+    policyRegistryCheck(policyId: string, policyHash: string): (() => Promise<{ ok: boolean; detail: string }>) | undefined {
       const addr = cfg.HEDERA_POLICY_REGISTRY_ADDRESS;
       if (!addr) return undefined;
       return async () => {
@@ -160,7 +119,7 @@ export function hederaFromConfig(cfg: Config) {
           address: addr as `0x${string}`,
           abi: parseAbi(["function policies(bytes32) view returns (uint8, bytes32, uint32, uint64)"]),
           functionName: "policies",
-          args: [keccak256(toBytes("LINE-02"))],
+          args: [keccak256(toBytes(policyId))],
         });
         const ok = onChain.slice(2) === policyHash.replace("sha256:", "");
         return { ok, detail: ok ? `Matches OrdoPolicyRegistry v${version} on Hedera` : "Local policy differs from OrdoPolicyRegistry on Hedera" };

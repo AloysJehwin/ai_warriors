@@ -1,155 +1,486 @@
-import { timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { serveStatic } from "@hono/node-server/serve-static";
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
+import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { cors } from "hono/cors";
 import { z } from "zod";
-import { SCENARIOS } from "../domain/simulator.js";
-import { AutonomyLevel, Role } from "../domain/types.js";
+import { SESSION_COOKIE, type Principal } from "../auth/auth.js";
+import { CATEGORIES } from "../core/templates.js";
+import { REJECT } from "../core/inbox.js";
+import { canApproveAny } from "../domain/policy.js";
+import { AGENT_INFO, AGENTS, ASSET_KIND_LABEL, ASSET_KINDS, AgentKey, AssetKind, AutonomyLevel, DataSource, PackageType, Role, ROLE_LABEL, ROLES, SignalLimit, TemplateSpec } from "../domain/types.js";
 import { HttpError } from "../engine/errors.js";
+import { probeDevices } from "../plant/mtconnect.js";
 import type { System } from "../wiring.js";
-
-const ActorBody = z.object({ actor: z.object({ name: z.string().min(1).max(60), role: Role }), reason: z.string().max(500).optional() });
 
 export interface AppOptions {
   webDist?: string;
   corsOrigins?: string[];
-  allowTamper?: boolean;
-  passcode?: string;
+  secureCookies?: boolean;
   build?: { env: string; commit: string | null };
 }
+type Env = { Variables: { principal: Principal | null; siteId: string; roles: Role[] } };
 
-const sameSecret = (a: string, b: string) => {
-  const x = Buffer.from(a);
-  const y = Buffer.from(b);
-  return x.length === y.length && timingSafeEqual(x, y);
-};
+const Hex = z.string().regex(/^0x[0-9a-fA-F]+$/) as unknown as z.ZodType<`0x${string}`>;
+const Address = z.string().regex(/^0x[0-9a-fA-F]{40}$/);
+const SignedBody = z.object({ nonce: z.string().min(8), signature: Hex });
+const AssetBody = z.object({
+  name: z.string().trim().min(1).max(60),
+  kind: AssetKind,
+  zoneId: z.string().nullable().default(null),
+  description: z.string().max(300).nullable().default(null),
+  owningAgent: AgentKey,
+  source: DataSource,
+  limits: z.record(z.string(), SignalLimit).default({}),
+  idealCycleS: z.number().positive().nullable().default(null),
+});
 
 export function createApp(sys: System, opts: AppOptions = {}) {
-  const app = new Hono();
-  const o = sys.orchestrator;
-
-  if (opts.corsOrigins?.length) app.use("/v1/*", cors({ origin: opts.corsOrigins, allowHeaders: ["content-type", "x-ordo-passcode"] }));
-
-  // Optional shared passcode for every write, so a public preview can't be driven by strangers.
-  app.use("/v1/*", async (c, next) => {
-    if (opts.passcode && c.req.method !== "GET" && c.req.method !== "OPTIONS") {
-      const given = c.req.header("x-ordo-passcode") ?? "";
-      if (!sameSecret(given, opts.passcode)) throw new HttpError(401, "Passcode required");
-    }
-    await next();
-  });
+  const app = new Hono<Env>();
+  if (opts.corsOrigins?.length) app.use("/v1/*", cors({ origin: opts.corsOrigins, credentials: true, allowHeaders: ["content-type"] }));
 
   app.onError((err, c) => {
     if (err instanceof HttpError) return c.json({ error: err.message }, err.status);
-    if (err instanceof z.ZodError) return c.json({ error: "Invalid request", issues: err.issues }, 400);
+    if (err instanceof z.ZodError) return c.json({ error: err.issues.map((i) => `${i.path.join(".") || "body"}: ${i.message}`).join("; ") }, 400);
     console.error(err);
     return c.json({ error: "Internal error" }, 500);
   });
 
-  app.get("/health", async (c) => c.json({ status: "ok", db: sys.db.kind, ...opts.build }));
+  const host = (c: Context) => c.req.header("x-forwarded-host") ?? c.req.header("host") ?? "localhost";
 
-  /** Which rails are real and which are local stand-ins — no secrets. */
-  app.get("/v1/status", (c) =>
+  // CSRF: a state-changing request from a browser must come from this origin (or an allowed one).
+  app.use("/v1/*", async (c, next) => {
+    if (!["GET", "HEAD", "OPTIONS"].includes(c.req.method)) {
+      const origin = c.req.header("origin");
+      if (origin) {
+        const o = new URL(origin).host;
+        if (o !== host(c) && !(opts.corsOrigins ?? []).includes(origin)) throw new HttpError(403, "Cross-site request blocked");
+      }
+    }
+    c.set("principal", await sys.auth.principal(getCookie(c, SESSION_COOKIE)));
+    await next();
+  });
+
+  const me = (c: Context<Env>) => {
+    const p = c.get("principal");
+    if (!p) throw new HttpError(401, "Sign in with your wallet");
+    return p;
+  };
+  const need = (c: Context<Env>, ...roles: Role[]) => {
+    const have = c.get("roles");
+    if (!roles.some((r) => canApproveAny(have, r))) throw new HttpError(403, `Needs ${roles.map((r) => ROLE_LABEL[r]).join(" or ")}`);
+  };
+  const actor = (c: Context<Env>) => `user:${me(c).user.address}`;
+  const body = async <T>(c: Context, schema: z.ZodType<T>): Promise<T> => schema.parse(await c.req.json().catch(() => ({})));
+
+  // ---------------- Public ----------------
+  app.get("/health", (c) => c.json({ status: "ok", db: sys.db.kind, ...opts.build }));
+  app.get("/v1/status", async (c) =>
     c.json({
       rails: sys.rails,
       warnings: sys.warnings,
-      passcodeRequired: Boolean(opts.passcode),
       policy: { id: sys.policy.policy.id, version: sys.policy.policy.version, hash: sys.policy.hash },
       build: opts.build ?? null,
+      signatureChainId: sys.cfg.SIGNATURE_CHAIN_ID,
+      restrictedSiteCreation: Boolean(sys.cfg.BOOTSTRAP_ADMIN_ADDRESS),
+    }),
+  );
+  app.get("/v1/meta", (c) =>
+    c.json({
+      roles: ROLES.map((r) => ({ key: r, label: ROLE_LABEL[r] })),
+      agents: AGENTS.map((a) => ({ key: a, ...AGENT_INFO[a] })),
+      assetKinds: ASSET_KINDS.map((k) => ({ key: k, label: ASSET_KIND_LABEL[k] })),
+      categories: CATEGORIES,
+      packageTypes: PackageType.options,
+      policy: sys.policy.policy,
     }),
   );
 
-  /**
-   * Polling endpoint for the console. Every call advances the plant to "now" (requests drive the
-   * engine on serverless) and returns everything that changed after ledger seq `since`.
-   */
-  app.get("/v1/live", async (c) => {
-    const since = Math.max(0, Number(c.req.query("since") ?? 0) || 0);
-    await o.advance();
-    const [plant, entries, decisions, incidents, approvals, anchors] = await Promise.all([
-      o.view(),
-      sys.ledger.after(since, 200),
-      since ? sys.store.decisionsAfter(since, 100) : sys.store.recentDecisions(40),
-      sys.store.incidents(50),
-      sys.store.approvals(),
-      sys.store.anchors(20),
+  // ---------------- Auth (Sign-In with Ethereum) ----------------
+  app.post("/v1/auth/nonce", async (c) => c.json({ nonce: await sys.auth.issueNonce(), domain: host(c), uri: `${c.req.header("x-forwarded-proto") ?? "http"}://${host(c)}` }));
+  app.post("/v1/auth/verify", async (c) => {
+    const b = await body(c, z.object({ message: z.string().min(20).max(4000), signature: Hex }));
+    const { token, principal } = await sys.auth.signIn({ message: b.message, signature: b.signature, domain: host(c), userAgent: c.req.header("user-agent") });
+    setCookie(c, SESSION_COOKIE, token, { httpOnly: true, sameSite: "Lax", secure: opts.secureCookies ?? false, path: "/", maxAge: sys.cfg.SESSION_TTL_HOURS * 3600 });
+    await sys.rec.event(`user:${principal.user.address}`, "auth.signed_in", null, { userAgent: c.req.header("user-agent")?.slice(0, 120) ?? null });
+    return c.json(await meView(principal));
+  });
+  app.post("/v1/auth/logout", async (c) => {
+    const p = c.get("principal");
+    if (p) await sys.auth.signOut(p.sessionId);
+    deleteCookie(c, SESSION_COOKIE, { path: "/" });
+    return c.json({ ok: true });
+  });
+  const meView = async (p: Principal) => {
+    const ens = sys.ensNames ? (await sys.ensNames.lookup([p.user.address]))[p.user.address] ?? null : null;
+    const canCreateSite = !sys.cfg.BOOTSTRAP_ADMIN_ADDRESS || sys.cfg.BOOTSTRAP_ADMIN_ADDRESS.toLowerCase() === p.user.address;
+    return { user: { ...p.user, ens }, memberships: p.memberships, canCreateSite };
+  };
+  app.get("/v1/me", async (c) => {
+    const p = c.get("principal");
+    if (!p) return c.json({ user: null, memberships: [], canCreateSite: false });
+    return c.json(await meView(p));
+  });
+  app.patch("/v1/me", async (c) => {
+    const b = await body(c, z.object({ displayName: z.string().trim().min(1).max(60) }));
+    await sys.auth.setDisplayName(me(c).user.id, b.displayName);
+    return c.json(await meView((await sys.auth.principal(getCookie(c, SESSION_COOKIE)))!));
+  });
+
+  app.post("/v1/sites", async (c) => {
+    const p = me(c);
+    if (sys.cfg.BOOTSTRAP_ADMIN_ADDRESS && sys.cfg.BOOTSTRAP_ADMIN_ADDRESS.toLowerCase() !== p.user.address) throw new HttpError(403, "Only the configured administrator wallet can create sites");
+    const b = await body(c, z.object({ name: z.string().trim().min(2).max(80), timezone: z.string().min(1).max(60), lineName: z.string().trim().min(1).max(60), zones: z.array(z.string().max(60)).max(20) }));
+    const id = await sys.plant.createSite(b, p.user.id);
+    await sys.rec.decide(id, { agent: `user:${p.user.address}`, kind: "site.created", summary: `Created site ${b.name} with line ${b.lineName}` });
+    return c.json({ id });
+  });
+
+  // ---------------- Site scope ----------------
+  const site = new Hono<Env>();
+  site.use("*", async (c, next) => {
+    const p = me(c);
+    const siteId = c.req.param("siteId")!;
+    const m = p.memberships.find((x) => x.siteId === siteId);
+    if (!m) throw new HttpError(403, "You are not a member of this site");
+    c.set("siteId", siteId);
+    c.set("roles", m.roles);
+    await next();
+  });
+  const sid = (c: Context<Env>) => c.get("siteId");
+
+  site.get("/", async (c) => c.json({ ...(await sys.plant.site(sid(c))), myRoles: c.get("roles") }));
+  site.patch("/", async (c) => {
+    need(c, "admin");
+    await sys.plant.updateSite(sid(c), await body(c, z.object({ name: z.string().trim().min(2).max(80).optional(), timezone: z.string().max(60).optional() })));
+    return c.json(await sys.plant.site(sid(c)));
+  });
+  site.post("/zones", async (c) => {
+    need(c, "admin", "plant_manager");
+    const b = await body(c, z.object({ name: z.string().trim().min(1).max(60) }));
+    return c.json({ id: await sys.plant.addZone(sid(c), b.name) });
+  });
+  site.patch("/zones/:zoneId", async (c) => {
+    need(c, "admin", "plant_manager");
+    await sys.plant.renameZone(sid(c), c.req.param("zoneId"), (await body(c, z.object({ name: z.string().trim().min(1).max(60) }))).name);
+    return c.json({ ok: true });
+  });
+  site.delete("/zones/:zoneId", async (c) => {
+    need(c, "admin", "plant_manager");
+    await sys.plant.deleteZone(sid(c), c.req.param("zoneId"));
+    return c.json({ ok: true });
+  });
+
+  // Autonomy is a signed decision by the plant manager.
+  site.post("/lines/:lineId/autonomy/sign-request", async (c) => {
+    need(c, "plant_manager");
+    const b = await body(c, z.object({ level: AutonomyLevel, comment: z.string().max(500).default(""), chainId: z.number().int().optional() }));
+    const s = await sys.plant.site(sid(c));
+    const line = s.lines.find((l) => l.id === c.req.param("lineId"));
+    if (!line) throw new HttpError(404, "Line not found");
+    return c.json(await sys.sigs.request(me(c).user, { action: "autonomy.set", entity: `${line.id}#${b.level}`, meaning: `Set ${line.name} autonomy ${line.autonomy} → ${b.level}`, comment: b.comment, site: sid(c), chainId: b.chainId ?? sys.cfg.SIGNATURE_CHAIN_ID }));
+  });
+  site.put("/lines/:lineId/autonomy", async (c) => {
+    need(c, "plant_manager");
+    const b = await body(c, SignedBody.extend({ level: AutonomyLevel, comment: z.string().max(500).default("") }));
+    const lineId = c.req.param("lineId");
+    const before = (await sys.plant.site(sid(c))).lines.find((l) => l.id === lineId);
+    if (!before) throw new HttpError(404, "Line not found");
+    const sig = await sys.db.tx((q) => sys.sigs.consume(q, me(c).user, { action: "autonomy.set", entity: `${lineId}#${b.level}` }, b));
+    await sys.plant.setAutonomy(sid(c), lineId, b.level);
+    await sys.rec.decide(sid(c), { agent: actor(c), kind: "autonomy.set", summary: `${before.name} autonomy ${before.autonomy} → ${b.level}`, reason: b.comment || null, data: { lineId, from: before.autonomy, to: b.level, signatureId: sig.id, typedData: sig.typed, signature: b.signature } });
+    return c.json(await sys.plant.site(sid(c)));
+  });
+
+  // ---- Team ----
+  site.get("/team", async (c) => {
+    const t = await sys.plant.team(sid(c));
+    const ens = sys.ensNames ? await sys.ensNames.lookup(t.members.map((m) => m.address)) : {};
+    return c.json({ ...t, members: t.members.map((m) => ({ ...m, ens: ens[m.address] ?? null })) });
+  });
+  site.post("/team/invites", async (c) => {
+    need(c, "admin");
+    const b = await body(c, z.object({ address: Address, role: Role }));
+    const r = await sys.plant.invite(sid(c), b.address, b.role, me(c).user.id);
+    await sys.rec.decide(sid(c), { agent: actor(c), kind: "team.invited", summary: `${r.added ? "Added" : "Invited"} ${b.address} as ${ROLE_LABEL[b.role]}` });
+    return c.json(r);
+  });
+  site.delete("/team/invites/:id", async (c) => {
+    need(c, "admin");
+    await sys.plant.cancelInvite(sid(c), c.req.param("id"));
+    return c.json({ ok: true });
+  });
+  site.delete("/team/members/:userId/roles/:role", async (c) => {
+    need(c, "admin");
+    const role = Role.parse(c.req.param("role"));
+    await sys.plant.removeRole(sid(c), c.req.param("userId"), role);
+    await sys.rec.decide(sid(c), { agent: actor(c), kind: "team.role_removed", summary: `Removed ${ROLE_LABEL[role]} from ${c.req.param("userId")}` });
+    return c.json({ ok: true });
+  });
+
+  // ---- Assets & data sources ----
+  const assetAdmin = (c: Context<Env>) => need(c, "admin", "process_engineer", "maintenance_lead");
+  site.get("/assets", async (c) => c.json(await sys.plant.views(sid(c))));
+  site.post("/assets/probe", async (c) => {
+    assetAdmin(c);
+    const b = await body(c, z.object({ agentUrl: z.string().url() }));
+    return c.json({ devices: await probeDevices(b.agentUrl).catch((e: unknown) => Promise.reject(new HttpError(502, `Could not read the MTConnect agent: ${e instanceof Error ? e.message : e}`))) });
+  });
+  site.post("/assets", async (c) => {
+    assetAdmin(c);
+    const b = await body(c, AssetBody);
+    const id = await sys.plant.createAsset(sid(c), b, me(c).user.id);
+    await sys.rec.decide(sid(c), { agent: actor(c), kind: "asset.created", assetId: id, summary: `Registered ${b.name} (${ASSET_KIND_LABEL[b.kind]}) · ${b.source.type}` });
+    await sys.advance(true);
+    return c.json({ id });
+  });
+  site.get("/assets/:assetId", async (c) => {
+    const id = c.req.param("assetId");
+    const view = (await sys.plant.views(sid(c))).find((a) => a.id === id);
+    if (!view) throw new HttpError(404, "Asset not found");
+    const minutes = Math.min(24 * 60, Number(c.req.query("minutes") ?? 60));
+    const signals = [...new Set([...Object.keys(view.limits), ...Object.keys(view.latest).filter((k) => view.latest[k]!.value !== null)])].slice(0, 8);
+    const series: Record<string, { ts: number; value: number | null }[]> = {};
+    for (const s of signals) series[s] = (await sys.plant.series(id, s, minutes)).map((p) => ({ ts: p.ts, value: p.value }));
+    const asset = await sys.plant.asset(sid(c), id);
+    return c.json({ view, asset, series, replays: await sys.plant.replays(sid(c), id) });
+  });
+  site.put("/assets/:assetId", async (c) => {
+    assetAdmin(c);
+    const b = await body(c, AssetBody);
+    await sys.plant.updateAsset(sid(c), c.req.param("assetId"), b);
+    await sys.rec.decide(sid(c), { agent: actor(c), kind: "asset.updated", assetId: c.req.param("assetId"), summary: `Updated ${b.name}` });
+    return c.json({ ok: true });
+  });
+  site.delete("/assets/:assetId", async (c) => {
+    assetAdmin(c);
+    await sys.plant.archiveAsset(sid(c), c.req.param("assetId"));
+    await sys.rec.decide(sid(c), { agent: actor(c), kind: "asset.archived", assetId: c.req.param("assetId"), summary: `Archived asset` });
+    return c.json({ ok: true });
+  });
+  site.post("/assets/:assetId/readings", async (c) => {
+    need(c, "operator");
+    const b = await body(c, z.object({ signal: z.string().trim().min(1).max(40), value: z.number().nullable().default(null), text: z.string().max(80).nullable().default(null) }));
+    await sys.plant.manualReading(sid(c), c.req.param("assetId"), b);
+    await sys.rec.event(actor(c), "telemetry.manual", c.req.param("assetId"), b);
+    return c.json({ ok: true });
+  });
+  site.post("/assets/:assetId/replays", async (c) => {
+    assetAdmin(c);
+    const csv = await c.req.text();
+    if (csv.length > 4_000_000) throw new HttpError(400, "CSV is limited to 4 MB");
+    const r = await sys.plant.uploadReplay(sid(c), c.req.param("assetId"), c.req.query("name") ?? "dataset.csv", csv, me(c).user.id);
+    await sys.rec.decide(sid(c), { agent: actor(c), kind: "dataset.uploaded", assetId: c.req.param("assetId"), summary: `Uploaded ${c.req.query("name") ?? "dataset"}: ${r.rows} rows of ${r.signals.join(", ")}` });
+    return c.json(r);
+  });
+  site.post("/assets/:assetId/replays/:seriesId/start", async (c) => {
+    assetAdmin(c);
+    const b = await body(c, z.object({ speed: z.number().min(0.1).max(600).default(1) }));
+    await sys.plant.startReplay(sid(c), c.req.param("assetId"), c.req.param("seriesId"), b.speed);
+    await sys.rec.decide(sid(c), { agent: actor(c), kind: "dataset.replay_started", assetId: c.req.param("assetId"), summary: `Started dataset replay at ${b.speed}×` });
+    return c.json({ ok: true });
+  });
+
+  // ---- Templates & builder ----
+  site.get("/templates", async (c) => c.json(await sys.templates.list(sid(c))));
+  site.get("/templates/:templateId", async (c) => c.json(await sys.templates.get(sid(c), c.req.param("templateId"))));
+  site.post("/templates", async (c) => {
+    need(c, "process_engineer");
+    const b = await body(c, z.object({ templateId: z.string().optional(), name: z.string().trim().min(2).max(80), category: z.string().trim().min(2).max(40), description: z.string().max(300).default(""), spec: TemplateSpec, note: z.string().max(200).optional() }));
+    return c.json(await sys.templates.publish(sid(c), actor(c), b));
+  });
+  site.delete("/templates/:templateId", async (c) => {
+    need(c, "process_engineer");
+    await sys.templates.archive(sid(c), c.req.param("templateId"));
+    return c.json({ ok: true });
+  });
+
+  // ---- Runs ----
+  site.get("/runs", async (c) => c.json(await sys.engine.list(sid(c), { days: Number(c.req.query("days") ?? 7), status: (c.req.query("status") || undefined) as never })));
+  site.post("/runs", async (c) => {
+    need(c, "supervisor");
+    const b = await body(c, z.object({ templateVersionId: z.string(), orderRef: z.string().trim().min(1).max(60), quantity: z.number().int().min(1).max(1_000_000), dueAt: z.string().datetime().nullable().optional(), lineId: z.string().optional() }));
+    const id = await sys.engine.start(sid(c), actor(c), b);
+    return c.json(await sys.engine.view(sid(c), id));
+  });
+  site.get("/runs/:runId", async (c) => {
+    const runId = c.req.param("runId");
+    const [run, decisions, inbox] = await Promise.all([sys.engine.view(sid(c), runId), sys.rec.decisions(sid(c), { runId, limit: 200 }), sys.inbox.list(sid(c), { runId, status: "all" })]);
+    return c.json({ run, decisions, inbox });
+  });
+  site.post("/runs/:runId/step", async (c) => {
+    need(c, "supervisor");
+    const r = await sys.engine.step(sid(c), actor(c), c.req.param("runId"));
+    return c.json({ ...r, run: await sys.engine.view(sid(c), c.req.param("runId")) });
+  });
+  site.post("/runs/:runId/abort", async (c) => {
+    need(c, "plant_manager");
+    await sys.engine.abort(sid(c), actor(c), c.req.param("runId"), (await body(c, z.object({ reason: z.string().trim().min(3).max(300) }))).reason);
+    return c.json(await sys.engine.view(sid(c), c.req.param("runId")));
+  });
+  site.post("/runs/:runId/stages/:code/record", async (c) => {
+    need(c, "operator");
+    const b = await body(c, z.object({ good: z.number().int().min(0), scrap: z.number().int().min(0), complete: z.boolean().default(false), note: z.string().max(300).optional() }));
+    await sys.engine.record(sid(c), actor(c), c.req.param("runId"), c.req.param("code"), b);
+    return c.json(await sys.engine.view(sid(c), c.req.param("runId")));
+  });
+  site.post("/runs/:runId/stages/:code/hold", async (c) => {
+    need(c, "operator");
+    const b = await body(c, z.object({ reason: z.string().trim().min(3).max(300) }));
+    await sys.engine.hold(sid(c), actor(c), c.req.param("runId"), c.req.param("code"), b.reason);
+    return c.json(await sys.engine.view(sid(c), c.req.param("runId")));
+  });
+  site.post("/runs/:runId/stages/:code/reassign", async (c) => {
+    need(c, "supervisor");
+    const b = await body(c, z.object({ assetId: z.string() }));
+    await sys.engine.reassign(sid(c), actor(c), c.req.param("runId"), c.req.param("code"), b.assetId);
+    return c.json(await sys.engine.view(sid(c), c.req.param("runId")));
+  });
+
+  // ---- Inbox (approvals & exceptions) ----
+  site.get("/inbox", async (c) => c.json(await sys.inbox.list(sid(c), { status: c.req.query("status") ?? "pending" })));
+  const OptionBody = z.object({ option: z.number().int().min(REJECT), comment: z.string().max(500).default("") });
+  site.post("/inbox/:id/sign-request", async (c) => {
+    const b = await body(c, OptionBody.extend({ chainId: z.number().int().optional() }));
+    return c.json(await sys.inbox.signatureRequest(sid(c), me(c).user, c.get("roles"), c.req.param("id"), b.option, b.comment, b.chainId));
+  });
+  site.post("/inbox/:id/decide", async (c) => {
+    const b = await body(c, OptionBody.merge(SignedBody));
+    return c.json(await sys.inbox.decide(sid(c), me(c).user, c.get("roles"), c.req.param("id"), { option: b.option, reason: b.comment, nonce: b.nonce, signature: b.signature }));
+  });
+
+  // ---- Decisions, agents, incidents ----
+  site.get("/decisions", async (c) => c.json(await sys.rec.decisions(sid(c), { runId: c.req.query("runId") || undefined, limit: Number(c.req.query("limit") ?? 50) })));
+  site.get("/incidents", async (c) => {
+    const r = await sys.db.query<{ id: string; asset_id: string; status: string; title: string; severity: string; opened_at: string; closed_at: string | null }>(
+      "SELECT id, asset_id, status, title, severity, opened_at::text, closed_at::text FROM incidents WHERE site_id = $1 ORDER BY opened_at DESC LIMIT 50",
+      [sid(c)],
+    );
+    return c.json(r.rows.map((x) => ({ id: x.id, assetId: x.asset_id, status: x.status, title: x.title, severity: x.severity, openedAt: new Date(x.opened_at).toISOString(), closedAt: x.closed_at ? new Date(x.closed_at).toISOString() : null })));
+  });
+  site.get("/agents", async (c) => {
+    const s = await sys.plant.site(sid(c));
+    const level = s.lines[0]?.autonomy ?? "L2";
+    const stats = await sys.db.query<{ agent: string; n: string; conf: string | null }>(
+      "SELECT agent, COUNT(*)::text n, AVG(confidence)::text conf FROM decisions WHERE site_id = $1 AND ts > now() - interval '24 hours' AND agent LIKE 'agent:%' GROUP BY agent",
+      [sid(c)],
+    );
+    const esc = await sys.db.query<{ agent: string; n: string }>("SELECT agent, COUNT(*)::text n FROM inbox_items WHERE site_id = $1 AND created_at > now() - interval '24 hours' GROUP BY agent", [sid(c)]);
+    const tasks = await sys.db.query<{ run_id: string; code: string; name: string | null; spec_json: string; state: string }>(
+      "SELECT sr.run_id, sr.code, sr.data_json::json->>'name' AS name, v.spec_json, sr.state FROM stage_runs sr JOIN runs r ON r.id = sr.run_id JOIN template_versions v ON v.id = r.template_version_id WHERE r.site_id = $1 AND r.status = 'running' AND sr.state IN ('running','awaiting_approval','held')",
+      [sid(c)],
+    );
+    const views = await sys.plant.views(sid(c));
+    return c.json(
+      AGENTS.map((a) => {
+        const st = stats.rows.find((x) => x.agent === `agent:${a}`);
+        const current = tasks.rows.filter((t) => (JSON.parse(t.spec_json) as TemplateSpec).stages.find((s) => s.code === t.code)?.agent === a);
+        return {
+          key: a,
+          ...AGENT_INFO[a],
+          autonomy: level,
+          assets: views.filter((v) => v.owningAgent === a).map((v) => ({ id: v.id, name: v.name, status: v.status })),
+          currentTask: current[0] ? `${current[0].run_id} · ${current[0].code} ${current[0].name ?? ""}`.trim() : null,
+          activeStages: current.length,
+          decisionsToday: Number(st?.n ?? 0),
+          escalationsToday: Number(esc.rows.find((x) => x.agent === `agent:${a}`)?.n ?? 0),
+          avgConfidence: st?.conf ? Number(st.conf) : null,
+        };
+      }),
+    );
+  });
+
+  // ---- Validation packages ----
+  site.get("/validation", async (c) => c.json(await sys.validation.list(sid(c), me(c).user, c.get("roles"))));
+  const PackageFields = z.object({
+    title: z.string().trim().min(3).max(120),
+    objective: z.string().max(2000).default(""),
+    acceptance: z.string().max(2000).default(""),
+    samplePlan: z.string().max(1000).default(""),
+    windowStart: z.string().datetime().nullable().optional(),
+    windowEnd: z.string().datetime().nullable().optional(),
+  });
+  site.post("/validation", async (c) => {
+    need(c, "process_engineer");
+    const b = await body(c, PackageFields.extend({ type: PackageType, runId: z.string().nullable().optional(), stageCode: z.string().nullable().optional(), templateId: z.string().nullable().optional(), assetId: z.string().nullable().optional() }));
+    return c.json(await sys.validation.create(sid(c), me(c).user, b));
+  });
+  site.get("/validation/:id", async (c) => c.json(await sys.validation.get(sid(c), c.req.param("id"))));
+  site.patch("/validation/:id", async (c) => c.json(await sys.validation.update(sid(c), me(c).user, c.req.param("id"), await body(c, PackageFields.partial()))));
+  site.post("/validation/:id/checks", async (c) =>
+    c.json(await sys.validation.addCheck(sid(c), me(c).user, c.req.param("id"), await body(c, z.object({ criterion: z.string().trim().min(2).max(200), method: z.string().max(200).default("Manual"), target: z.string().max(100).default("") })))),
+  );
+  site.patch("/validation/:id/checks/:checkId", async (c) =>
+    c.json(await sys.validation.recordCheck(sid(c), me(c).user, c.req.param("id"), c.req.param("checkId"), await body(c, z.object({ status: z.enum(["pass", "fail"]), result: z.string().max(200).default("") })))),
+  );
+  site.delete("/validation/:id/checks/:checkId", async (c) => c.json(await sys.validation.removeCheck(sid(c), me(c).user, c.req.param("id"), c.req.param("checkId"))));
+  site.post("/validation/:id/precheck", async (c) => c.json(await sys.validation.precheck(sid(c), me(c).user, c.req.param("id"))));
+  site.post("/validation/:id/evidence", async (c) => {
+    const form = await c.req.parseBody();
+    const file = form.file;
+    if (!(file instanceof File)) throw new HttpError(400, "Attach a file");
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    return c.json(await sys.validation.attach(sid(c), me(c).user, c.req.param("id"), { slotId: typeof form.slotId === "string" && form.slotId ? form.slotId : null, name: typeof form.name === "string" && form.name ? form.name : file.name, filename: file.name, mime: file.type || "application/octet-stream", bytes }));
+  });
+  site.delete("/validation/:id/evidence/:evidenceId", async (c) => c.json(await sys.validation.removeEvidence(sid(c), me(c).user, c.req.param("id"), c.req.param("evidenceId"))));
+  site.get("/validation/:id/evidence/:evidenceId/file", async (c) => {
+    const f = await sys.validation.blob(sid(c), c.req.param("id"), c.req.param("evidenceId"));
+    return new Response(Buffer.from(f.bytes), { headers: { "content-type": f.mime, "content-disposition": `attachment; filename="${f.filename.replace(/"/g, "")}"`, "x-content-type-options": "nosniff" } });
+  });
+  const PkgAction = z.object({ action: z.enum(["sign", "return", "reject"]), comment: z.string().max(1000).default("") });
+  site.post("/validation/:id/sign-request", async (c) => {
+    const b = await body(c, PkgAction.extend({ chainId: z.number().int().optional() }));
+    return c.json(await sys.validation.signatureRequest(sid(c), me(c).user, c.get("roles"), c.req.param("id"), b.action, b.comment, b.chainId));
+  });
+  site.post("/validation/:id/act", async (c) => c.json(await sys.validation.act(sid(c), me(c).user, c.get("roles"), c.req.param("id"), await body(c, PkgAction.merge(SignedBody)))));
+
+  // ---- Ledger & proof ----
+  site.get("/ledger", async (c) => {
+    const subject = c.req.query("subject") || undefined;
+    return c.json({ entries: await sys.ledger.latest(Math.min(500, Number(c.req.query("limit") ?? 100)), subject), anchors: await sys.proof.anchors(20), anchorKind: sys.proof.kind });
+  });
+  site.get("/verify", async (c) => c.json(await sys.proof.verify(c.req.query("subject") || undefined)));
+  site.post("/anchors", async (c) => {
+    need(c, "supervisor");
+    return c.json(await sys.proof.anchorHead(sid(c), c.req.query("subject") || null));
+  });
+  site.post("/summaries/shift", async (c) => {
+    const entries = (await sys.ledger.latest(120)).reverse();
+    const r = await sys.agents.summarize({ entries: entries.map((e) => ({ seq: e.seq, type: e.type, actor: e.actor, subject: e.subject, brief: String((e.payload as { summary?: string })?.summary ?? e.type) })) });
+    return c.json({ ...r.value, modelId: r.modelId, fallback: r.fallback });
+  });
+
+  /** One call per poll: advances the engine, then returns everything a screen needs to refresh. */
+  site.get("/live", async (c) => {
+    await sys.advance().catch((e) => console.error("[ordo] advance", e));
+    const s = sid(c);
+    const [assets, runs, inbox, decisions, head, validation] = await Promise.all([
+      sys.plant.views(s),
+      sys.engine.list(s, { days: 7 }),
+      sys.inbox.list(s, { status: "pending" }),
+      sys.rec.decisions(s, { limit: 30 }),
+      sys.ledger.head(),
+      sys.validation.list(s, me(c).user, c.get("roles")),
     ]);
-    return c.json({ plant, entries, decisions, incidents, approvals, anchors: anchors.map(({ data: _d, ...a }) => a) });
+    const roles = c.get("roles");
+    return c.json({
+      now: new Date().toISOString(),
+      assets,
+      runs,
+      inbox,
+      decisions,
+      headSeq: head?.seq ?? 0,
+      counts: {
+        approvals: inbox.filter((i) => canApproveAny(roles, i.requiredRole)).length,
+        validation: validation.filter((v) => v.needsMe).length,
+      },
+    });
   });
 
-  // ---- Plant & simulator ----
-  app.get("/v1/plant", async (c) => {
-    await o.advance();
-    return c.json(await o.view());
-  });
-  app.post("/v1/sim/scenarios/:name/start", async (c) => {
-    const name = z.enum(SCENARIOS).parse(c.req.param("name"));
-    const seed = c.req.query("seed");
-    await o.reset(name, seed ? Number(seed) : undefined, "user:demo");
-    return c.json(await o.view());
-  });
-  app.post("/v1/sim/pause", async (c) => {
-    await o.advance();
-    await o.pause();
-    return c.json(await o.view());
-  });
-  app.post("/v1/sim/resume", async (c) => {
-    await o.resume();
-    return c.json(await o.view());
-  });
-  app.post("/v1/sim/step", async (c) => {
-    await o.skip(Math.min(240, Math.max(1, Number(c.req.query("minutes") ?? 1))));
-    await o.advance();
-    return c.json(await o.view());
-  });
+  app.route("/v1/sites/:siteId", site);
 
-  app.patch("/v1/line/autonomy", async (c) => {
-    const body = ActorBody.extend({ level: AutonomyLevel }).parse(await c.req.json());
-    await o.setAutonomy(body.level, body.actor);
-    return c.json(await o.view());
-  });
-  app.get("/v1/policy", (c) => c.json({ policy: sys.policy.policy, hash: sys.policy.hash }));
-
-  // ---- Incidents, approvals ----
-  app.get("/v1/incidents", async (c) => c.json(await sys.store.incidents(50)));
-  app.get("/v1/incidents/:id", async (c) => {
-    const id = c.req.param("id");
-    const incident = await sys.store.incident(id);
-    if (!incident) throw new HttpError(404, "Incident not found");
-    const [decisions, approvals, entries] = await Promise.all([sys.store.decisions(id), sys.store.approvals({ incidentId: id }), sys.ledger.latest(200, id)]);
-    return c.json({ incident, decisions, approvals, entries: entries.reverse() });
-  });
-  app.get("/v1/decisions", async (c) => c.json(await sys.store.recentDecisions(Math.min(100, Number(c.req.query("limit") ?? 40)))));
-  app.get("/v1/approvals", async (c) => c.json(await sys.store.approvals({ status: c.req.query("status") || undefined })));
-  app.post("/v1/approvals/:id/approve", async (c) => {
-    const b = ActorBody.parse(await c.req.json());
-    return c.json(await o.approve(c.req.param("id"), b.actor, b.reason));
-  });
-  app.post("/v1/approvals/:id/reject", async (c) => {
-    const b = ActorBody.parse(await c.req.json());
-    return c.json(await o.reject(c.req.param("id"), b.actor, b.reason ?? ""));
-  });
-
-  // ---- Ledger, anchors, verification ----
-  app.get("/v1/ledger", async (c) => {
-    const limit = Math.min(500, Number(c.req.query("limit") ?? 100));
-    return c.json(await sys.ledger.latest(limit, c.req.query("incident") || undefined));
-  });
-  app.get("/v1/anchors", async (c) => c.json((await sys.store.anchors(50)).map(({ data: _d, ...a }) => a)));
-  app.post("/v1/anchors", async (c) => {
-    await o.anchorHead(null, null);
-    return c.json((await sys.store.anchors(1)).map(({ data: _d, ...a }) => a)[0] ?? null);
-  });
-  app.get("/v1/verify/incidents/:id", async (c) => {
-    const t = c.req.query("tamper");
-    const tamper = t && opts.allowTamper !== false ? Number(t) : null;
-    return c.json(await o.verify(c.req.param("id"), Number.isFinite(tamper) ? tamper : null));
-  });
-  app.post("/v1/summaries/shift", async (c) => c.json(await o.shiftSummary()));
-
-  // ---- Web console (single-container mode) ----
+  // ---------------- Web console (single-container mode) ----------------
   const dist = opts.webDist ? resolve(opts.webDist) : null;
   if (dist && existsSync(resolve(dist, "index.html"))) {
     const indexHtml = readFileSync(resolve(dist, "index.html"), "utf8");

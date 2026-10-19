@@ -1,7 +1,6 @@
 import { createPrivateKey, createPublicKey, generateKeyPairSync, sign, verify, type KeyObject } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { sha256 } from "../domain/canonical.js";
-import type { Approval, Role } from "../domain/types.js";
 
 export interface ExternalRef {
   ref: string;
@@ -12,9 +11,8 @@ export interface ExternalRef {
 export interface AnchorInput {
   toSeq: number;
   entryHash: string;
-  lineId: string;
-  incidentId: string | null;
-  evidence: string | null;
+  siteId: string | null;
+  subject: string | null;
 }
 export interface AnchorAdapter {
   readonly kind: string;
@@ -57,23 +55,7 @@ export class LocalSignedAnchor implements AnchorAdapter {
   }
 }
 
-// ---------- Approval rail: where an approval is enforced ----------
-export interface ApprovalRail {
-  readonly kind: string;
-  request(a: Approval): Promise<ExternalRef | null>;
-  confirm(a: Approval, signerRole: Role): Promise<ExternalRef | null>;
-}
-export class InAppApprovals implements ApprovalRail {
-  readonly kind = "in-app";
-  async request() {
-    return null;
-  }
-  async confirm() {
-    return null;
-  }
-}
-
-// ---------- Payment rail: how the Healer pays a maintenance vendor ----------
+// ---------- Payment rail: how an agent pays a maintenance vendor (capped on-chain by AgentSpendVault) ----------
 export interface PaymentRail {
   readonly kind: string;
   pay(p: { vendor: string; amount: number; memo: string; incidentHash: string }): Promise<ExternalRef>;
