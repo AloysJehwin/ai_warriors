@@ -44,7 +44,7 @@ Keep Gemini / Vertex for prediction and narration unless 0G Compute is adopted f
 
 ## 4. Eligibility risks to handle now
 
-- **Pre-existing work.** ETHGlobal only awards partner prizes for work done during the hackathon (Continuity tracks aside, which are 1inch/Definitive only). The repo currently has docs and a design prototype but **no application code**, which is fine. Declare the PRD, docs and mockups as pre-existing design work in the submission and keep all code commits inside the event window.
+- **Pre-existing work.** Covered in detail, with the proof-of-work plan, in [ethglobal-mumbai-build-plan.md](ethglobal-mumbai-build-plan.md).
 - **Application and ETH stake.** Mumbai requires applying and staking ETH to confirm the spot. Do this early.
 - **Track rules not published.** Hedera, 0G, ENS, World, Arc, Arkiv all show "coming soon". Build the HCS + Agent Kit payment + HTS path, which has qualified in every 2026 Hedera track so far, and adjust once rules land.
 - **Testnet keys and faucets.** Create Hedera testnet accounts, 0G testnet wallet and ENS Sepolia names before day 1.
