@@ -149,7 +149,7 @@ export interface StageRunView extends StageSpec {
   progress: number;
   outcome: string | null;
   deviation: boolean;
-  criteriaResults: { label: string; target: string; actual: string | null; ok: boolean | null }[];
+  criteriaResults: { label: string; target: string; actual: string | null; ok: boolean | null; measured?: { value: number; op: Criterion["op"]; target: number } }[];
   decisions: number;
   gateItemId: string | null;
   /** why the stage waits on a person (no counter, manual mode, no asset registered) */

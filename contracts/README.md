@@ -7,6 +7,7 @@ Three contracts on Hedera, two on Sepolia for ENS (below). Every authorisation i
 | `OrdoTrust` | Role credentials per site, granted with a site admin's signature; validator stakes with an unstake cooldown, after which anyone may pay the stake back to the validator (`withdrawFor`, the call Hedera's scheduler makes); release records that need a staked reviewer and a staked plant manager; slashing by two other validators plus a plant manager into the site's quality fund. |
 | `OrdoWorkOrders` | The maintenance agent pays vendors within limits people set: a per-site fund, per-order and per-day caps an admin signs, escrow only to holders of the site's `VENDOR` credential, release on a supervisor's or plant manager's signature, refund after expiry, and a pause an admin or plant manager signs. |
 | `OrdoPolicies` | Each line's autonomy level and policy hash. Raising autonomy or changing the policy needs two different plant managers' signatures; lowering needs one. |
+| `OrdoSpecVerifier` | Generated Groth16 verifier for `circuits/spec_check.circom`: checks a lot passport's proof that a criterion was met, without the measurement. Stateless; anyone can deploy and call `verifyProof`. |
 
 `OrdoWorkOrders` and `OrdoPolicies` read credentials from the deployed `OrdoTrust` and share its signature scheme through `OrdoSigned`.
 
@@ -69,6 +70,16 @@ Three deadlines run as Hedera scheduled transactions (`ScheduleCreateTransaction
 Ordo only does the job itself when a schedule could not be created (less than a minute or more than 62 days away, or Hedera unreachable) or has not run 5 minutes after its time. `HEDERA_SCHEDULES=off` turns it off.
 
 `withdrawFor` is new in `OrdoTrust`, so validator payouts need it redeployed (**Deploy OrdoTrust**, then **Hedera setup** `contracts` against the new address); until then Ordo sees the function is missing and validators withdraw from their wallets as before. Refunds and timeouts work with the contracts already deployed.
+
+## Zero-knowledge spec proofs
+
+A lot's public passport says whether each acceptance criterion was met but never shows the measurement (yields, scrap, cycle times and OEE are trade secrets). When a stage closes, the server commits each measured value as `Poseidon(subject, value, salt)` in the hash-chained ledger (so it is anchored with everything else), and for every criterion that passed it proves with Groth16 that the committed value meets the target. The passport carries the proof and its public signals `[subject, target × 10⁴, op, commitment]`; the server, the buyer's browser (snarkjs) or `OrdoSpecVerifier` can each check it, with the key at `GET /v1/public/zk/spec-check`.
+
+The circuit's keys live in `server/zk`. Rebuild them after changing the circuit (needs the [circom 2](https://docs.circom.io/getting-started/installation/) compiler; the trusted setup is a local single-party ceremony, fine for a demo, not for production):
+
+```bash
+cd contracts && CIRCOM=/path/to/circom node scripts/zk-setup.mjs
+```
 
 ## Proof of work
 

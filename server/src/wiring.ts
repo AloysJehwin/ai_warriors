@@ -15,6 +15,7 @@ import { LotNames } from "./core/lot-names.js";
 import { Names } from "./core/names.js";
 import { Openings } from "./core/openings.js";
 import { Passports } from "./core/passports.js";
+import { SpecProofs } from "./core/spec-proofs.js";
 import { Proof } from "./core/proof.js";
 import { Recorder } from "./core/recorder.js";
 import { Replicas } from "./core/replicas.js";
@@ -247,6 +248,8 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
   }
 
   const passports = new Passports(db, rec, sigs, engine, trust, proof, passportRail, publicBase(cfg), cfg.SIGNATURE_CHAIN_ID, now);
+  passports.specs = new SpecProofs(db, rec, now);
+  if (!passports.specs.enabled) warnings.push("The spec-check circuit (server/zk) is missing: public passports show criteria without zero-knowledge proofs");
 
   // ---- ENSv2 names on Sepolia for the site, its people, assets and agents ----
   let nameRail: import("./chain/ensv2.js").EnsV2 | null = null;

@@ -306,6 +306,17 @@ export interface PassportView {
   /** the lot's own ENS name, and its releases recorded there against the signers' ENS credentials */
   ens?: { name: string; url: string; releases: { packageId: string; status: "pending" | "done" | "failed"; txUrl: string | null; error: string | null }[] } | null;
 }
+export interface SpecProof {
+  status: "proven" | "pending" | "failed";
+  system: "groth16-bn254";
+  circuit: "spec_check";
+  /** [subject, target × 10⁴, op, commitment] */
+  publicSignals: string[] | null;
+  proof: unknown;
+  ledgerSeq: number | null;
+  verified: boolean | null;
+  detail: string;
+}
 export interface PublicPassport {
   name: string;
   creator: string;
@@ -318,7 +329,6 @@ export interface PublicPassport {
     product: { name: string; category: string; version: number };
     startedAt: string;
     finishedAt: string | null;
-    rolledYield: number | null;
     stages: {
       code: string;
       name: string;
@@ -327,9 +337,8 @@ export interface PublicPassport {
       resource: string;
       startedAt: string | null;
       endedAt: string | null;
-      unitsGood: number;
-      unitsScrap: number;
-      criteria: { label: string; target: string; actual: string | null; ok: boolean | null }[];
+      /** whether each criterion was met; the measurement stays private, with a zero-knowledge proof where it was met */
+      criteria: { label: string; target: string; ok: boolean | null; zk: SpecProof | null }[];
       deviation: boolean;
     }[];
     signed: { kind: string; summary: string; stageCode: string | null; by: string; ens: string | null; at: string; ledgerSeq: number | null }[];

@@ -193,6 +193,21 @@ export function createApp(sys: System, opts: AppOptions = {}) {
   app.get("/v1/public/ens/:sender/:data", (c) => ensGateway(c, c.req.param("sender"), c.req.param("data").replace(/\.json$/, "")));
   app.post("/v1/public/ens/:sender", async (c) => ensGateway(c, c.req.param("sender"), String(((await c.req.json().catch(() => ({}))) as { data?: unknown }).data ?? "")));
 
+  app.get("/v1/public/zk/spec-check", (c) => {
+    const vkey = sys.passports.specs?.verificationKey();
+    if (!vkey) throw new HttpError(404, "This deployment does not prove criteria");
+    c.header("access-control-allow-origin", "*");
+    c.header("cache-control", "public, max-age=3600");
+    return c.json({
+      circuit: "spec_check",
+      system: "groth16-bn254",
+      publicSignals: ["subject", "target", "op", "commitment"],
+      statement: "The prover knows value and salt with Poseidon(subject, value, salt) = commitment and value ≥ target (op 0), ≤ target (op 1) or = target (op 2), fixed point ×10⁴.",
+      subject: "sha256('ordo:spec:<runId>:<stageCode>:<criterion label>') mod the BN254 scalar field",
+      verificationKey: vkey,
+    });
+  });
+
   // ---------------- Running pipelines: public, no sign-in, so a newcomer can see what a site runs and apply for a role ----------------
   app.get("/v1/public/pipelines", async (c) => {
     c.header("cache-control", "public, max-age=15");
