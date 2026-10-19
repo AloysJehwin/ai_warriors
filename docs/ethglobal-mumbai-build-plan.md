@@ -28,7 +28,12 @@ What that means for us:
 
 ### Where the code lives
 
-Create a **new public repo at kickoff** (e.g. `ordo-ethglobal`) with the first commit made after the opening ceremony. Keep this repo (renamed `ordo`) as the design and planning repo and link it as "prior design work". A fresh repo makes the commit timeline obvious to judges and keeps the earlier Google Cloud docs out of the history.
+**Updated 19 Oct:** the team decided to build the app now, before the event. The fresh-repo-at-kickoff approach no longer applies. Instead:
+
+- The off-chain core is built now in this repo and declared as prior work (tag `pre-ethglobal`, `PRIOR_WORK.md`).
+- All Hedera, 0G and ENS code is written **at the event** in `packages/adapters-chain`, behind the interfaces in [technical-requirements.md §10](technical-requirements.md#10-adapter-interfaces-partner-integrations-plug-in-here). That package is the "new work" judges evaluate.
+- Partner-prize eligibility for a pre-existing project is not guaranteed. Confirm with ETHGlobal before relying on it (technical-requirements.md §2).
+- The proof-of-work rules in §1 below apply to the event-weekend commits.
 
 ---
 

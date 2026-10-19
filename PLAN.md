@@ -1,5 +1,7 @@
 # Ordo — Build Plan (2 people)
 
+> **Note (19 Oct 2026):** phases 0–3 and the stack below are superseded by [docs/technical-requirements.md](docs/technical-requirements.md) §18 (dated milestones). Ground rules and ownership ideas still apply.
+
 Stack decision: **PRD.md as written** (FastAPI + Gemini + Vertex AI + Pub/Sub/Dataflow/BigQuery + Firestore + Cloud Run, Next.js frontend).
 Git model: **branch per task + PR, strict file ownership**.
 

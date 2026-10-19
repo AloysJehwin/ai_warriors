@@ -4,6 +4,10 @@ Markdown versions of the Ordo product, architecture and validation documentation
 
 | Document | What it covers |
 | --- | --- |
+| [technical-requirements.md](technical-requirements.md) | **MVP build spec (Oct–Nov 2026):** scope, stack, repo layout, agents, policy guard, ledger, adapters, API, tests, milestones. Wins over other docs for the MVP |
+| [improvements.md](improvements.md) | Review of PRD, plan and docs: blockers, inconsistencies, safety and engineering fixes |
+| [ethglobal-mumbai-strategy.md](ethglobal-mumbai-strategy.md) | ETHGlobal Mumbai partner choice (Hedera, 0G, ENS) |
+| [ethglobal-mumbai-build-plan.md](ethglobal-mumbai-build-plan.md) | Event schedule, proof-of-work protocol, submission checklist |
 | [architecture.md](architecture.md) | Full system architecture: design principles, the five layers and every service in detail, end-to-end flows, autonomy and policy guard, events and messages, deployment, failure modes, technology options, open decisions |
 | [product.md](product.md) | What Ordo does, roles, core concepts (pipelines, node states, agents, autonomy, gates) and all seven console screens |
 | [agent-decision-model.md](agent-decision-model.md) | How an agent action is proposed, checked, executed or escalated, and recorded |
