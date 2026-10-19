@@ -60,11 +60,11 @@ export function ApplyForm({ siteId, kind, onDone, onCancel }: { siteId: string; 
             <Field label="Company">
               <input className="input" value={form.company ?? ""} onChange={set("company")} />
             </Field>
-            <Field label="Services" hint="e.g. spindle repair, CNC calibration">
+            <Field label="Services" hint="Comma-separated; include machine kinds you service, e.g. cnc, press, robot">
               <input className="input" value={form.categories ?? ""} onChange={set("categories")} />
             </Field>
-            <Field label="Hourly rate" hint="In your invoicing currency">
-              <input className="input" value={form.hourlyRate ?? ""} onChange={set("hourlyRate")} />
+            <Field label="Hourly rate (HBAR)" hint="The maintenance agent escrows rate × hours for each work order">
+              <input className="input" value={form.hourlyRate ?? ""} onChange={set("hourlyRate")} inputMode="decimal" />
             </Field>
             <Field label="Response commitment">
               <Select value={form.responseMinutes ?? null} onChange={(v) => setForm({ ...form, responseMinutes: v })} options={["30", "60", "120", "240", "480"].map((m) => ({ value: m, label: `Within ${Number(m) >= 60 ? `${Number(m) / 60} h` : `${m} min`}` }))} placeholder="Choose" />

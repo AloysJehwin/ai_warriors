@@ -2,6 +2,8 @@ import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { api } from "./api";
 import { AppProvider } from "./lib/app";
+import { useRoute } from "./lib/router";
+import { Passport } from "./pages/Passport";
 import { SignerProvider } from "./lib/sign";
 import { SignIn } from "./pages/SignIn";
 import { Setup } from "./pages/Setup";
@@ -26,6 +28,7 @@ const saveSite = (id: string) => {
 };
 
 function Root() {
+  const route = useRoute();
   const [me, setMe] = useState<Me | null>(null);
   const [meta, setMeta] = useState<Meta | null>(null);
   const [status, setStatus] = useState<Status | null>(null);
@@ -53,6 +56,8 @@ function Root() {
     window.location.reload();
   };
 
+  // a lot's public passport (the QR code on a shipped lot) needs no account
+  if (route.page === "passport" && route.id) return <Passport runId={route.id} />;
   if (error) return <div className="boot">Could not reach the Ordo API: {error}</div>;
   if (!me || !meta || !status) return <div className="boot">Loading…</div>;
   if (!me.user) return <SignIn onSignedIn={setMe} />;

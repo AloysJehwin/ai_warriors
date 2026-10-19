@@ -55,20 +55,6 @@ export class LocalSignedAnchor implements AnchorAdapter {
   }
 }
 
-// ---------- Payment rail: how an agent pays a maintenance vendor (capped on-chain by AgentSpendVault) ----------
-export interface PaymentRail {
-  readonly kind: string;
-  pay(p: { vendor: string; amount: number; memo: string; incidentHash: string }): Promise<ExternalRef>;
-}
-export class MockPayments implements PaymentRail {
-  readonly kind = "mock";
-  private n = 0;
-  async pay(p: { memo: string }) {
-    this.n += 1;
-    return { ref: `mock-pay-${this.n}:${p.memo}`, url: null };
-  }
-}
-
 // ---------- Identity: human-readable names for assets and agents ----------
 export interface IdentityResolver {
   readonly kind: string;

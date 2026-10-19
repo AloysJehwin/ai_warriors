@@ -54,6 +54,23 @@ export class Proof {
   }
 
   /**
+   * The first anchor at or after `seq` and whether it holds: its hash matches the ledger entry it names, and the
+   * external record (HCS message or signed checkpoint) matches too. This is what proves entries up to `seq`.
+   */
+  async covering(seq: number) {
+    const a = (await this.db.query<AnchorRow>("SELECT * FROM anchors WHERE to_seq >= $1 ORDER BY to_seq, id LIMIT 1", [seq])).rows[0];
+    if (!a) return null;
+    const entry = (await this.ledger.range(Number(a.to_seq), Number(a.to_seq)))[0];
+    const external =
+      a.kind === this.anchorAdapter.kind
+        ? await this.anchorAdapter
+            .verify({ toSeq: Number(a.to_seq), entryHash: a.entry_hash, ref: a.ref, data: JSON.parse(a.data_json) })
+            .catch((e: unknown) => ({ ok: false, detail: e instanceof Error ? e.message : String(e) }))
+        : { ok: false, detail: `Anchored with ${a.kind}; this deployment uses ${this.anchorAdapter.kind}` };
+    return { ...toDto(a), matchesChain: entry?.entryHash === a.entry_hash, external };
+  }
+
+  /**
    * Re-walk the whole chain from genesis, then check each anchor against the chain and its
    * external record. `subject` narrows the report to the entries of one run or incident.
    */

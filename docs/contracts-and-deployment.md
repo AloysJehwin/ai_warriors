@@ -2,6 +2,8 @@
 
 Companion to [technical-requirements.md](technical-requirements.md) (TRD). This file covers **everything on-chain** (accounts, native Hedera resources, Solidity contracts, ENS, 0G) and **everything we deploy** (database, API, web, CI/CD), in the order we do it.
 
+> **Current state (19 Oct 2026).** This plan predates v2. What is built: people sign with their own wallets (no server-held role keys, no scheduled transactions); the contracts are `OrdoTrust`, `OrdoWorkOrders` and `OrdoPolicies` (§4, and [contracts/README.md](../contracts/README.md) for deployment); they deploy from GitHub Actions with the operator key in the `hedera-testnet` environment. Sections 2, 3.2 and 7 describe the original design.
+
 > "Contract" in this file means **smart contracts and on-chain resources**. The **API contract** (zod schemas → OpenAPI) is TRD §3.1 and §11 and is built in milestone M0.
 
 ---
@@ -28,8 +30,9 @@ flowchart LR
         hcs["HCS topics<br/>ledger-line02 · build"]
         hts["HTS NFT collection<br/>Ordo Batch (OBATCH)"]
         sch["Scheduled transactions<br/>= approvals"]
-        reg["OrdoPolicyRegistry.sol"]
-        vault["AgentSpendVault.sol"]
+        trust["OrdoTrust.sol"]
+        reg["OrdoPolicies.sol"]
+        vault["OrdoWorkOrders.sol"]
     end
     subgraph eth["Ethereum Sepolia"]
         ens["ENS: ordo-*.eth<br/>subnames + text records"]
@@ -41,8 +44,9 @@ flowchart LR
     api -- "anchor hashes" --> hcs
     api -- "mint / transfer / freeze" --> hts
     api -- "create; role key signs" --> sch
-    api -- "read policy hash" --> reg
-    api -- "Healer pays vendor" --> vault
+    api -- "relay signed grants, releases, slashes" --> trust
+    api -- "publish policy (2 plant managers)" --> reg
+    api -- "agent escrows via Agent Kit; people release" --> vault
     api -- "names + records" --> ens
     api -- "root cause" --> comp
     api -- "evidence JSON" --> stor
@@ -54,14 +58,15 @@ flowchart LR
 | HCS build topic | Hedera native | Proof of work at the event | **Must** |
 | Role accounts with keys | Hedera native | Approvals enforced on-chain | **Must** |
 | Scheduled transactions | Hedera native | Approve = sign | **Must** |
-| `AgentSpendVault` | Solidity on Hedera EVM | Agent payment with hard caps | **Must** (Hedera agentic-payments qualifier) |
+| `OrdoTrust` | Solidity on Hedera EVM | Role credentials, validator stakes, release records, slashing | **Must** (live) |
+| `OrdoWorkOrders` | Solidity on Hedera EVM | Agent pays vendors through escrow, within signed caps | **Must** (Hedera agentic-payments qualifier) |
 | HTS batch NFTs | Hedera native | Reroute / hold on-chain; tokenization track | Should |
-| `OrdoPolicyRegistry` | Solidity on Hedera EVM | Proves which policy the guard used | Should |
+| `OrdoPolicies` | Solidity on Hedera EVM | Which policy and autonomy level each line runs; two plant managers to raise | Should |
 | ENS names + text records | Sepolia, existing ENS contracts | Asset and agent identities | Should |
 | ENS CCIP-Read gateway (live records) | Off-chain resolver | Creative ENS use | Stretch |
 | 0G Compute / Storage | SDK only, no contract | 0G track | Should |
 
-No custom contract is needed for HCS, HTS, scheduled transactions, ENS or 0G. Only two small Solidity contracts are ours.
+No custom contract is needed for HCS, HTS, ENS or 0G. Three Solidity contracts are ours.
 
 ---
 
@@ -77,7 +82,7 @@ All Hedera accounts use **ECDSA secp256k1** keys so the same key works with the 
 | `role-plant-manager` | Key required for high-risk approvals | Sign plant-manager approvals | 20 HBAR |
 | `role-maintenance-lead` | Key for work-order release | Release vault escrow | 20 HBAR |
 | `line-02`, `line-07` | Batch NFTs | Reroute = NFT transfer between them | 10 HBAR each |
-| `agent-healer` | Vault `AGENT_ROLE` | Call `AgentSpendVault.pay / escrow` via Agent Kit | 20 HBAR |
+| `agent-maintenance` | Caps in `OrdoWorkOrders`, signed by a site admin | Call `OrdoWorkOrders.escrow` via Agent Kit | 20 HBAR |
 | `vendor-acme` | Payee | Receives maintenance payments | 1 HBAR |
 | EVM wallet (Sepolia) | ENS parent name | Create subnames, set records | 0.2 Sepolia ETH |
 | EVM wallet (0G testnet) | 0G tokens | Compute broker deposit, storage fees | Faucet |
@@ -122,65 +127,46 @@ Check on the day that the inner transaction type is schedulable (crypto/token tr
 
 ## 4. Solidity contracts (Hedera EVM)
 
-Foundry project in `chain/evm/`, Solidity 0.8.x, OpenZeppelin 5 (`AccessControl`, `Pausable`, `ReentrancyGuard`). RPC: Hashio testnet `https://testnet.hashio.io/api`, chain id **296**. Verify on Sourcify (`forge verify-contract --chain-id 296 --verifier sourcify`); verified source shows on HashScan.
+`contracts/src`, Solidity 0.8.x compiled with npm `solc` (no Foundry), OpenZeppelin `ReentrancyGuard` only, `evmVersion: shanghai` so tests run on an in-process EVM. RPC: Hashio testnet `https://testnet.hashio.io/api`, chain id **296**.
 
-### 4.1 `AgentSpendVault` — agents can pay, but only within hard limits
+Every authorisation is an Ordo EIP-712 signature (`OrdoSignature`, domain `{name: "Ordo", version: "1", chainId}`) — the typed data people sign in the console. Ordo's relayer only pays gas; each contract recovers the signer, checks the action, site and entity, and burns the nonce. `OrdoSigned` holds that logic for the newer contracts.
 
-Why: Hedera's agentic-payments tracks need an AI agent to move value. Giving the agent a raw key with an HBAR balance contradicts Ordo's whole safety story. The vault makes the guardrails on-chain.
+### 4.1 `OrdoTrust` — who may decide what
 
-```solidity
-// roles: DEFAULT_ADMIN_ROLE (ordo-admin), AGENT_ROLE (agent-healer), RELEASER_ROLE (role-maintenance-lead)
-struct Caps { uint256 perTx; uint256 perDay; }
-mapping(address => Caps) public caps;            // per agent
-mapping(address => bool) public vendorAllowed;   // allow-listed payees
-struct WorkOrder { address agent; address vendor; uint256 amount; uint64 expiresAt; uint8 status; bytes32 incidentHash; }
-mapping(bytes32 => WorkOrder) public workOrders; // id = keccak(workOrderId)
+Per-site role bits (OPERATOR, SUPERVISOR, VALIDATOR, PLANT_MANAGER, ADMIN, VENDOR), granted and revoked with a site admin's signature. Validators stake; only an active staked validator's signature can be recorded as a release reviewer or approver. Slashing takes two other active validators and a plant manager, and pays the site's quality fund. Live at [`0x608cba52976e34fa160fe64ff0499a8a5a4eb9e1`](https://hashscan.io/testnet/contract/0x608cba52976e34fa160fe64ff0499a8a5a4eb9e1).
 
-function escrow(bytes32 id, address vendor, uint256 amount, uint64 ttl, bytes32 incidentHash) external onlyRole(AGENT_ROLE) whenNotPaused;
-function release(bytes32 id) external onlyRole(RELEASER_ROLE) nonReentrant whenNotPaused;  // human confirms work done
-function refund(bytes32 id) external;                                                     // anyone, after expiry
-function pay(address vendor, uint256 amount, bytes32 incidentHash) external onlyRole(AGENT_ROLE) nonReentrant whenNotPaused; // small direct payments under perTx
-function setCaps(address agent, Caps calldata c) external onlyRole(DEFAULT_ADMIN_ROLE);
-function setVendor(address vendor, bool ok) external onlyRole(DEFAULT_ADMIN_ROLE);
-function pause() / unpause() external onlyRole(DEFAULT_ADMIN_ROLE);                      // kill switch
-event Escrowed(bytes32 indexed id, address indexed vendor, uint256 amount, bytes32 incidentHash);
-event Released(bytes32 indexed id); event Refunded(bytes32 indexed id); event Paid(address indexed vendor, uint256 amount, bytes32 incidentHash);
-```
+### 4.2 `OrdoWorkOrders` — the agent can pay, but only within hard limits
 
-Rules: reverts if vendor not allowed, amount > perTx, or the agent's rolling 24 h total would exceed perDay. `incidentHash` links every payment to the Ordo ledger entry.
-
-**Tests (Foundry):** unit tests per function and role; fuzz `pay/escrow` amounts against caps; invariant "sum paid by an agent in any 24 h window ≤ perDay"; pause blocks everything except `refund`; reentrancy test with a malicious vendor.
-
-**Hedera gotcha to test first:** HBAR has 8 decimals (tinybar) inside the EVM while JSON-RPC tools use 18-decimal weibar for `value`. Write one test transaction on testnet that funds the vault and reads `address(this).balance` before writing caps, and store caps in tinybar.
-
-**Agent Kit wiring:** the Healer gets one custom Agent Kit tool, `ordo_vault_escrow`, built with `@hashgraph/hedera-agent-kit` v4 that calls the vault. The kit's generic transfer tools are **not** given to the agent.
-
-### 4.2 `OrdoPolicyRegistry` — which policy made the call
+Why: Hedera's agentic-payments track needs an AI agent to move value. Giving the agent a raw key with a balance contradicts Ordo's safety story; this contract makes the guardrails on-chain.
 
 ```solidity
-struct Policy { uint8 autonomyLevel; bytes32 policyHash; uint32 version; uint64 updatedAt; }
-mapping(bytes32 => Policy) public policies;   // key = keccak("LINE-02")
-function setPolicy(bytes32 line, uint8 level, bytes32 policyHash, uint32 version) external onlyRole(PLANT_MANAGER_ROLE);
-event PolicyUpdated(bytes32 indexed line, uint8 level, bytes32 policyHash, uint32 version, address by);
+function fund(string siteId) payable;                                                    // anyone
+function setAgent(string siteId, address agent, uint256 perOrder, uint256 perDay, OrdoSig sig); // site admin signs "agent.caps"
+function setPaused(string siteId, bool stop, OrdoSig sig);                                // admin or plant manager: kill switch
+function escrow(string siteId, string workOrderId, address vendor, uint256 amount, uint64 ttl, bytes32 incidentHash); // msg.sender = the agent
+function release(string siteId, string workOrderId, OrdoSig sig);                         // supervisor or plant manager signs "workorder.release"
+function refund(string siteId, string workOrderId);                                       // anyone, after expiry
+function withdraw(string siteId, address to, uint256 amount, OrdoSig sig);                // site admin
 ```
 
-The API hashes `policies/default.yaml` (canonical form) at startup and refuses to run L3/L4 automation if it differs from the registry. The Verify page shows "policy v1 ✔ matches on-chain". Changing autonomy in the UI becomes an on-chain, attributable event.
+Escrow reverts unless the vendor holds the site's `VENDOR` credential in `OrdoTrust`, the amount is within the agent's per-order cap and its per-day total, the site's fund covers it, and the agent is not paused. `incidentHash` links every escrow to the Ordo ledger entry that justified it. State changes before every transfer, and transfers are `nonReentrant` (tested with a malicious vendor).
 
-**Tests:** only plant manager can set; version must increase; event emitted.
+**Agent Kit wiring:** the maintenance agent has its own Hedera account. On Hedera it escrows through `@hashgraph/hedera-agent-kit` v4 with one custom tool, `ordo_escrow_work_order_tool` (`server/src/chain/agent-kit.ts`), behind an Agent Kit policy that blocks any escrow Ordo did not open (vendor, amount and id must match the work order), and with Agent Kit's HCS audit hook writing each call to the ledger topic. The kit's generic transfer tools are not given to the agent.
 
-### 4.3 Deployment steps
+### 4.3 `OrdoPolicies` — which policy made the call
 
-```bash
-cd chain/evm
-forge build && forge test -vvv
-forge script script/Deploy.s.sol --rpc-url hedera_testnet --broadcast --slow   # deploys both, sets roles, caps, vendor allow-list
-forge verify-contract <addr> src/AgentSpendVault.sol:AgentSpendVault --chain-id 296 --verifier sourcify
-pnpm chain:export-abi   # writes ABIs + addresses to packages/chain-abi and chain/deployments/hedera-testnet.json
+```solidity
+struct Update { string lineId; uint8 level; bytes32 policyHash; uint32 version; }
+function publish(string siteId, Update u, OrdoSig[] sigs);   // each signs "policy.publish", entity "<line>#L<level>#<hash>#<version>"
 ```
 
-Then: fund the vault from `ordo-admin`, call `setPolicy` for LINE-02 with the hash of the policy file, and run the smoke script (§7).
+Raising a line's autonomy, or changing its policy file, needs two different plant managers; lowering under the same policy needs one, so anyone responsible can always make a line safer. Ordo applies the same rule in the app and publishes each applied change.
 
-Contracts are **immutable** — no proxies. A fix means deploy a new address, update `deployments/*.json`, redeploy the API. Fine for a testnet MVP and easier to audit.
+### 4.4 Deployment
+
+From GitHub Actions, with the operator account in the `hedera-testnet` environment: **Deploy OrdoTrust** and **Hedera setup** (`topic`, `contracts`, `agent`). See [contracts/README.md](../contracts/README.md). The logs print only public values; the agent's key goes straight to Vercel.
+
+Contracts are **immutable** — no proxies. A fix means deploying a new address and updating the `TRUST_*` variables. Fine for a testnet MVP and easier to audit.
 
 ---
 

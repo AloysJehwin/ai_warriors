@@ -14,20 +14,23 @@ import { Settings } from "./pages/Settings";
 import { TeamPage } from "./pages/Team";
 import { Templates } from "./pages/Templates";
 import { Validation } from "./pages/Validation";
+import { WorkOrders } from "./pages/WorkOrders";
 
-const NAV: { page: string; label: string; icon: string; count?: "approvals" | "validation" | "onboarding" }[] = [
+type Count = "approvals" | "validation" | "onboarding" | "workOrders" | "autonomy";
+const NAV: { page: string; label: string; icon: string; count?: Count }[] = [
   { page: "pipelines", label: "Pipelines", icon: "pipelines" },
   { page: "validation", label: "Validation", icon: "validation", count: "validation" },
   { page: "templates", label: "Templates", icon: "templates" },
   { page: "history", label: "Run history", icon: "history" },
   { page: "floor", label: "Floor & fleet", icon: "floor" },
   { page: "approvals", label: "Approvals", icon: "approvals", count: "approvals" },
+  { page: "work-orders", label: "Work orders", icon: "workorders", count: "workOrders" },
   { page: "builder", label: "Builder", icon: "builder" },
 ];
-const ADMIN_NAV: { page: string; label: string; icon: string; count?: "approvals" | "validation" | "onboarding" }[] = [
+const ADMIN_NAV: { page: string; label: string; icon: string; count?: Count }[] = [
   { page: "team", label: "Team & validators", icon: "team", count: "onboarding" },
   { page: "proof", label: "Proof & ledger", icon: "proof" },
-  { page: "settings", label: "Settings", icon: "settings" },
+  { page: "settings", label: "Settings", icon: "settings", count: "autonomy" },
 ];
 
 function Clock({ tz }: { tz: string }) {
@@ -78,11 +81,14 @@ export function Shell({ onSignOut, onSwitchSite }: { onSignOut: () => void; onSw
     case "settings":
       page = <Settings />;
       break;
+    case "work-orders":
+      page = <WorkOrders />;
+      break;
     default:
       page = <Pipelines />;
   }
-  const navItem = (n: { page: string; label: string; icon: string; count?: "approvals" | "validation" | "onboarding" }) => {
-    const c = n.count && live ? live.counts[n.count] : 0;
+  const navItem = (n: { page: string; label: string; icon: string; count?: Count }) => {
+    const c = n.count && live ? (live.counts[n.count] ?? 0) : 0;
     return (
       <a key={n.page} href={href(n.page)} className={route.page === n.page || (route.page === "pipelines" && n.page === "pipelines") ? "active" : ""}>
         <Icon name={n.icon} />

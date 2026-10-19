@@ -1,28 +1,23 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-interface IVault {
-    function release(bytes32 id) external;
-    function pay(address payable vendor, uint256 amount, bytes32 incidentHash) external;
-}
-
-/// Test helper: a malicious vendor that tries to re-enter the vault when paid.
+/// Test helper: a malicious vendor that tries to call back into the contract paying it.
 contract ReentrantVendor {
-    IVault public vault;
-    bytes32 public id;
+    address public target;
+    bytes public data;
     bool public attempted;
     bool public reentered;
 
-    function arm(IVault v, bytes32 i) external {
-        vault = v;
-        id = i;
+    /// The call to try from receive(), e.g. an ABI-encoded release of another work order.
+    function arm(address t, bytes calldata d) external {
+        target = t;
+        data = d;
     }
 
     receive() external payable {
         if (attempted) return;
         attempted = true;
-        try vault.release(id) {
-            reentered = true;
-        } catch {}
+        (bool ok, ) = target.call(data);
+        reentered = ok;
     }
 }

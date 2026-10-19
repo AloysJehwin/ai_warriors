@@ -18,6 +18,10 @@ const Env = z.object({
   VERCEL: z.string().optional(),
   VERCEL_ENV: z.string().optional(),
   VERCEL_GIT_COMMIT_SHA: z.string().optional(),
+  /** Vercel sets this to the production domain; public links (lot passports, QR codes) use it when PUBLIC_URL is unset */
+  VERCEL_PROJECT_PRODUCTION_URL: z.string().optional(),
+  /** Base URL people and wallets reach this deployment at, e.g. https://aiwarriors.vercel.app */
+  PUBLIC_URL: z.string().url().optional(),
 
   // ---- Accounts ----
   SESSION_TTL_HOURS: z.coerce.number().min(1).max(24 * 30).default(72),
@@ -40,6 +44,10 @@ const Env = z.object({
   TRUST_SYMBOL: z.string().default("HBAR"),
   /** decimals of native value inside the contract: 8 on Hedera (tinybars), 18 on other EVM chains */
   TRUST_DECIMALS: z.coerce.number().int().min(0).max(18).default(8),
+  /** OrdoWorkOrders: the maintenance agent escrows vendor payments within caps an admin signed */
+  TRUST_WORKORDERS_ADDRESS: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
+  /** OrdoPolicies: raising a line's autonomy needs two plant managers' signatures */
+  TRUST_POLICIES_ADDRESS: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
 
   // ---- Agents ----
   LLM_PROVIDER: z.enum(["offline", "gemini", "openai_compat", "0g"]).default("offline"),
@@ -55,7 +63,6 @@ const Env = z.object({
   LEDGER_SIGNING_KEY: z.string().optional(),
   /** Anchor the ledger head after this many new entries (and at least every 30 minutes when there are any). */
   ANCHOR_EVERY: z.coerce.number().int().min(1).default(50),
-  PAYMENTS: z.enum(["mock", "hedera"]).default("mock"),
   IDENTITY: z.enum(["plain", "ens"]).default("plain"),
   EVIDENCE_STORE: z.enum(["local", "0g"]).default("local"),
   DEMO_TAMPER: bool,
@@ -64,14 +71,12 @@ const Env = z.object({
   HEDERA_OPERATOR_ID: z.string().optional(),
   HEDERA_OPERATOR_KEY: z.string().optional(),
   HEDERA_TOPIC_ID: z.string().optional(),
+  /** The maintenance agent's own account: it signs the escrow for a work order (with HEDERA_AGENT_ID, through Hedera Agent Kit) */
   HEDERA_AGENT_ID: z.string().optional(),
   HEDERA_AGENT_KEY: z.string().optional(),
-  HEDERA_VENDOR_ID: z.string().optional(),
-  HEDERA_VAULT_ADDRESS: z.string().optional(),
   HEDERA_MIRROR_URL: z.string().optional(),
-  HEDERA_POLICY_REGISTRY_ADDRESS: z.string().optional(),
-  HEDERA_JSON_RPC_URL: z.string().default("https://testnet.hashio.io/api"),
-  HEDERA_VENDOR_EVM: z.string().optional(),
+  /** HTS NFT collection for lot passports (the operator is treasury, supply and metadata key) */
+  HEDERA_PASSPORT_TOKEN_ID: z.string().optional(),
 
   ENS_RPC_URL: z.string().optional(),
   ENS_PARENT_NAME: z.string().optional(),
@@ -83,5 +88,9 @@ const Env = z.object({
 });
 
 export type Config = z.infer<typeof Env>;
+/** Where the public can reach this deployment, for links that leave the app (NFT metadata, QR codes). */
+export const publicBase = (c: Config): string | null =>
+  (c.PUBLIC_URL ?? (c.VERCEL_PROJECT_PRODUCTION_URL ? `https://${c.VERCEL_PROJECT_PRODUCTION_URL}` : null))?.replace(/\/$/, "") ?? null;
+
 export const timerEnabled = (c: Config) => (c.ENGINE_TIMER === "auto" ? !c.VERCEL : c.ENGINE_TIMER === "on");
 export const loadConfig = (env: NodeJS.ProcessEnv = process.env): Config => Env.parse(env);

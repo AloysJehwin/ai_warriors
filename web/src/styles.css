@@ -306,6 +306,8 @@ td.wrap { max-width: 360px; }
 .kpi-row { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
 .kpi .v { font-size: 24px; font-weight: 500; margin-top: 6px; font-variant-numeric: tabular-nums; }
 .kpi .s { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.kpis.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.kpi .s .btn { display: block; margin-top: 8px; }
 .bars { display: flex; gap: 4px; margin: 10px 0 8px; }
 .bars span { flex: 1; height: 6px; border-radius: 2px; border: 1px solid var(--accent); }
 .bars span.on { background: var(--accent); }
@@ -507,6 +509,8 @@ svg.flow { display: block; margin: 0 auto; overflow: visible; }
   .main { padding: 18px 16px 40px; }
   .kpis { margin: 0 -16px 18px; }
   .kpis.line { grid-template-columns: 1fr 1fr; }
+  .kpis.three { grid-template-columns: 1fr; }
+  .kpis.three .kpi { border-right: 0; border-bottom: 1px solid var(--divider); padding-left: 16px; }
   .kpi:first-child { padding-left: 16px; }
   .stream .row { grid-template-columns: 1fr; gap: 2px; }
   .b-grid { grid-template-columns: 1fr; margin: 0; }
@@ -531,3 +535,29 @@ svg.flow { display: block; margin: 0 auto; overflow: visible; }
 .my-apps { margin-top: 22px; border-top: 1px solid var(--divider); padding-top: 12px; }
 .my-apps .label { margin-bottom: 4px; }
 .apply .drop { padding: 14px; }
+
+/* ---------- Lot passport (public page and run dialog) ---------- */
+.pp { max-width: 980px; margin: 0 auto; padding: 32px 24px 48px; }
+.pp-brand { font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); }
+.pp-head { display: flex; justify-content: space-between; gap: 24px; align-items: flex-start; margin-bottom: 18px; }
+.pp-head h1 { margin: 6px 0; }
+.pp-qr { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.pp-qr .qr { border: 1px solid var(--divider); border-radius: 8px; background: #fff; }
+.pp-card { border: 1px solid var(--divider); border-radius: var(--radius); background: var(--surface); padding: 16px 18px; margin: 14px 0; }
+.pp-card h2 { margin: 0 0 10px; font-size: 16px; }
+.pp-checks { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+.pp-check { display: grid; grid-template-columns: 20px 1fr; gap: 6px; overflow-wrap: anywhere; }
+.pp-check.ok > span:first-child { color: var(--ok); font-weight: 600; }
+.pp-check.bad > span:first-child { color: var(--bad); font-weight: 600; }
+.pp-signers, .pp-list { list-style: none; padding: 0; margin: 6px 0 0; display: grid; gap: 6px; }
+.pp-signers li { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.pp-release + .pp-release { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--divider); }
+.pp-foot { text-align: center; margin-top: 24px; }
+.pp-modal { display: grid; grid-template-columns: auto 1fr; gap: 20px; align-items: start; }
+.pp-ship { display: grid; gap: 8px; margin-top: 10px; }
+@media (max-width: 760px) {
+  .pp { padding: 18px 16px 40px; }
+  .pp-head { flex-direction: column; }
+  .pp-qr { align-self: center; }
+  .pp-modal { grid-template-columns: 1fr; justify-items: start; }
+}

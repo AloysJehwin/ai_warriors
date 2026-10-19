@@ -1,15 +1,21 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../api";
 import { useApp } from "../lib/app";
-import { LEVEL_LABEL } from "../lib/format";
+import { ago, LEVEL_LABEL, shortAddr } from "../lib/format";
+import type { AutonomyLevel, AutonomyProposalView } from "../types";
 import { Action, Field, useToast } from "../ui/kit";
 import { AutonomyModal } from "./Pipelines";
 
 export function Settings() {
-  const { status, site, can, path, reloadSite, meta } = useApp();
+  const { status, site, can, path, reloadSite, meta, me } = useApp();
   const [zone, setZone] = useState("");
-  const [auto, setAuto] = useState<string | null>(null);
+  const [auto, setAuto] = useState<{ lineId: string; to?: AutonomyLevel } | null>(null);
+  const [proposals, setProposals] = useState<AutonomyProposalView[]>([]);
   const toast = useToast();
+  useEffect(() => {
+    void api.get<AutonomyProposalView[]>(path("/autonomy/proposals")).then(setProposals);
+  }, [path, site]);
+  const open = proposals.filter((p) => p.status === "open");
   const admin = can("admin") || can("plant_manager");
   return (
     <div>
@@ -29,12 +35,36 @@ export function Settings() {
                     {l.autonomy} · {LEVEL_LABEL[l.autonomy]}
                   </span>
                 </span>
-                <button type="button" className="btn sm" onClick={() => setAuto(l.id)}>
+                <button type="button" className="btn sm" onClick={() => setAuto({ lineId: l.id })}>
                   Change
                 </button>
               </div>
             ))}
-            <p className="faint small">Changing autonomy is signed by a plant manager and recorded in the ledger.</p>
+            {open.map((p) => (
+              <div key={p.id} className="notice warn">
+                <b>
+                  {p.lineName}: {p.from} → {p.to}
+                </b>{" "}
+                <span className="small">
+                  signed by {p.signers.map((x) => x.name ?? shortAddr(x.address)).join(", ")} {ago(p.createdAt)} · {p.signers.length} of {p.required}
+                </span>
+                {p.comment && <p className="small">“{p.comment}”</p>}
+                {p.signers.some((x) => x.address === me.user!.address) ? (
+                  <p className="small">Waiting for another plant manager to co-sign.</p>
+                ) : (
+                  can("plant_manager") && (
+                    <div className="btns">
+                      <button type="button" className="btn accent sm" onClick={() => setAuto({ lineId: p.lineId, to: p.to })}>
+                        Review and co-sign
+                      </button>
+                    </div>
+                  )
+                )}
+              </div>
+            ))}
+            <p className="faint small">
+              Lowering autonomy takes one plant manager's signature. Raising it takes two{status.trust?.policies ? ", and is published to OrdoPolicies on-chain" : ""}. Every change is recorded in the ledger.
+            </p>
           </div>
         </section>
         <section className="card">
@@ -131,7 +161,18 @@ export function Settings() {
           </div>
         </section>
       </div>
-      {auto && <AutonomyModal open onClose={() => setAuto(null)} lineId={auto} current={site.lines.find((l) => l.id === auto)!.autonomy} />}
+      {auto && (
+        <AutonomyModal
+          open
+          onClose={() => {
+            setAuto(null);
+            void api.get<AutonomyProposalView[]>(path("/autonomy/proposals")).then(setProposals);
+          }}
+          lineId={auto.lineId}
+          current={site.lines.find((l) => l.id === auto.lineId)!.autonomy}
+          initial={auto.to}
+        />
+      )}
     </div>
   );
 }

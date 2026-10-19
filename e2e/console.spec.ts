@@ -168,4 +168,48 @@ test("sign in, set up a site, build, run, sign a gate, verify", async ({ page })
   await page.getByRole("link", { name: "Run history" }).click();
   await page.locator(".date .sel-btn").click();
   await shot(page, "10-history-calendar");
+  await page.keyboard.press("Escape");
+
+  // ---- Work orders: without OrdoWorkOrders the agent assigns vendors but moves no money ----
+  await page.getByRole("link", { name: "Work orders" }).click();
+  await expect(page.getByText("Agent payments are off.")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Work orders", exact: true })).toBeVisible();
+  await shot(page, "13-work-orders");
+
+  // ---- Raising autonomy needs a second plant manager ----
+  await page.getByRole("link", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Change" }).first().click();
+  const auto = page.getByRole("dialog", { name: /How much may agents do/ });
+  await auto.getByRole("button", { name: /^L4/ }).click();
+  await expect(auto.getByText("Raising autonomy takes two plant managers' signatures")).toBeVisible();
+  await auto.getByRole("button", { name: "Sign (1 of 2)" }).click();
+  await page.getByRole("dialog", { name: /Set autonomy to L4/ }).getByRole("button", { name: "Sign with wallet" }).click();
+  // the line stays at L2; the proposal waits for another plant manager
+  await expect(page.locator(".notice.warn")).toContainText("L2 → L4");
+  await expect(page.locator(".notice.warn")).toContainText("1 of 2");
+  await expect(page.locator(".notice.warn")).toContainText("Waiting for another plant manager");
+  await expect(page.locator(".side .accent-text")).toContainText("L2");
+  await shot(page, "14-autonomy-proposal");
+
+  // ---- The lot's passport: QR, ship with a signature, and the public page without signing in ----
+  await page.getByRole("link", { name: "Pipelines" }).click();
+  await page.getByRole("button", { name: "Lot passport" }).click();
+  const pp = page.getByRole("dialog", { name: /Lot SO-7781/ });
+  await expect(pp.getByRole("img", { name: /QR code/ })).toBeVisible();
+  await pp.getByRole("group", { name: /Ship to/ }).locator("input").fill("0.0.4242");
+  await pp.getByRole("button", { name: "Sign and ship" }).click();
+  await page.getByRole("dialog", { name: /Ship lot SO-7781/ }).getByRole("button", { name: "Sign with wallet" }).click();
+  await expect(pp).toContainText("Shipped");
+  const publicUrl = await pp.getByRole("link", { name: "Open the public page" }).getAttribute("href");
+  await shot(page, "15-passport-dialog");
+  const anon = await page.context().browser()!.newContext({ viewport: { width: 390, height: 844 } });
+  const pub = await anon.newPage();
+  await pub.goto(publicUrl!);
+  await expect(pub.getByRole("heading", { name: "Lot SO-7781" })).toBeVisible();
+  await expect(pub.getByText("Shipped").first()).toBeVisible();
+  await expect(pub.getByText(/every hash links/)).toBeVisible();
+  await expect(pub.getByRole("heading", { name: "Stage by stage" })).toBeVisible();
+  await expect(pub.getByRole("img", { name: /QR code/ })).toBeVisible();
+  if (shotDir) await pub.screenshot({ path: `${shotDir}/16-public-passport-mobile.png`, fullPage: true });
+  await anon.close();
 });

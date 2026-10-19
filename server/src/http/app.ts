@@ -164,6 +164,15 @@ export function createApp(sys: System, opts: AppOptions = {}) {
     return c.json(await sys.trust.attach(c.req.param("siteId"), me(c).user, c.req.param("id"), { name: file.name, mime: file.type || "application/octet-stream", bytes: new Uint8Array(await file.arrayBuffer()) }));
   });
 
+  // ---------------- Lot passports: public, no sign-in (the QR code on a shipped lot and the NFT metadata) ----------------
+  app.get("/v1/public/passports/:runId", async (c) => {
+    const id = c.req.param("runId");
+    if (!/^[\w-]{1,64}$/.test(id)) throw new HttpError(404, "No passport for this lot");
+    c.header("access-control-allow-origin", "*");
+    c.header("cache-control", "public, max-age=30");
+    return c.json(await sys.passports.publicView(id));
+  });
+
   // ---------------- Site scope ----------------
   const site = new Hono<Env>();
   site.use("*", async (c, next) => {
@@ -199,26 +208,17 @@ export function createApp(sys: System, opts: AppOptions = {}) {
     return c.json({ ok: true });
   });
 
-  // Autonomy is a signed decision by the plant manager.
+  // Autonomy is a policy decision: lowering takes one plant manager's signature, raising takes two.
   site.post("/lines/:lineId/autonomy/sign-request", async (c) => {
-    need(c, "plant_manager");
     const b = await body(c, z.object({ level: AutonomyLevel, comment: z.string().max(500).default(""), chainId: z.number().int().optional() }));
-    const s = await sys.plant.site(sid(c));
-    const line = s.lines.find((l) => l.id === c.req.param("lineId"));
-    if (!line) throw new HttpError(404, "Line not found");
-    return c.json(await sys.sigs.request(me(c).user, { action: "autonomy.set", entity: `${line.id}#${b.level}`, meaning: `Set ${line.name} autonomy ${line.autonomy} → ${b.level}`, comment: b.comment, site: sid(c), chainId: b.chainId ?? sys.cfg.SIGNATURE_CHAIN_ID }));
+    return c.json(await sys.autonomy.request(sid(c), me(c).user, c.get("roles"), c.req.param("lineId"), b));
   });
   site.put("/lines/:lineId/autonomy", async (c) => {
-    need(c, "plant_manager");
     const b = await body(c, SignedBody.extend({ level: AutonomyLevel, comment: z.string().max(500).default("") }));
-    const lineId = c.req.param("lineId");
-    const before = (await sys.plant.site(sid(c))).lines.find((l) => l.id === lineId);
-    if (!before) throw new HttpError(404, "Line not found");
-    const sig = await sys.db.tx((q) => sys.sigs.consume(q, me(c).user, { action: "autonomy.set", entity: `${lineId}#${b.level}` }, b));
-    await sys.plant.setAutonomy(sid(c), lineId, b.level);
-    await sys.rec.decide(sid(c), { agent: actor(c), kind: "autonomy.set", summary: `${before.name} autonomy ${before.autonomy} → ${b.level}`, reason: b.comment || null, data: { lineId, from: before.autonomy, to: b.level, signatureId: sig.id, typedData: sig.typed, signature: b.signature } });
-    return c.json(await sys.plant.site(sid(c)));
+    const proposal = await sys.autonomy.sign(sid(c), me(c).user, c.get("roles"), c.req.param("lineId"), b);
+    return c.json({ site: await sys.plant.site(sid(c)), proposal });
   });
+  site.get("/autonomy/proposals", async (c) => c.json(await sys.autonomy.list(sid(c))));
 
   // ---- Team ----
   site.get("/team", async (c) => {
@@ -331,6 +331,10 @@ export function createApp(sys: System, opts: AppOptions = {}) {
     const id = await sys.engine.start(sid(c), actor(c), b);
     return c.json(await sys.engine.view(sid(c), id));
   });
+  site.get("/runs/:runId/passport", async (c) => c.json(await sys.passports.get(sid(c), c.req.param("runId"))));
+  const ShipTo = z.object({ to: z.string().regex(/^(0\.0\.\d+|0x[0-9a-fA-F]{40})$/, "A Hedera account id (0.0.x) or an EVM address") });
+  site.post("/runs/:runId/ship/sign-request", async (c) => c.json(await sys.passports.shipRequest(sid(c), me(c).user, c.get("roles"), c.req.param("runId"), (await body(c, ShipTo)).to)));
+  site.post("/runs/:runId/ship", async (c) => c.json(await sys.passports.ship(sid(c), me(c).user, c.get("roles"), c.req.param("runId"), await body(c, SignedBody.merge(ShipTo)))));
   site.get("/runs/:runId", async (c) => {
     const runId = c.req.param("runId");
     const [run, decisions, inbox] = await Promise.all([sys.engine.view(sid(c), runId), sys.rec.decisions(sid(c), { runId, limit: 200 }), sys.inbox.list(sid(c), { runId, status: "all" })]);
@@ -518,6 +522,20 @@ export function createApp(sys: System, opts: AppOptions = {}) {
     return c.json(await sys.trust.proposals(sid(c)));
   });
 
+  // ---- Work orders: the agent escrows vendor payments, people release them ----
+  const Caps = z.object({ perOrder: z.string().regex(/^\d+$/), perDay: z.string().regex(/^\d+$/) });
+  site.get("/work-orders", async (c) => c.json({ setup: await sys.workOrders.status(sid(c)), items: await sys.workOrders.list(sid(c)) }));
+  site.post("/work-orders/caps/sign-request", async (c) => c.json(await sys.workOrders.capsRequest(sid(c), me(c).user, c.get("roles"), await body(c, Caps))));
+  site.put("/work-orders/caps", async (c) => c.json(await sys.workOrders.setCaps(sid(c), me(c).user, c.get("roles"), await body(c, SignedBody.merge(Caps)))));
+  site.post("/work-orders/pause/sign-request", async (c) => c.json(await sys.workOrders.pauseRequest(sid(c), me(c).user, c.get("roles"), (await body(c, z.object({ stop: z.boolean() }))).stop)));
+  site.put("/work-orders/pause", async (c) => {
+    const b = await body(c, SignedBody.extend({ stop: z.boolean() }));
+    return c.json(await sys.workOrders.setPaused(sid(c), me(c).user, c.get("roles"), b.stop, b));
+  });
+  site.post("/work-orders/:id/release/sign-request", async (c) => c.json(await sys.workOrders.releaseRequest(sid(c), me(c).user, c.get("roles"), c.req.param("id"))));
+  site.post("/work-orders/:id/release", async (c) => c.json(await sys.workOrders.release(sid(c), me(c).user, c.get("roles"), c.req.param("id"), await body(c, SignedBody))));
+  site.post("/work-orders/:id/retry", async (c) => c.json(await sys.workOrders.retryEscrow(sid(c), c.get("roles"), c.req.param("id"))));
+
   // ---- Ledger & proof ----
   site.get("/ledger", async (c) => {
     const subject = c.req.query("subject") || undefined;
@@ -558,6 +576,8 @@ export function createApp(sys: System, opts: AppOptions = {}) {
         approvals: inbox.filter((i) => canApproveAny(roles, i.requiredRole)).length,
         validation: validation.filter((v) => v.needsMe).length,
         onboarding: canApproveAny(roles, "admin") ? (await sys.trust.list(s, "pending")).length : 0,
+        workOrders: canApproveAny(roles, "maintenance_lead") ? (await sys.db.query("SELECT 1 FROM work_orders WHERE site_id = $1 AND status IN ('escrowed', 'escrow_failed')", [s])).rows.length : 0,
+        autonomy: canApproveAny(roles, "plant_manager") ? (await sys.autonomy.list(s)).filter((p) => p.status === "open" && !p.signers.some((x) => x.address === me(c).user.address)).length : 0,
       },
     });
   });

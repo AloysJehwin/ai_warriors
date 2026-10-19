@@ -203,14 +203,35 @@ describe("agents on real telemetry", () => {
     expect(r.status).toBe(200);
     const runs = (await admin.call("GET", `${S()}/runs`)).json;
     expect(runs.some((x: any) => x.templateName === "Predictive maintenance" && x.orderRef.includes("CNC-01"))).toBe(true);
+    // the work order is recorded; with no vendor onboarded and no contract it is unassigned, nothing is paid
+    const wo = (await admin.call("GET", `${S()}/work-orders`)).json;
+    expect(wo.setup.configured).toBe(false);
+    expect(wo.items[0]).toMatchObject({ status: "unassigned", vendor: null, escrow: null });
   });
 
-  it("autonomy changes need the plant manager's signature", async () => {
+  it("raising autonomy needs two plant managers' signatures, lowering one", async () => {
     const lineId = (await admin.call("GET", S())).json.lines[0].id;
+    const change = async (who: Client, level: string) => {
+      const typed = (await who.call("POST", `${S()}/lines/${lineId}/autonomy/sign-request`, { level })).json;
+      return who.call("PUT", `${S()}/lines/${lineId}/autonomy`, { level, nonce: typed.message.nonce, signature: await who.sign(typed) });
+    };
     expect((await operator.call("POST", `${S()}/lines/${lineId}/autonomy/sign-request`, { level: "L3" })).status).toBe(403);
-    const typed = (await pm.call("POST", `${S()}/lines/${lineId}/autonomy/sign-request`, { level: "L3" })).json;
-    const r = await pm.call("PUT", `${S()}/lines/${lineId}/autonomy`, { level: "L3", nonce: typed.message.nonce, signature: await pm.sign(typed) });
-    expect(r.json.lines[0].autonomy).toBe("L3");
+    // raise to L3: the first plant manager's signature opens a proposal, the line does not change yet
+    let r = await change(pm, "L3");
+    expect(r.json.proposal).toMatchObject({ status: "open", required: 2, from: "L2", to: "L3" });
+    expect(r.json.site.lines[0].autonomy).toBe("L2");
+    expect((await change(pm, "L3")).status).toBe(409); // the same person cannot sign twice
+    // the admin co-signs: applied, and the policy version moves on
+    r = await change(admin, "L3");
+    expect(r.json.proposal).toMatchObject({ status: "applied", version: 1 });
+    expect(r.json.proposal.signers).toHaveLength(2);
+    expect(r.json.site.lines[0].autonomy).toBe("L3");
+    // lowering is one signature, applied at once
+    r = await change(pm, "L2");
+    expect(r.json.proposal).toMatchObject({ status: "applied", required: 1, version: 2 });
+    expect(r.json.site.lines[0].autonomy).toBe("L2");
+    const decisions = (await admin.call("GET", `${S()}/decisions?limit=100`)).json;
+    expect(decisions.filter((d: any) => d.kind === "autonomy.set")).toHaveLength(2);
   });
 });
 
@@ -279,3 +300,78 @@ describe("proof", () => {
     expect(Array.isArray(l.json.assets)).toBe(true);
   });
 });
+
+describe("lot passports", () => {
+  it("every run has a passport; the public page needs no sign-in and shows the signed gate and the ledger proof", async () => {
+    await tick();
+    const p = (await admin.call("GET", `${S()}/runs/${runId}/passport`)).json;
+    expect(p).toMatchObject({ runId, status: "completed", nft: null, shipment: null });
+    expect(p.pageUrl).toBe(`/#/passport/${runId}`);
+    const res = await app.request(`/v1/public/passports/${runId}`, { headers: { host: "localhost" } });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("access-control-allow-origin")).toBe("*");
+    const pub = (await res.json()) as any;
+    expect(pub.name).toBe("Lot SO-7781");
+    expect(pub.properties).toMatchObject({ runId, status: "completed", quantity: 10 });
+    expect(pub.passport.stages.map((s: any) => s.state)).toEqual(expect.arrayContaining(["completed"]));
+    expect(pub.passport.signed.some((d: any) => d.stageCode === "03" && d.by === qe.address)).toBe(true);
+    expect(pub.passport.proof).toMatchObject({ chainIntact: true });
+    expect(JSON.stringify(pub)).not.toMatch(/Meera|Sven/); // people appear by address, never by name
+    expect((await app.request("/v1/public/passports/run_unknown", { headers: { host: "localhost" } })).status).toBe(404);
+  });
+
+  it("a supervisor or plant manager ships a completed lot with a signature", async () => {
+    expect((await operator.call("POST", `${S()}/runs/${runId}/ship/sign-request`, { to: "0.0.4242" })).status).toBe(403);
+    expect((await admin.call("POST", `${S()}/runs/${runId}/ship/sign-request`, { to: "not-an-account" })).status).toBe(400);
+    const typed = (await admin.call("POST", `${S()}/runs/${runId}/ship/sign-request`, { to: "0.0.4242" })).json;
+    expect(typed.message).toMatchObject({ action: "lot.ship", entity: `${runId}#0.0.4242` });
+    const r = await admin.call("POST", `${S()}/runs/${runId}/ship`, { to: "0.0.4242", nonce: typed.message.nonce, signature: await admin.sign(typed) });
+    expect(r.json).toMatchObject({ status: "shipped", shipment: { to: "0.0.4242", txUrl: null } });
+    expect((await admin.call("POST", `${S()}/runs/${runId}/ship/sign-request`, { to: "0.0.4242" })).status).toBe(409);
+    const pub = (await (await app.request(`/v1/public/passports/${runId}`, { headers: { host: "localhost" } })).json()) as any;
+    expect(pub.properties.status).toBe("shipped");
+  });
+
+  it("with an HTS collection the passport NFT follows the lot: minted, updated on hold and completion, airdropped on ship", async () => {
+    const { Passports } = await import("../../src/core/passports.js");
+    const calls: string[] = [];
+    let serial = 0;
+    const rail = {
+      kind: "hedera-hts" as const,
+      tokenId: "0.0.9001",
+      mint: async (m: string) => (calls.push(`mint ${m}`), { serial: ++serial, txId: `0.0.2@1.${serial}` }),
+      update: async (s: number, m: string) => (calls.push(`update #${s} ${m}`), { txId: "0.0.2@2.0" }),
+      ship: async (s: number, to: string) => (calls.push(`ship #${s} ${to}`), { txId: "0.0.2@3.0", pending: true }),
+      nftUrl: (s: number) => `https://hashscan.io/testnet/token/0.0.9001/${s}`,
+      txUrl: (id: string) => `https://hashscan.io/testnet/transaction/${id}`,
+    };
+    // a fresh run on its own system view of passports, so the in-app passports above are untouched
+    await sys.db.query("DELETE FROM passports");
+    const passports = new Passports(sys.db, sys.rec, sys.sigs, sys.engine, sys.trust, sys.proof, rail, "https://ordo.example", 296, () => Date.now());
+    const tpl = (await admin.call("GET", `${S()}/templates`)).json.find((t: any) => t.key === "discrete-assembly") ?? (await admin.call("GET", `${S()}/templates`)).json[0];
+    const run2 = (await admin.call("POST", `${S()}/runs`, { templateVersionId: tpl.versionId, orderRef: "SO-9000", quantity: 5 })).json.id as string;
+    await passports.reconcile(50);
+    expect(calls.filter((c) => c.startsWith("mint")).length).toBeGreaterThanOrEqual(1);
+    expect(calls).toContain(`mint https://ordo.example/v1/public/passports/${run2}`);
+    const minted = await passports.get(site, run2);
+    expect(minted.nft).toMatchObject({ tokenId: "0.0.9001", onchainStatus: "in_production" });
+    // a held stage moves the NFT's metadata on
+    await sys.db.query("UPDATE stage_runs SET state = 'held' WHERE run_id = $1 AND code = (SELECT MIN(code) FROM stage_runs WHERE run_id = $1)", [run2]);
+    await passports.reconcile(50);
+    expect(calls).toContain(`update #${minted.nft!.serial} https://ordo.example/v1/public/passports/${run2}?s=held`);
+    expect((await passports.get(site, run2)).nft!.onchainStatus).toBe("held");
+    // shipping: only completed lots; the NFT is updated then airdropped to the customer
+    await sys.db.query("UPDATE stage_runs SET state = 'completed' WHERE run_id = $1", [run2]);
+    await sys.db.query("UPDATE runs SET status = 'completed', finished_at = now() WHERE id = $1", [run2]);
+    await passports.reconcile(50);
+    const u = (await sys.db.query<{ id: string }>("SELECT id FROM users WHERE address = $1", [admin.address])).rows[0]!;
+    const me = { id: u.id, address: admin.address, displayName: null };
+    const typed = await passports.shipRequest(site, me, ["admin", "plant_manager"], run2, "0.0.4242");
+    const shipped = await passports.ship(site, me, ["admin", "plant_manager"], run2, { to: "0.0.4242", nonce: typed.message.nonce, signature: await admin.sign(typed) });
+    expect(calls.slice(-2)).toEqual([`update #${minted.nft!.serial} https://ordo.example/v1/public/passports/${run2}?s=shipped`, `ship #${minted.nft!.serial} 0.0.4242`]);
+    expect(shipped.shipment).toMatchObject({ to: "0.0.4242", pending: true, txUrl: "https://hashscan.io/testnet/transaction/0.0.2@3.0" });
+    expect(metadataFits(`https://aiwarriors.vercel.app/v1/public/passports/${run2}?s=in_production`)).toBe(true);
+  });
+});
+
+const metadataFits = (m: string) => Buffer.byteLength(m) <= 100;

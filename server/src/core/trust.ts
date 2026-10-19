@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Hex } from "viem";
 import type { Signatures, TypedSignature, User } from "../auth/auth.js";
+import { chainErrorMessage } from "../chain/errors.js";
 import { sigArg, type ChainRole, type TrustChain } from "../chain/trust.js";
 import type { Db, Queryable } from "../db/db.js";
 import { hashOf } from "../domain/canonical.js";
@@ -14,7 +15,8 @@ export const ONBOARDING_KINDS = ["member", "validator", "vendor"] as const;
 export type OnboardingKind = (typeof ONBOARDING_KINDS)[number];
 export const VALIDATOR_SCOPES = { quality: "quality_engineer", process: "process_engineer", plant: "plant_manager" } as const satisfies Record<string, Role>;
 export type ValidatorScope = keyof typeof VALIDATOR_SCOPES;
-const MEMBER_CHAIN_ROLE: Partial<Record<Role, ChainRole>> = { operator: "OPERATOR", supervisor: "SUPERVISOR", plant_manager: "PLANT_MANAGER", admin: "ADMIN" };
+// A maintenance lead holds the supervisor credential on-chain: it lets them release work order payments.
+const MEMBER_CHAIN_ROLE: Partial<Record<Role, ChainRole>> = { operator: "OPERATOR", supervisor: "SUPERVISOR", maintenance_lead: "SUPERVISOR", plant_manager: "PLANT_MANAGER", admin: "ADMIN" };
 const MAX_FILE = 4 * 1024 * 1024;
 
 interface RequestRow {
@@ -266,7 +268,14 @@ export class Trust {
   }
 
   // ---------------------------------------------------------------- chain relays
-  private async relay(siteId: string, kind: string, ref: string, payload: unknown, run: () => Promise<Hex>, waitForSite = true): Promise<RelayView> {
+  private retryers = new Map<string, (siteId: string, ref: string, payload: any) => Promise<Hex>>();
+  /** Let another module's relays be retried: `run` re-sends a relay of this kind from its stored payload. */
+  onRetry(kind: string, run: (siteId: string, ref: string, payload: any) => Promise<Hex>) {
+    this.retryers.set(kind, run);
+  }
+
+  /** Send a signed authorisation to a contract and record the outcome (pending → done | failed | waiting_site). */
+  async relay(siteId: string, kind: string, ref: string, payload: unknown, run: () => Promise<Hex>, waitForSite = true, contract?: string): Promise<RelayView> {
     const id = newId("rly");
     const registered = !waitForSite || (await this.siteRegistered(siteId));
     await this.db.query("INSERT INTO chain_relays (id, site_id, kind, ref, payload_json, status) VALUES ($1,$2,$3,$4,$5,$6)", [id, siteId, kind, ref, JSON.stringify(payload), registered ? "pending" : "waiting_site"]);
@@ -274,10 +283,10 @@ export class Trust {
     try {
       const tx = await run();
       await this.db.query("UPDATE chain_relays SET status = 'done', tx_hash = $1, updated_at = now() WHERE id = $2", [tx, id]);
-      await this.rec.event("system:relayer", `chain.${kind}`, ref, { site: siteId, txHash: tx, chainId: this.chain!.cfg.chainId, contract: this.chain!.cfg.address });
+      await this.rec.event("system:relayer", `chain.${kind}`, ref, { site: siteId, txHash: tx, chainId: this.chain!.cfg.chainId, contract: contract ?? this.chain!.cfg.address });
       return this.relayView({ kind, status: "done", tx_hash: tx, error: null });
     } catch (e) {
-      const msg = (e instanceof Error ? (e as Error & { shortMessage?: string }).shortMessage ?? e.message : String(e)).slice(0, 400);
+      const msg = chainErrorMessage(e);
       await this.db.query("UPDATE chain_relays SET status = 'failed', error = $1, updated_at = now() WHERE id = $2", [msg, id]);
       return this.relayView({ kind, status: "failed", tx_hash: null, error: msg });
     }
@@ -301,6 +310,8 @@ export class Trust {
     await this.db.query("UPDATE chain_relays SET status = 'superseded' WHERE id = $1", [r.id]);
     if (r.kind === "grant") return this.relayGrant(siteId, ref, p.address, p.role, p.sig);
     if (r.kind === "release") return this.relay(siteId, "release", ref, p, () => this.chain!.recordRelease(siteId, ref, p.contentHash, p.sigs));
+    const other = this.retryers.get(r.kind);
+    if (other) return this.relay(siteId, r.kind, ref, p, () => other(siteId, ref, p));
     return null;
   }
 

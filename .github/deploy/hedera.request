@@ -1,0 +1,3 @@
+# What the "Hedera setup" workflow creates on its next run, one per line: topic, contracts, passport, agent.
+# Edit and push to run it again; each run creates new resources (run 1 created the topic and the contracts).
+passport

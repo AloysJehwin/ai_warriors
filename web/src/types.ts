@@ -64,6 +64,9 @@ export interface TrustChainInfo {
   symbol: string;
   /** decimals of native value inside the contract (8 on Hedera, 18 elsewhere) */
   decimals: number;
+  /** OrdoWorkOrders and OrdoPolicies on the same chain, when deployed */
+  workOrders?: string | null;
+  policies?: string | null;
 }
 export interface RelayView {
   kind: string;
@@ -208,3 +211,118 @@ export interface VerifyReport {
   subject: { id: string; entries: { seq: number; ts: string; actor: string; type: string; entryHash: string; ok: boolean }[] } | null;
 }
 export type Mode = StageModeT;
+
+// ---------------- Work orders: the maintenance agent pays vendors ----------------
+export type WorkOrderStatus = "unassigned" | "assigned" | "escrowing" | "escrowed" | "escrow_failed" | "releasing" | "released" | "refunded";
+export interface WorkOrderView {
+  id: string;
+  title: string;
+  priority: string;
+  assetId: string | null;
+  runId: string | null;
+  vendor: { id: string; company: string; address: string } | null;
+  /** contract units (tinybars on Hedera) */
+  amount: string | null;
+  status: WorkOrderStatus;
+  payer: string | null;
+  escrow: { tx: string; url: string | null; expiresAt: string | null } | null;
+  releasedBy: string | null;
+  error: string | null;
+  openedBy: string;
+  createdAt: string;
+  updatedAt: string;
+  release: RelayView | null;
+}
+export interface WorkOrdersSetup {
+  configured: boolean;
+  contract: string | null;
+  chainId: number | null;
+  chainName: string | null;
+  explorerUrl: string | null;
+  symbol: string | null;
+  decimals: number | null;
+  agent: { address: string; via: string } | null;
+  caps: { perOrder: string; perDay: string; setBy: string; updatedAt: string } | null;
+  capsRelay: RelayView | null;
+  siteRegistered: boolean;
+  onchain: { funds: string; paused: boolean; perOrder: string; perDay: string; spentToday: string } | { error: string } | null;
+}
+export interface WorkOrdersResponse {
+  setup: WorkOrdersSetup;
+  items: WorkOrderView[];
+}
+
+// ---------------- Autonomy proposals: two plant managers to raise ----------------
+export interface AutonomyProposalView {
+  id: string;
+  lineId: string;
+  lineName: string;
+  from: AutonomyLevel;
+  to: AutonomyLevel;
+  version: number;
+  comment: string;
+  status: "open" | "applied" | "superseded";
+  required: number;
+  signers: { address: string; name: string | null; at: string }[];
+  createdBy: string;
+  createdAt: string;
+  decidedAt: string | null;
+  onchain: RelayView | null;
+}
+
+// ---------------- Lot passports ----------------
+export type PassportStatus = "in_production" | "held" | "completed" | "aborted" | "shipped";
+export interface PassportView {
+  runId: string;
+  status: PassportStatus;
+  pageUrl: string;
+  nft: { tokenId: string; serial: number | null; url: string | null; onchainStatus: string | null; mintTxUrl: string | null; error: string | null } | null;
+  shipment: { to: string; at: string; txUrl: string | null; pending: boolean | null } | null;
+}
+export interface PublicPassport {
+  name: string;
+  creator: string;
+  description: string;
+  properties: { runId: string; status: PassportStatus; orderRef: string; quantity: number; product: string };
+  passport: PassportView & {
+    site: string | null;
+    orderRef: string;
+    quantity: number;
+    product: { name: string; category: string; version: number };
+    startedAt: string;
+    finishedAt: string | null;
+    rolledYield: number | null;
+    stages: {
+      code: string;
+      name: string;
+      state: string;
+      mode: string;
+      resource: string;
+      startedAt: string | null;
+      endedAt: string | null;
+      unitsGood: number;
+      unitsScrap: number;
+      criteria: { label: string; target: string; actual: string | null; ok: boolean | null }[];
+      deviation: boolean;
+    }[];
+    signed: { kind: string; summary: string; stageCode: string | null; by: string; at: string; ledgerSeq: number | null }[];
+    agentDecisions: number;
+    releases: {
+      id: string;
+      number: number;
+      type: string;
+      title: string;
+      releasedAt: string;
+      signers: { meaning: string; address: string; stake: { amount: string; active: boolean; symbol: string; decimals: number } | null }[];
+      onchain: { txUrl: string | null; contract: string | null } | null;
+    }[];
+    proof: {
+      chainIntact: boolean;
+      headSeq: number;
+      entries: number;
+      lastSeq: number;
+      anchor: { kind: string; ref: string; url: string | null; toSeq: number; at: string; matchesChain: boolean; external: { ok: boolean; detail: string } } | null;
+      checkedAt: string;
+    };
+  };
+}

@@ -132,6 +132,17 @@ export async function trustTx(trust: TrustChainInfo, expected: string, fn: "stak
   return c.writeContract({ account, chain, address: trust.address as `0x${string}`, abi: TRUST_WRITE_ABI, functionName: fn, args: [siteId], value: fn === "stake" ? parseEther(amount ?? "0") : undefined } as never);
 }
 
+const FUND_ABI = parseAbi(["function fund(string siteId) payable"]);
+
+/** Add money to a site's OrdoWorkOrders fund from the person's own wallet. `amount` in whole native units. */
+export async function fundTx(trust: TrustChainInfo, expected: string, siteId: string, amount: string): Promise<`0x${string}`> {
+  if (!trust.workOrders) throw new Error("OrdoWorkOrders is not configured");
+  await ensureChain(trust.chainId, trust);
+  const { c, account } = await client(expected);
+  const chain = { id: trust.chainId, name: trust.name, nativeCurrency: { name: trust.symbol, symbol: trust.symbol, decimals: 18 }, rpcUrls: { default: { http: [trust.rpcUrl] } } };
+  return c.writeContract({ account, chain, address: trust.workOrders as `0x${string}`, abi: FUND_ABI, functionName: "fund", args: [siteId], value: parseEther(amount) } as never);
+}
+
 /** Contract units (tinybars on Hedera) to a display amount. */
 export const fromUnits = (v: string | bigint, decimals: number) => {
   const s = formatUnits(BigInt(v), decimals);

@@ -4,7 +4,8 @@ import { useApp } from "../lib/app";
 import { actorLabel, AGENT_LABEL, dateTime, dur, LEVEL_LABEL, LEVEL_TEXT, num, pct, STATE_LABEL, time } from "../lib/format";
 import { go, href, useRoute } from "../lib/router";
 import { useSign } from "../lib/sign";
-import type { AutonomyLevel, DecisionView, InboxItemView, RunView, StageRunView, TemplateView, TypedSignature } from "../types";
+import type { AutonomyLevel, AutonomyProposalView, DecisionView, InboxItemView, PassportView, RunView, StageRunView, TemplateView, TypedSignature } from "../types";
+import { QR } from "../ui/QR";
 import { DateTimePicker } from "../ui/Calendar";
 import { Action, Empty, Field, Loading, Modal, Segmented, useToast } from "../ui/kit";
 import { Select } from "../ui/Select";
@@ -114,6 +115,7 @@ function RunScreen({ runId, runs, onNew }: { runId: string; runs: RunView[]; onN
               Step run
             </Action>
           )}
+          <PassportButton runId={run.id} orderRef={run.orderRef} />
           <a className="btn accent" href={href(`builder/${run.templateId}`)}>
             Edit in builder
           </a>
@@ -315,12 +317,14 @@ function RunScreen({ runId, runs, onNew }: { runId: string; runs: RunView[]; onN
   );
 }
 
-export function AutonomyModal({ open, onClose, lineId, current }: { open: boolean; onClose: () => void; lineId: string; current: AutonomyLevel }) {
+export function AutonomyModal({ open, onClose, lineId, current, initial }: { open: boolean; onClose: () => void; lineId: string; current: AutonomyLevel; initial?: AutonomyLevel }) {
   const { path, can, reloadSite } = useApp();
   const sign = useSign();
-  const [level, setLevel] = useState<AutonomyLevel>(current);
+  const toast = useToast();
+  const [level, setLevel] = useState<AutonomyLevel>(initial ?? current);
   const [comment, setComment] = useState("");
-  useEffect(() => setLevel(current), [current, open]);
+  useEffect(() => setLevel(initial ?? current), [current, initial, open]);
+  const raising = Number(level.slice(1)) > Number(current.slice(1));
   return (
     <Modal
       open={open}
@@ -339,15 +343,18 @@ export function AutonomyModal({ open, onClose, lineId, current }: { open: boolea
               const r = await sign({
                 title: `Set autonomy to ${level} · ${LEVEL_LABEL[level]}`,
                 request: (chainId) => api.post<TypedSignature>(path(`/lines/${lineId}/autonomy/sign-request`), { level, comment, chainId }),
-                submit: (proof) => api.put(path(`/lines/${lineId}/autonomy`), { level, comment, ...proof }),
+                submit: (proof) => api.put<{ proposal: AutonomyProposalView }>(path(`/lines/${lineId}/autonomy`), { level, comment, ...proof }),
               });
               if (r) {
+                const p = r.proposal;
+                if (p.status === "open") toast(`Signed ${p.signers.length} of ${p.required}: another plant manager co-signs in Settings`, "ok");
+                else toast(`Autonomy is now ${p.to}${p.onchain?.status === "done" ? ", published on-chain" : ""}`, "ok");
                 await reloadSite();
                 onClose();
               }
             }}
           >
-            Sign and apply
+            {raising ? "Sign (1 of 2)" : "Sign and apply"}
           </Action>
         </div>
       }
@@ -365,6 +372,7 @@ export function AutonomyModal({ open, onClose, lineId, current }: { open: boolea
       <Field label="Reason (signed with the change)">
         <textarea value={comment} onChange={(e) => setComment(e.target.value)} maxLength={500} />
       </Field>
+      {raising && <p className="small muted">Raising autonomy takes two plant managers' signatures; lowering takes one and applies at once.</p>}
       {!can("plant_manager") && <p className="field-e">Only a plant manager can change autonomy.</p>}
     </Modal>
   );
@@ -438,5 +446,105 @@ function StartRun({ open, templateId, onClose, onStarted, path }: { open: boolea
         </div>
       )}
     </Modal>
+  );
+}
+
+/** The lot's passport: its QR code and public page, the NFT, and shipping to the customer with a signature. */
+function PassportButton({ runId, orderRef }: { runId: string; orderRef: string }) {
+  const { path, can } = useApp();
+  const sign = useSign();
+  const toast = useToast();
+  const [open, setOpen] = useState(false);
+  const [p, setP] = useState<PassportView | null>(null);
+  const [to, setTo] = useState("");
+  const load = () => api.get<PassportView>(path(`/runs/${runId}/passport`)).then(setP);
+  useEffect(() => {
+    if (open) void load();
+  }, [open, runId]);
+  const url = p ? (p.pageUrl.startsWith("http") ? p.pageUrl : `${window.location.origin}${p.pageUrl}`) : "";
+  const validTo = /^(0\.0\.\d+|0x[0-9a-fA-F]{40})$/.test(to.trim());
+  return (
+    <>
+      <button type="button" className="btn" onClick={() => setOpen(true)}>
+        Lot passport
+      </button>
+      <Modal open={open} onClose={() => setOpen(false)} eyebrow="Lot passport" title={`Lot ${orderRef}`}>
+        {!p ? (
+          <Loading />
+        ) : (
+          <div className="pp-modal">
+            <div className="pp-qr">
+              <QR value={url} label={`QR code for lot ${orderRef}`} />
+              <a href={url} target="_blank" rel="noreferrer" className="small">
+                Open the public page
+              </a>
+            </div>
+            <div>
+              <p>
+                Status: <b>{p.status.replaceAll("_", " ")}</b>
+              </p>
+              {p.nft ? (
+                <p className="small">
+                  NFT{" "}
+                  {p.nft.url ? (
+                    <a href={p.nft.url} target="_blank" rel="noreferrer">
+                      {p.nft.tokenId} #{p.nft.serial}
+                    </a>
+                  ) : (
+                    <span className="mono">{p.nft.tokenId}</span>
+                  )}
+                  {p.nft.serial === null ? " · minting on the next engine cycle" : ` · on-chain: ${p.nft.onchainStatus?.replaceAll("_", " ")}`}
+                  {p.nft.error && <span className="field-e"> {p.nft.error}</span>}
+                </p>
+              ) : (
+                <p className="small muted">No HTS collection is configured: the passport lives in Ordo. Set HEDERA_PASSPORT_TOKEN_ID to mint each lot as an NFT.</p>
+              )}
+              <p className="small muted">Anyone with the code sees what was made, stage by stage, who signed each gate and release, and the ledger anchor that proves it. People appear by wallet address, never by name.</p>
+              {p.shipment ? (
+                <p className="small">
+                  Shipped {dateTime(p.shipment.at)} to <span className="mono">{p.shipment.to}</span>
+                  {p.shipment.txUrl && (
+                    <>
+                      {" "}
+                      ·{" "}
+                      <a href={p.shipment.txUrl} target="_blank" rel="noreferrer">
+                        {p.shipment.pending ? "airdrop pending the customer's claim" : "NFT delivered"}
+                      </a>
+                    </>
+                  )}
+                </p>
+              ) : (
+                p.status === "completed" &&
+                can("supervisor") && (
+                  <div className="pp-ship">
+                    <Field label="Ship to (customer's Hedera account or EVM address)">
+                      <input className="input" value={to} onChange={(e) => setTo(e.target.value)} placeholder="0.0.12345" />
+                    </Field>
+                    <Action
+                      className="btn accent"
+                      disabled={!validTo}
+                      onClick={async () => {
+                        const body = { to: to.trim() };
+                        const r = await sign({
+                          title: `Ship lot ${orderRef} to ${body.to}`,
+                          request: () => api.post<TypedSignature>(path(`/runs/${runId}/ship/sign-request`), body),
+                          submit: (proof) => api.post<PassportView>(path(`/runs/${runId}/ship`), { ...body, ...proof }),
+                        });
+                        if (r) {
+                          setP(r);
+                          toast("Shipped and recorded", "ok");
+                        }
+                      }}
+                    >
+                      Sign and ship
+                    </Action>
+                  </div>
+                )
+              )}
+            </div>
+          </div>
+        )}
+      </Modal>
+    </>
   );
 }
