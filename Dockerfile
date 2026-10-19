@@ -24,6 +24,7 @@ COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=prod-deps /app/server/node_modules ./server/node_modules
 COPY --from=build /app/server/dist ./server/dist
 COPY --from=build /app/server/package.json ./server/package.json
+COPY --from=build /app/server/zk ./server/zk
 COPY --from=build /app/web/dist ./web/dist
 COPY policies ./policies
 RUN mkdir -p /data && chown node:node /data

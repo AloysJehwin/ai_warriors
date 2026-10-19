@@ -7,11 +7,12 @@ Three contracts. Every authorisation in them is an Ordo EIP-712 signature (`Ordo
 | `OrdoTrust` | Role credentials per site, granted with a site admin's signature; validator stakes with an unstake cooldown; release records that need a staked reviewer and a staked plant manager; slashing by two other validators plus a plant manager into the site's quality fund. |
 | `OrdoWorkOrders` | The maintenance agent pays vendors within limits people set: a per-site fund, per-order and per-day caps an admin signs, escrow only to holders of the site's `VENDOR` credential, release on a supervisor's or plant manager's signature, refund after expiry, and a pause an admin or plant manager signs. |
 | `OrdoPolicies` | Each line's autonomy level and policy hash. Raising autonomy or changing the policy needs two different plant managers' signatures; lowering needs one. |
+| `OrdoSpecVerifier` | Generated Groth16 verifier for `circuits/spec_check.circom`: checks a lot passport's proof that a criterion was met, without the measurement. Stateless; anyone can deploy and call `verifyProof`. |
 
 `OrdoWorkOrders` and `OrdoPolicies` read credentials from the deployed `OrdoTrust` and share its signature scheme through `OrdoSigned`.
 
 ```bash
-pnpm --filter @ordo/contracts test     # compile with npm solc + 16 tests on an in-process EVM
+pnpm --filter @ordo/contracts test     # compile with npm solc + 18 tests on an in-process EVM
 ```
 
 ## Hedera testnet
@@ -55,6 +56,16 @@ Things to check on the day:
 - Inside the EVM Hedera counts HBAR in tinybars (8 decimals); JSON-RPC `value` uses 18 decimals. Caps and amounts in the contracts are tinybars.
 - The agent account is created with an ECDSA alias, so its EVM address (the one the caps are signed for) is derived from its key.
 - Verify contract source on Sourcify for chain 296 so HashScan shows it; `artifacts/*.json` has the ABI and bytecode.
+
+## Zero-knowledge spec proofs
+
+A lot's public passport says whether each acceptance criterion was met but never shows the measurement (yields, scrap, cycle times and OEE are trade secrets). When a stage closes, the server commits each measured value as `Poseidon(subject, value, salt)` in the hash-chained ledger (so it is anchored with everything else), and for every criterion that passed it proves with Groth16 that the committed value meets the target. The passport carries the proof and its public signals `[subject, target × 10⁴, op, commitment]`; the server, the buyer's browser (snarkjs) or `OrdoSpecVerifier` can each check it, with the key at `GET /v1/public/zk/spec-check`.
+
+The circuit's keys live in `server/zk`. Rebuild them after changing the circuit (needs the [circom 2](https://docs.circom.io/getting-started/installation/) compiler; the trusted setup is a local single-party ceremony, fine for a demo, not for production):
+
+```bash
+cd contracts && CIRCOM=/path/to/circom node scripts/zk-setup.mjs
+```
 
 ## Proof of work
 

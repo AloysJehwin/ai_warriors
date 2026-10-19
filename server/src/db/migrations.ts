@@ -2,7 +2,7 @@
  * Versioned, forward-only migrations. Each runs once, in order, inside a transaction.
  * v1 = the original demo schema (kept so existing databases upgrade cleanly).
  * v2 = real accounts, sites, assets, telemetry, templates, runs, inbox, validation, signatures.
- * v3 = validation workflow · v4 = onboarding and on-chain trust · v5 = agent work orders and autonomy proposals · v6 = lot passports · v7 = jobs on other networks (ENS, 0G).
+ * v3 = validation workflow · v4 = onboarding and on-chain trust · v5 = agent work orders and autonomy proposals · v6 = lot passports · v7 = jobs on other networks (ENS, 0G) · v11 = zero-knowledge spec proofs.
  */
 export const MIGRATIONS: { version: number; name: string; sql: string }[] = [
   {
@@ -222,6 +222,16 @@ CREATE TABLE agent_nfts (site_id TEXT NOT NULL REFERENCES sites(id), agent TEXT 
     name: "public pipelines",
     sql: `
 ALTER TABLE sites ADD COLUMN public_pipelines BOOLEAN NOT NULL DEFAULT true;
+`,
+  },
+  {
+    version: 11,
+    name: "zero-knowledge spec proofs",
+    sql: `
+CREATE TABLE spec_proofs (run_id TEXT NOT NULL REFERENCES runs(id), stage_code TEXT NOT NULL, label TEXT NOT NULL, status TEXT NOT NULL,
+  subject TEXT, value TEXT, salt TEXT, target TEXT, op INTEGER, commitment TEXT, ledger_seq INTEGER, proof_json TEXT, error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(), proven_at TIMESTAMPTZ, PRIMARY KEY (run_id, stage_code, label));
+CREATE INDEX spec_proofs_due ON spec_proofs (status, created_at);
 `,
   },
 ];

@@ -192,7 +192,7 @@ test("sign in, set up a site, build, run, sign a gate, verify", async ({ page })
   await shot(page, "14-autonomy-proposal");
 
   // ---- The lot's passport: QR, ship with a signature, and the public page without signing in ----
-  await page.getByRole("link", { name: "Pipelines" }).click();
+  await page.getByRole("link", { name: "Pipelines", exact: true }).click();
   await page.getByRole("button", { name: "Lot passport" }).click();
   const pp = page.getByRole("dialog", { name: /Lot SO-7781/ });
   await expect(pp.getByRole("img", { name: /QR code/ })).toBeVisible();
@@ -210,6 +210,15 @@ test("sign in, set up a site, build, run, sign a gate, verify", async ({ page })
   await expect(pub.getByText(/every hash links/)).toBeVisible();
   await expect(pub.getByRole("heading", { name: "Stage by stage" })).toBeVisible();
   await expect(pub.getByRole("img", { name: /QR code/ })).toBeVisible();
+  // criteria show as met, with zero-knowledge proofs instead of the measurements, and the proofs re-check here
+  await expect(async () => {
+    await pub.reload();
+    await expect(pub.getByText(/criteria met are proven in zero knowledge/)).toBeVisible();
+    await expect(pub.getByText("ZK proof pending")).toHaveCount(0);
+  }).toPass({ timeout: 60_000 });
+  await expect(pub.getByText("ZK proof verified").first()).toBeVisible();
+  await pub.getByRole("button", { name: "Verify in this browser" }).click();
+  await expect(pub.getByText(/^(\d+) of \1 verified in this browser$/)).toBeVisible({ timeout: 30_000 });
   if (shotDir) await pub.screenshot({ path: `${shotDir}/16-public-passport-mobile.png`, fullPage: true });
   await anon.close();
 });

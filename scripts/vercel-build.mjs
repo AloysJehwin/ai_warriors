@@ -27,6 +27,8 @@ await build({
   banner: { js: "import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);" },
   logLevel: "warning",
 });
+// the spec-check circuit and its keys, read at runtime to prove lots met their criteria (server/src/core/spec-proofs.ts)
+cpSync("server/zk", `${out}/functions/api.func/zk`, { recursive: true });
 writeFileSync(
   `${out}/functions/api.func/.vc-config.json`,
   JSON.stringify({ runtime: "nodejs22.x", handler: "index.mjs", launcherType: "Nodejs", shouldAddHelpers: false, maxDuration: 60 }, null, 2),

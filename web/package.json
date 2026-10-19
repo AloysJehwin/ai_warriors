@@ -12,6 +12,7 @@
     "qrcode-generator": "2.0.4",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
+    "snarkjs": "0.7.6",
     "viem": "^2.57.7"
   },
   "devDependencies": {

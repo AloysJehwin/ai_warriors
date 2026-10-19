@@ -10,6 +10,7 @@ import type { RunEngine } from "../pipelines/engine.js";
 import type { Proof } from "./proof.js";
 import type { Recorder } from "./recorder.js";
 import type { Names } from "./names.js";
+import type { SpecProofs } from "./spec-proofs.js";
 import type { Trust } from "./trust.js";
 
 export type PassportStatus = "in_production" | "held" | "completed" | "aborted" | "shipped";
@@ -71,6 +72,8 @@ export class Passports {
   ) {}
   /** ENS names of the site's people, when names are issued */
   names: Names | null = null;
+  /** zero-knowledge proofs that the lot met its criteria, shown on the public page in place of the measurements */
+  specs: SpecProofs | null = null;
 
   /** The public page for a lot; relative when the deployment does not know its own URL. */
   pageUrl(runId: string) {
@@ -87,6 +90,7 @@ export class Passports {
   async reconcile(limit = 3): Promise<void> {
     await this.db.query("INSERT INTO passports (run_id, site_id, status, token_id) SELECT r.id, r.site_id, 'in_production', $1 FROM runs r LEFT JOIN passports p ON p.run_id = r.id WHERE p.run_id IS NULL", [this.rail?.tokenId ?? null]);
     await this.db.query(`UPDATE passports p SET status = ${STATUS_SQL}, updated_at = now() FROM runs r WHERE r.id = p.run_id AND p.status <> ${STATUS_SQL}`);
+    if (limit > 0) await this.specs?.reconcile();
     if (!this.rail) return;
     const due = await this.db.query<Row>(
       `SELECT * FROM passports WHERE token_id = $1 AND (serial IS NULL OR onchain_status IS DISTINCT FROM status) AND status <> 'shipped'
@@ -194,7 +198,8 @@ export class Passports {
   /**
    * What anyone holding the lot (or scanning its QR code) may see, without signing in: HIP-412 NFT metadata plus
    * the evidence. People appear by wallet address and role, and by the ENS name the site issued them, never by
-   * their account name.
+   * their account name. Process numbers (measurements, unit counts, yield) stay private: each criterion shows whether
+   * it was met and, where it was, a zero-knowledge proof of that against a commitment in the ledger.
    */
   async publicView(runId: string) {
     const p = await this.row(null, runId);
@@ -207,7 +212,8 @@ export class Passports {
       .map((d) => ({ kind: d.kind, summary: d.summary, stageCode: d.stageCode, by: d.agent.slice(5), ens: ens.get(d.agent.slice(5).toLowerCase()) ?? null, at: d.ts, ledgerSeq: d.ledgerSeq }));
     const agents = decisions.filter((d) => !d.agent.startsWith("user:")).length;
     const releases = await this.releases(p.site_id, runId, ens);
-    const lastSeq = Math.max(0, ...decisions.map((d) => d.ledgerSeq ?? 0));
+    const zk = (await this.specs?.forRun(runId)) ?? new Map();
+    const lastSeq = Math.max(0, ...decisions.map((d) => d.ledgerSeq ?? 0), ...[...zk.values()].map((z) => z.ledgerSeq ?? 0));
     const view = this.view(p);
     const name = `Lot ${run.orderRef}`;
     return {
@@ -227,7 +233,6 @@ export class Passports {
         product: { name: run.templateName, category: run.templateCategory, version: run.templateVersion },
         startedAt: run.startedAt,
         finishedAt: run.finishedAt,
-        rolledYield: run.metrics.rolledYield,
         stages: run.stages.map((s) => ({
           code: s.code,
           name: s.name,
@@ -236,9 +241,7 @@ export class Passports {
           resource: s.assetName ?? s.resourceKind,
           startedAt: s.startedAt,
           endedAt: s.endedAt,
-          unitsGood: s.unitsGood,
-          unitsScrap: s.unitsScrap,
-          criteria: s.criteriaResults,
+          criteria: s.criteriaResults.map((c) => ({ label: c.label, target: c.target, ok: c.ok, zk: zk.get(`${s.code}|${c.label}`) ?? null })),
           deviation: s.deviation,
         })),
         signed,
