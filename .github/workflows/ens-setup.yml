@@ -6,8 +6,8 @@ name: ENS setup
 #   label <name>   register <name>.eth with the owner key, then set ENS_PARENT_NAME, ENS_REGISTRY_ADDRESS,
 #                  ENS_RESOLVER_ADDRESS and ENS_OWNER_KEY in Vercel. Registration is paid in the testnet's MockUSDC,
 #                  which the script mints; gas needs the Sepolia ETH.
-# The owner key comes from the `sepolia` environment's ENS_OWNER_KEY secret if set, otherwise from Vercel.
-# Needs the repository secret VERCEL_TOKEN.
+# Runs in the `hedera-testnet` environment, which holds VERCEL_TOKEN. The owner key comes from an ENS_OWNER_KEY secret
+# there if one is set, otherwise from Vercel.
 on:
   push:
     paths: [".github/deploy/ens.request"]
@@ -19,7 +19,7 @@ permissions:
 jobs:
   setup:
     runs-on: ubuntu-latest
-    environment: sepolia
+    environment: hedera-testnet
     env:
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
       VERCEL_PROJECT_ID: prj_ua7E01jdI0VpLBJvZyqqulOlBzGP
@@ -52,7 +52,7 @@ jobs:
           umask 077
           f="$RUNNER_TEMP/ens-key.env"
           if [ -n "$SECRET_KEY" ]; then
-            echo "ENS_OWNER_KEY=$SECRET_KEY" > "$f"; echo "Using the sepolia environment's ENS_OWNER_KEY"
+            echo "ENS_OWNER_KEY=$SECRET_KEY" > "$f"; echo "Using the ENS_OWNER_KEY secret"
           else
             if [ -z "$VERCEL_TOKEN" ]; then echo "::error::Needs VERCEL_TOKEN (or an ENS_OWNER_KEY secret)"; exit 1; fi
             node scripts/vercel-env.mjs export ENS_OWNER_KEY "$f"
