@@ -1,4 +1,3 @@
 # What the "Hedera setup" workflow creates on its next run, one per line: topic, contracts, passport, agent.
 # Edit and push to run it again; each run creates new resources. Created so far: topic and contracts (run 1),
-# passport (run 2). Empty this file after a run so a later merge does not create them again.
-agent
+# passport (run 2), agent (run 4). Kept empty so merges do not create them again.
