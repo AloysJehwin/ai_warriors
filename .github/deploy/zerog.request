@@ -3,4 +3,6 @@
 #   inft     deploy OrdoAgentNFT (agents as ERC-7857 iNFTs)  → ZG_INFT_ADDRESS
 #   storage  copy validation evidence to 0G Storage          → EVIDENCE_STORE=0g
 #   ledger   fund the 0G Compute ledger (3 0G minimum)       → then set LLM_PROVIDER=0g by hand
-key
+# Key generated (address 0xa902C5542Fc209e639Ed151a3619e103D18bD55a) and funded.
+inft
+storage
