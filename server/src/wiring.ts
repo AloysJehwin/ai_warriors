@@ -17,27 +17,35 @@ import {
 import { Agents } from "./agents/agents.js";
 import { migrate, openDb, type Db } from "./db/db.js";
 import { LedgerStore } from "./db/ledger-store.js";
+import { SimStore } from "./db/sim-store.js";
 import { Store } from "./db/store.js";
 import { loadPolicy } from "./domain/policy.js";
-import { Bus } from "./engine/bus.js";
 import { Orchestrator } from "./engine/orchestrator.js";
 
+export interface RailStatus {
+  rail: string;
+  mode: string;
+  live: boolean;
+}
 export interface System {
   db: Db;
-  bus: Bus;
+  rails: RailStatus[];
   ledger: LedgerStore;
   store: Store;
   orchestrator: Orchestrator;
+  /** A second orchestrator over the same database — what another serverless instance would be. */
+  spawn(): Orchestrator;
   policy: ReturnType<typeof loadPolicy>;
   warnings: string[];
   close(): Promise<void>;
 }
 
-export async function buildSystem(cfg: Config): Promise<System> {
+export async function buildSystem(cfg: Config, opts: { now?: () => number; policyText?: string } = {}): Promise<System> {
   const warnings: string[] = [];
+  if (cfg.VERCEL && !cfg.DATABASE_URL) throw new Error("On Vercel, DATABASE_URL is required (add Neon from the Vercel Marketplace)");
   const db = await openDb({ url: cfg.DATABASE_URL, dataDir: cfg.DATA_DIR });
   await migrate(db);
-  const policy = loadPolicy(readFileSync(resolve(cfg.POLICY_FILE), "utf8"));
+  const policy = loadPolicy(opts.policyText ?? readFileSync(resolve(cfg.POLICY_FILE), "utf8"));
 
   // ---- LLM ----
   let llm: LlmProvider = new OfflineLlm();
@@ -64,11 +72,13 @@ export async function buildSystem(cfg: Config): Promise<System> {
 
   // ---- Rails ----
   let anchor: AnchorAdapter = new LocalSignedAnchor(cfg.LEDGER_SIGNING_KEY);
-  if (anchor instanceof LocalSignedAnchor && anchor.ephemeral) warnings.push("LEDGER_SIGNING_KEY not set; checkpoints use a key that changes on restart");
+  if (anchor instanceof LocalSignedAnchor && anchor.ephemeral)
+    warnings.push(cfg.VERCEL ? "LEDGER_SIGNING_KEY not set: each serverless instance signs with a different key. Set it in Vercel env." : "LEDGER_SIGNING_KEY not set; checkpoints use a key that changes on restart");
   let approvals: ApprovalRail = new InAppApprovals();
   let payments: PaymentRail = new MockPayments();
   let identity: IdentityResolver = new PlainIdentity();
-  let evidence: EvidenceStore = new LocalEvidenceStore(`${cfg.DATA_DIR === "memory" ? ".data" : cfg.DATA_DIR}/evidence`);
+  const evidenceDir = cfg.VERCEL ? "/tmp/ordo-evidence" : `${cfg.DATA_DIR === "memory" ? ".data" : cfg.DATA_DIR}/evidence`;
+  let evidence: EvidenceStore = new LocalEvidenceStore(evidenceDir);
   let policyCheck: (() => Promise<{ ok: boolean; detail: string }>) | undefined;
 
   if (cfg.ANCHOR === "hedera" || cfg.APPROVALS === "hedera" || cfg.PAYMENTS === "hedera") {
@@ -88,13 +98,12 @@ export async function buildSystem(cfg: Config): Promise<System> {
     evidence = new ZeroGStorage(cfg);
   }
 
-  const bus = new Bus();
   const ledger = new LedgerStore(db);
   const store = new Store(db);
-  const orchestrator = new Orchestrator({
+  const deps: ConstructorParameters<typeof Orchestrator>[0] = {
     ledger,
     store,
-    bus,
+    sim: new SimStore(db),
     agents: new Agents(llm),
     llmName: llm.name === "gemini" ? `gemini:${cfg.GEMINI_MODEL}` : llm.name,
     anchor,
@@ -108,22 +117,34 @@ export async function buildSystem(cfg: Config): Promise<System> {
     seed: cfg.SIM_SEED,
     scenario: cfg.SIM_SCENARIO,
     tickMs: cfg.TICK_MS,
-    anchorEvery: cfg.ANCHOR_EVERY,
     autonomy: cfg.LINE_AUTONOMY,
-  });
+    autostart: cfg.SIM_AUTOSTART,
+    now: opts.now,
+  };
+  const orchestrator = new Orchestrator(deps);
   await orchestrator.init();
+
+  const rails: RailStatus[] = [
+    { rail: "database", mode: db.kind === "postgres" ? "postgres" : cfg.DATA_DIR === "memory" ? "pglite (memory)" : "pglite (disk)", live: db.kind === "postgres" },
+    { rail: "ai", mode: llm.name === "gemini" ? `gemini:${cfg.GEMINI_MODEL}` : llm.name, live: llm.name !== "offline" },
+    { rail: "anchor", mode: anchor.kind, live: anchor.kind !== "local-signed" },
+    { rail: "approvals", mode: approvals.kind, live: approvals.kind !== "in-app" },
+    { rail: "payments", mode: payments.kind, live: payments.kind !== "mock" },
+    { rail: "identity", mode: identity.kind, live: identity.kind !== "plain" },
+    { rail: "evidence", mode: evidence.kind, live: evidence.kind !== "local" },
+    { rail: "policy registry", mode: policyCheck ? "OrdoPolicyRegistry" : "hash only", live: Boolean(policyCheck) },
+  ];
 
   return {
     db,
-    bus,
+    rails,
     ledger,
     store,
     orchestrator,
+    spawn: () => new Orchestrator(deps),
     policy,
     warnings,
     close: async () => {
-      orchestrator.stop();
-      await orchestrator.idle();
       await db.close();
     },
   };

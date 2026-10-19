@@ -89,6 +89,29 @@ CREATE TABLE IF NOT EXISTS approvals (
   data_json   TEXT NOT NULL,
   created_at  TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS sim_state (
+  id               INTEGER PRIMARY KEY,
+  generation       INTEGER NOT NULL,
+  scenario         TEXT NOT NULL,
+  seed             INTEGER NOT NULL,
+  started_at       BIGINT NOT NULL,
+  tick_ms          INTEGER NOT NULL,
+  paused_minute    INTEGER,
+  processed_minute INTEGER NOT NULL,
+  failures_logged  INTEGER NOT NULL,
+  lease_until      BIGINT
+);
+CREATE TABLE IF NOT EXISTS sim_actions (
+  id          SERIAL PRIMARY KEY,
+  generation  INTEGER NOT NULL,
+  minute      INTEGER NOT NULL,
+  action_json TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sim_suppressed (
+  generation INTEGER NOT NULL,
+  asset_id   TEXT NOT NULL,
+  PRIMARY KEY (generation, asset_id)
+);
 CREATE TABLE IF NOT EXISTS settings (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL

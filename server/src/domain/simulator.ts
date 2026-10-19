@@ -144,7 +144,8 @@ export class Plant {
       const latest: Partial<Record<SignalName, { value: number; quality: TelemetrySample["quality"] }>> = {};
       for (const s of Object.keys(signals) as SignalName[]) {
         let value = Math.round(signals[s] * 100) / 100;
-        let quality: TelemetrySample["quality"] = "good";
+        // A stopped machine's sensors read, but not under load: not usable for condition monitoring.
+        let quality: TelemetrySample["quality"] = active ? "good" : "uncertain";
         if (a.sensorFault && s === "vibration_rms") {
           value = 15 + Math.round(n(2) * 100) / 100;
           quality = "bad";

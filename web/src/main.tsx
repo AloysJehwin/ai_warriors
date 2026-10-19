@@ -6,6 +6,7 @@ import { ApprovalsPage } from "./pages/Approvals";
 import { IncidentPage, IncidentsPage } from "./pages/Incidents";
 import { LedgerPage } from "./pages/Ledger";
 import { LinePage } from "./pages/Line";
+import { SystemPage } from "./pages/System";
 import { VerifyPage } from "./pages/Verify";
 import type { Role } from "./types";
 import "./styles.css";
@@ -26,6 +27,7 @@ const NAV = [
   { href: "#/approvals", label: "Approvals", icon: "M4 12l5 5L20 6" },
   { href: "#/ledger", label: "Audit ledger", icon: "M5 4h14v16H5zM9 8h6M9 12h6M9 16h4" },
   { href: "#/verify", label: "Verify", icon: "M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z" },
+  { href: "#/system", label: "System", icon: "M12 15a3 3 0 100-6 3 3 0 000 6zM19 12h2M3 12h2M12 3v2M12 19v2M17 7l1.5-1.5M5.5 18.5L7 17M17 17l1.5 1.5M5.5 5.5L7 7" },
 ];
 
 function App() {
@@ -43,6 +45,7 @@ function App() {
   else if (route === "approvals") page = <ApprovalsPage live={live} actor={actor} />;
   else if (route === "ledger") page = <LedgerPage live={live} />;
   else if (route === "verify") page = <VerifyPage id={param ?? null} live={live} />;
+  else if (route === "system") page = <SystemPage live={live} />;
   else page = <LinePage live={live} actor={actor} />;
 
   return (
@@ -84,6 +87,7 @@ function App() {
               <div>AI: {live.plant.mode.llm}</div>
               <div>Anchor: {live.plant.mode.anchor}</div>
               <div>Payments: {live.plant.mode.payments}</div>
+              {live.status?.build && <div>Env: {live.status.build.env}</div>}
             </div>
           )}
         </div>

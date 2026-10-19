@@ -1,5 +1,5 @@
 import { serve } from "@hono/node-server";
-import { loadConfig } from "./config.js";
+import { loadConfig, timerEnabled } from "./config.js";
 import { createApp } from "./http/app.js";
 import { buildSystem } from "./wiring.js";
 
@@ -10,15 +10,21 @@ const app = createApp(sys, {
   webDist: cfg.WEB_DIST,
   corsOrigins: cfg.CORS_ORIGINS ? cfg.CORS_ORIGINS.split(",").map((s) => s.trim()) : [],
   allowTamper: true,
+  passcode: cfg.DEMO_PASSCODE,
+  build: { env: cfg.VERCEL_ENV ?? "local", commit: cfg.VERCEL_GIT_COMMIT_SHA ?? null },
 });
-if (cfg.SIM_AUTOSTART) sys.orchestrator.start();
+
+// Long-running mode: keep the plant moving even when nobody is watching.
+const timer = timerEnabled(cfg)
+  ? setInterval(() => sys.orchestrator.advance().catch((e) => console.error("[ordo] advance", e)), cfg.TICK_MS)
+  : null;
 
 const server = serve({ fetch: app.fetch, port: cfg.PORT }, (info) => {
-  const v = sys.orchestrator.view();
-  console.log(`[ordo] listening on :${info.port} · db=${sys.db.kind} · llm=${v.mode.llm} · anchor=${v.mode.anchor} · payments=${v.mode.payments} · identity=${v.mode.identity}`);
+  console.log(`[ordo] listening on :${info.port} · ${sys.rails.map((r) => `${r.rail}=${r.mode}`).join(" · ")}`);
 });
 
 const shutdown = async () => {
+  if (timer) clearInterval(timer);
   server.close();
   await sys.close();
   process.exit(0);

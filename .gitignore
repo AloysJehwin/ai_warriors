@@ -10,3 +10,4 @@ playwright-report/
 contracts/artifacts/
 coverage/
 contracts/deployments/*.json
+.vercel/

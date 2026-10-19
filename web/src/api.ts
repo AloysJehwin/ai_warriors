@@ -8,15 +8,59 @@ export interface Actor {
 /** Empty when the console is served by the API (one container); set VITE_API_BASE when hosting the console separately (e.g. Vercel). */
 export const API_BASE: string = (import.meta.env.VITE_API_BASE as string | undefined)?.replace(/\/$/, "") ?? "";
 
+// ---- Optional shared passcode for writes (DEMO_PASSCODE on the server) ----
+export function getPasscode(): string {
+  try {
+    return localStorage.getItem("ordo.passcode") ?? "";
+  } catch {
+    return "";
+  }
+}
+export function setPasscode(v: string) {
+  try {
+    localStorage.setItem("ordo.passcode", v);
+  } catch {
+    /* ignore */
+  }
+}
+
 async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, { method, headers: body ? { "content-type": "application/json" } : undefined, body: body ? JSON.stringify(body) : undefined });
+  const headers: Record<string, string> = {};
+  if (body) headers["content-type"] = "application/json";
+  if (method !== "GET" && getPasscode()) headers["x-ordo-passcode"] = getPasscode();
+  const res = await fetch(`${API_BASE}${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined });
   const json = await res.json().catch(() => ({}));
+  if (res.status === 401) throw new Error("This deployment needs a passcode for changes. Enter it on the System page.");
   if (!res.ok) throw new Error((json as { error?: string }).error ?? `${res.status} ${res.statusText}`);
   return json as T;
 }
 
+export interface RailStatus {
+  rail: string;
+  mode: string;
+  live: boolean;
+}
+export interface Status {
+  rails: RailStatus[];
+  warnings: string[];
+  passcodeRequired: boolean;
+  policy: { id: string; version: number; hash: string };
+  build: { env: string; commit: string | null } | null;
+}
+export interface LiveDelta {
+  plant: PlantView;
+  entries: LedgerEntryDto[];
+  decisions: Decision[];
+  incidents: Incident[];
+  approvals: Approval[];
+  anchors: AnchorDto[];
+}
+
 export const api = {
   plant: () => req<PlantView>("GET", "/v1/plant"),
+  live: (since: number) => req<LiveDelta>("GET", `/v1/live?since=${since}`),
+  status: () => req<Status>("GET", "/v1/status"),
+  anchorNow: () => req<AnchorDto | null>("POST", "/v1/anchors"),
   start: (scenario: string) => req<PlantView>("POST", `/v1/sim/scenarios/${scenario}/start`),
   pause: () => req<PlantView>("POST", "/v1/sim/pause"),
   resume: () => req<PlantView>("POST", "/v1/sim/resume"),

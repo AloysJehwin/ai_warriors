@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api, ROLE_LABEL, type Actor } from "../api";
-import { pushAlert, type LiveState } from "../live";
+import { pushAlert, refreshNow, type LiveState } from "../live";
 import type { AutonomyLevel, SignalName } from "../types";
 import { AssetStatus, agentLabel, Sparkline, time } from "../ui";
 
@@ -30,6 +30,7 @@ export function LinePage({ live, actor }: { live: LiveState; actor: Actor }) {
     setBusy(true);
     try {
       await f();
+      refreshNow();
     } catch (e) {
       pushAlert(e instanceof Error ? e.message : String(e));
     } finally {

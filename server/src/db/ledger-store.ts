@@ -67,6 +67,11 @@ export class LedgerStore {
     return r.rows.map(toEntry);
   }
 
+  async after(seq: number, limit = 200): Promise<LedgerEntry[]> {
+    const r = await this.db.query<Row>("SELECT * FROM ledger WHERE seq > $1 ORDER BY seq DESC LIMIT $2", [seq, limit]);
+    return r.rows.map(toEntry);
+  }
+
   async head(): Promise<LedgerEntry | null> {
     return (await this.latest(1))[0] ?? null;
   }

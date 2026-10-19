@@ -9,7 +9,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "smoke:hedera": "node --env-file=.env --import tsx scripts/smoke-hedera.ts",
-    "anchor:build": "node --env-file=.env --import tsx scripts/anchor-build.ts"
+    "anchor:build": "node --env-file=.env --import tsx scripts/anchor-build.ts",
+    "doctor": "node --env-file-if-exists=.env --import tsx scripts/doctor.ts"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.10",

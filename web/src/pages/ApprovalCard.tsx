@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { api, canApprove, ROLE_LABEL, type Actor } from "../api";
 import { describeAction } from "../describe";
-import { pushAlert } from "../live";
+import { pushAlert, refreshNow } from "../live";
 import type { Approval } from "../types";
 
 export function ApprovalCard({ a, actor }: { a: Approval; actor: Actor }) {
@@ -13,6 +13,7 @@ export function ApprovalCard({ a, actor }: { a: Approval; actor: Actor }) {
       if (kind === "approve") await api.approve(a.id, actor, reason || undefined);
       else await api.reject(a.id, actor, reason);
       setReason("");
+      refreshNow();
     } catch (e) {
       pushAlert(e instanceof Error ? e.message : String(e));
     } finally {

@@ -3,6 +3,7 @@ import type { Anomaly, SignalName, TelemetrySample } from "./types.js";
 
 const MIN_DRIFT_SAMPLES = 30;
 const DRIFT_Z = 6;
+const DRIFT_FLOOR = 0.8;
 
 function slopePerMinute(xs: number[], ys: number[]): { slope: number; r2: number } {
   const n = xs.length;
@@ -56,7 +57,8 @@ export function detect(samples: TelemetrySample[], signal: SignalName): Anomaly 
     const mb = mean(base);
     const sd = Math.sqrt(base.reduce((a, b) => a + (b - mb) ** 2, 0) / base.length) || 1e-6;
     const z = (mean(recent) - mb) / sd;
-    if (z >= DRIFT_Z && slope > 0)
+    // Drift is an early warning: only when the value is already close to the warning limit.
+    if (z >= DRIFT_Z && slope > 0 && last.value >= DRIFT_FLOOR * limit.warn)
       return { assetId: last.assetId, signal, value: last.value, limit: limit.warn, level: "warn", kind: "drift", trendPerHour, minute: last.minute };
   }
   return null;

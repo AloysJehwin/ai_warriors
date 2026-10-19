@@ -27,21 +27,22 @@ cd server && SIM_AUTOSTART=true node dist/index.js
 # open http://localhost:8080 and click "Run demo incident"
 ```
 
-Development with hot reload: `pnpm dev`, then open http://localhost:5173. No database or API keys are needed: Ordo uses embedded Postgres (PGlite) and offline agents by default. Set `LLM_PROVIDER=gemini` and `GEMINI_API_KEY` for live AI. All settings are in [`server/.env.example`](server/.env.example).
+Development with hot reload: `pnpm dev`, then open http://localhost:5173. Check configuration and every live service with `pnpm env:doctor`. No database or API keys are needed: Ordo uses embedded Postgres (PGlite) and offline agents by default. Set `LLM_PROVIDER=gemini` and `GEMINI_API_KEY` for live AI. All settings are in [`server/.env.example`](server/.env.example).
 
 ## Tests
 
 | Command | What it covers |
 | --- | --- |
-| `pnpm --filter @ordo/server test` | 66 tests: simulator determinism, detector, forecast, the full policy matrix (every action × every autonomy level), ledger tamper and concurrency, LLM fallback and grounding, the whole incident loop through the HTTP API |
+| `pnpm --filter @ordo/server test` | 73 tests: simulator determinism, detector, forecast, the full policy matrix (every action × every autonomy level), ledger tamper and concurrency, LLM fallback and grounding, the whole incident loop through the HTTP API, and serverless behaviour (two instances on one database, leases, replay, pause/resume, passcode) |
 | `pnpm --filter @ordo/contracts test` | 8 tests on an in-process EVM: roles, vendor allow-list, per-payment and daily caps, escrow/release/refund, pause, reentrancy, policy versioning |
 | `pnpm e2e` | Playwright drives the real console through the demo: approve as the maintenance lead, verify ✔, tamper ✘ |
+| `E2E_TARGET=vercel pnpm e2e` | The same demo against the Vercel build output on real Postgres, with no background timer |
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    ui["Web console<br/>React · SSE"] -- REST / SSE --> api
+    ui["Web console<br/>React · polling"] -- REST --> api
     subgraph api["Ordo server (Node · Hono)"]
         sim["Plant simulator"] --> line["Line agent"] --> maint["Maintenance agent"] --> diag["Diagnosis agent (LLM)"] --> heal["Healer agent (LLM, allow-listed tools)"] --> guard["Policy guard"]
         guard -- allow --> exec["Executor"]
@@ -86,13 +87,16 @@ mockups/     original design mockups (PNG) · *.dc.html: original clickable prot
 
 ## Deploy
 
-Ordo is one long-running Node process: the simulator ticks every second and the console listens on a Server-Sent Events stream. It needs a host that keeps a process running, not serverless functions.
+**Vercel (primary).** One Vercel project serves the console and the API. `vercel.json` runs `pnpm vercel-build`, which writes `.vercel/output`: the static console plus one Node function for `/v1/*`. The engine is stateless: the plant is replayed from Postgres on each request, and the console polls, so it runs on serverless functions.
 
-- **Render (one click):** the repo has a [`render.yaml`](render.yaml) blueprint and a [`Dockerfile`](Dockerfile). New → Blueprint → pick this repo.
-- **Any Docker host** (Cloud Run with min/max 1 instance, Railway, Fly.io): `docker build -t ordo . && docker run -p 8080:8080 ordo`.
-- **Vercel for the console only:** import the repo with root directory `web`, set `VITE_API_BASE` to the API URL, and set `CORS_ORIGINS` on the API to the Vercel domain.
+1. Import the repo in Vercel (root directory = repo root, framework "Other").
+2. Add **Neon** from the Vercel Marketplace; it sets `DATABASE_URL` and gives every preview its own database branch.
+3. Set `LEDGER_SIGNING_KEY` and `DEMO_PASSCODE` (and any partner rails), or push a file: `pnpm env:vercel push .env.production production`.
+4. Push to `main` for production; every other branch gets a preview URL for live testing.
 
-Run exactly one instance: the simulator and the single ledger writer live in one process.
+The full workflow (environments, syncing variables, `pnpm env:doctor`, rehearsing the Vercel build locally) is in [docs/environments.md](docs/environments.md).
+
+**Docker** (Render, Railway, Fly.io, Cloud Run): the same code runs as one long-lived container with a background timer. `docker build -t ordo . && docker run -p 8080:8080 ordo`, or use the `render.yaml` blueprint.
 
 ## What is real and what is simulated
 

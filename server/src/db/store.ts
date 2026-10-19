@@ -19,6 +19,9 @@ export class Store {
   async incident(id: string): Promise<Incident | null> {
     return parse<Incident>((await this.db.query<{ data_json: string }>("SELECT data_json FROM incidents WHERE id = $1", [id])).rows)[0] ?? null;
   }
+  async openIncidentFor(assetId: string): Promise<Incident | null> {
+    return (await this.incidents(200)).find((i) => i.assetId === assetId && i.status !== "closed") ?? null;
+  }
   async incidents(limit = 50): Promise<Incident[]> {
     return parse<Incident>((await this.db.query<{ data_json: string }>("SELECT data_json FROM incidents ORDER BY opened_at DESC LIMIT $1", [limit])).rows);
   }
@@ -30,6 +33,9 @@ export class Store {
     return parse<Decision>((await this.db.query<{ data_json: string }>("SELECT data_json FROM decisions WHERE incident_id = $1 ORDER BY ledger_seq", [incidentId])).rows);
   }
 
+  async decisionsAfter(seq: number, limit = 100): Promise<Decision[]> {
+    return parse<Decision>((await this.db.query<{ data_json: string }>("SELECT data_json FROM decisions WHERE ledger_seq > $1 ORDER BY ledger_seq DESC LIMIT $2", [seq, limit])).rows);
+  }
   async recentDecisions(limit = 40): Promise<Decision[]> {
     return parse<Decision>((await this.db.query<{ data_json: string }>("SELECT data_json FROM decisions ORDER BY ledger_seq DESC LIMIT $1", [limit])).rows);
   }

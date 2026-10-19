@@ -48,8 +48,12 @@ export class LocalSignedAnchor implements AnchorAdapter {
   }
   async verify(s: { toSeq: number; entryHash: string; data: Record<string, unknown> }) {
     const sig = typeof s.data.signature === "string" ? s.data.signature : "";
-    const ok = verify(null, Buffer.from(`${s.toSeq}:${s.entryHash}`), this.pub, Buffer.from(sig, "base64"));
-    return { ok, detail: ok ? "Checkpoint signature valid" : "Checkpoint signature invalid for this key" };
+    const stored = typeof s.data.publicKey === "string" ? s.data.publicKey : this.publicKeyHex();
+    const key = createPublicKey({ key: Buffer.from(stored, "hex"), format: "der", type: "spki" });
+    const ok = verify(null, Buffer.from(`${s.toSeq}:${s.entryHash}`), key, Buffer.from(sig, "base64"));
+    const pinned = stored === this.publicKeyHex() && !this.ephemeral;
+    if (!ok) return { ok, detail: "Checkpoint signature invalid" };
+    return { ok, detail: pinned ? "Checkpoint signature valid (pinned key)" : "Checkpoint signature valid, but the signing key is not pinned: set LEDGER_SIGNING_KEY" };
   }
 }
 

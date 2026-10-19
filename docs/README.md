@@ -5,6 +5,7 @@ Markdown versions of the Ordo product, architecture and validation documentation
 | Document | What it covers |
 | --- | --- |
 | [technical-requirements.md](technical-requirements.md) | **MVP build spec (Oct–Nov 2026):** scope, stack, repo layout, agents, policy guard, ledger, adapters, API, tests, milestones. Wins over other docs for the MVP |
+| [environments.md](environments.md) | **How to run, configure and live-test Ordo:** Vercel environments, syncing variables, env doctor, the preview rework loop |
 | [contracts-and-deployment.md](contracts-and-deployment.md) | On-chain accounts, Hedera resources, Solidity contracts, ENS, 0G, and app deployment (GCP, Neon, Vercel, CI/CD), step by step |
 | [improvements.md](improvements.md) | Review of PRD, plan and docs: blockers, inconsistencies, safety and engineering fixes |
 | [ethglobal-mumbai-strategy.md](ethglobal-mumbai-strategy.md) | ETHGlobal Mumbai partner choice (Hedera, 0G, ENS) |

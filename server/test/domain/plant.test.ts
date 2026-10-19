@@ -82,3 +82,13 @@ describe("simulator", () => {
     expect(downtimeAvoided({ pFailure: 0.05, workOrderOpened: true }).minutes).toBe(0);
   });
 });
+
+describe("detector edge cases", () => {
+  it("a machine returning from maintenance is not reported as drifting", () => {
+    const p = new Plant(42, "bearing_wear");
+    p.apply({ tool: "open_work_order", args: { assetId: "CNC-05", priority: "high", windowMinutes: 0 } });
+    const s = run(p, 90).filter((x) => x.assetId === "CNC-05");
+    expect(s.some((x) => x.quality === "uncertain")).toBe(true);
+    expect(detectAll(s.slice(-60 * 4))).toBeNull();
+  });
+});

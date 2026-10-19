@@ -14,6 +14,13 @@ const Env = z.object({
   POLICY_FILE: z.string().default("../policies/line-02.v1.yaml"),
   WEB_DIST: z.string().default("../web/dist"),
   CORS_ORIGINS: z.string().default(""),
+  /** If set, every write (POST/PATCH) must send header x-ordo-passcode with this value. */
+  DEMO_PASSCODE: z.string().optional(),
+  /** Run a background timer that advances the plant. Off on serverless (requests drive it). */
+  ENGINE_TIMER: z.enum(["auto", "on", "off"]).default("auto"),
+  VERCEL: z.string().optional(),
+  VERCEL_ENV: z.string().optional(),
+  VERCEL_GIT_COMMIT_SHA: z.string().optional(),
 
   SIM_SEED: z.coerce.number().int().default(42),
   SIM_SCENARIO: z.enum(SCENARIOS).default("bearing_wear"),
@@ -30,7 +37,6 @@ const Env = z.object({
   OPENAI_COMPAT_MODEL: z.string().optional(),
 
   ANCHOR: z.enum(["local", "hedera"]).default("local"),
-  ANCHOR_EVERY: z.coerce.number().int().min(1).default(25),
   LEDGER_SIGNING_KEY: z.string().optional(),
   APPROVALS: z.enum(["app", "hedera"]).default("app"),
   PAYMENTS: z.enum(["mock", "hedera"]).default("mock"),
@@ -62,4 +68,5 @@ const Env = z.object({
 });
 
 export type Config = z.infer<typeof Env>;
+export const timerEnabled = (c: Config) => (c.ENGINE_TIMER === "auto" ? !c.VERCEL : c.ENGINE_TIMER === "on");
 export const loadConfig = (env: NodeJS.ProcessEnv = process.env): Config => Env.parse(env);
