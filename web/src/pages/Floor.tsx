@@ -139,6 +139,18 @@ function Agents() {
             <tr key={a.key}>
               <td>
                 <b>{a.label}</b>
+                {a.inft && (
+                  <div className="small" title={a.inft.data.map((d) => `${d.dataDescription} · ${d.dataHash.slice(0, 10)}…`).join("\n")}>
+                    {a.inft.tokenId === null ? (
+                      <span className={a.inft.status === "failed" ? "field-e" : "faint"}>{a.inft.status === "failed" ? `iNFT mint failed: ${a.inft.error}` : "minting iNFT on 0G…"}</span>
+                    ) : (
+                      <a href={a.inft.url ?? a.inft.txUrl ?? undefined} target="_blank" rel="noreferrer">
+                        iNFT #{a.inft.tokenId}
+                        {a.inft.status === "pending" ? " · updating" : ""}
+                      </a>
+                    )}
+                  </div>
+                )}
               </td>
               <td className="muted">{a.scope}</td>
               <td>

@@ -430,6 +430,7 @@ export function createApp(sys: System, opts: AppOptions = {}) {
       [sid(c)],
     );
     const views = await sys.plant.views(sid(c));
+    const nfts = await sys.agentNfts.ofSite(sid(c));
     return c.json(
       AGENTS.map((a) => {
         const st = stats.rows.find((x) => x.agent === `agent:${a}`);
@@ -437,6 +438,7 @@ export function createApp(sys: System, opts: AppOptions = {}) {
         return {
           key: a,
           ...AGENT_INFO[a],
+          inft: nfts.get(a) ?? null,
           autonomy: level,
           assets: views.filter((v) => v.owningAgent === a).map((v) => ({ id: v.id, name: v.name, status: v.status })),
           currentTask: current[0] ? `${current[0].run_id} · ${current[0].code} ${current[0].name ?? ""}`.trim() : null,

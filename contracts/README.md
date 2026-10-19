@@ -74,11 +74,13 @@ ENS_OWNER_KEY=0x... ENS_LABEL=ordo-mfg pnpm setup:ens
 
 The app then issues the rest as the site changes: `<site>.<parent>` with its own `UserRegistry`, and in it a name for each person (minted to their wallet with no roles on the token, so it cannot be transferred; revoked when they hold no role), each asset and each agent, with `com.ordo.*` text records in Ordo's resolver. The contract addresses are the Sepolia set ENS deployed on 2026-10-01 (`server/src/chain/ensv2.ts`).
 
-## 0G
+## 0G (Galileo testnet, chain 16602)
+
+`src/OrdoAgentNFT.sol` makes each agent of each site an ERC-7857 iNFT: its intelligent data is the policy hash it acts under, its model, the autonomy each line gives it and its scope; Ordo updates it when any of those change (`Updated` events), and the site's plant managers are its authorized users. Agents belong to their site, so tokens do not transfer. It uses OpenZeppelin's ERC-721, which needs Cancun, so `compile.mjs` compiles it in a separate Cancun pass (0G supports Cancun) and its tests run on anvil.
+
+The **0G setup** workflow (`.github/deploy/zerog.request`, environment `zerog-testnet` with `ZG_PRIVATE_KEY`) deploys it (`inft`), turns on evidence copies to 0G Storage (`storage`) and funds the 0G Compute ledger (`ledger`), and writes the values and the key to Vercel. Locally:
 
 ```bash
-pnpm --filter @ordo/server add @0glabs/0g-serving-broker @0gfoundation/0g-ts-sdk ethers
-LLM_PROVIDER=0g EVIDENCE_STORE=0g ZG_PRIVATE_KEY=0x... pnpm --filter @ordo/server dev
+ZG_PRIVATE_KEY=0x... pnpm setup:zerog                          # deploy OrdoAgentNFT → ZG_INFT_ADDRESS
+ZG_PRIVATE_KEY=0x... pnpm --filter @ordo/server zerog:ledger   # fund 0G Compute (3 0G), list providers
 ```
-
-Fund the wallet from the 0G faucet and deposit to the compute broker first. Package names change often; check docs.0g.ai.

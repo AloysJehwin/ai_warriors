@@ -153,6 +153,17 @@ export interface AgentRow {
   decisionsToday: number;
   escalationsToday: number;
   avgConfidence: number | null;
+  /** The agent's ERC-7857 iNFT on 0G, when configured */
+  inft: {
+    contract: string;
+    tokenId: number | null;
+    status: "pending" | "synced" | "failed";
+    error: string | null;
+    url: string | null;
+    txUrl: string | null;
+    data: { dataDescription: string; dataHash: string }[];
+    authorizedUsers: string[];
+  } | null;
 }
 export interface Incident {
   id: string;

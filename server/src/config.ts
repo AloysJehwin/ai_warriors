@@ -103,6 +103,9 @@ const Env = z.object({
   ZG_INDEXER_URL: z.string().default("https://indexer-storage-testnet-turbo.0g.ai"),
   ZG_PRIVATE_KEY: z.string().optional(),
   ZG_PROVIDER_ADDRESS: z.string().optional(),
+  /** OrdoAgentNFT (ERC-7857) on 0G Galileo, from the 0G setup workflow: each agent of each site is a token */
+  ZG_INFT_ADDRESS: z.string().optional(),
+  ZG_CHAIN_ID: z.coerce.number().int().default(16602),
 });
 
 export type Config = z.infer<typeof Env>;

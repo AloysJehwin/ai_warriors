@@ -208,4 +208,13 @@ CREATE UNIQUE INDEX ens_names_name ON ens_names (name);
 CREATE INDEX ens_names_due ON ens_names (status, next_try_at);
 `,
   },
+  {
+    version: 9,
+    name: "agent iNFTs",
+    sql: `
+CREATE TABLE agent_nfts (site_id TEXT NOT NULL REFERENCES sites(id), agent TEXT NOT NULL, token_id INTEGER, want_json TEXT NOT NULL,
+  have_json TEXT, status TEXT NOT NULL, tx_hash TEXT, mint_tx TEXT, error TEXT, attempts INTEGER NOT NULL DEFAULT 0,
+  next_try_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY (site_id, agent));
+`,
+  },
 ];
