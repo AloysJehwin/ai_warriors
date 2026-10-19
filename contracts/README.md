@@ -12,7 +12,7 @@ Three contracts on Hedera, two on Sepolia for ENS (below). Every authorisation i
 `OrdoWorkOrders` and `OrdoPolicies` read credentials from the deployed `OrdoTrust` and share its signature scheme through `OrdoSigned`.
 
 ```bash
-pnpm --filter @ordo/contracts test     # compile with npm solc + 17 tests on an in-process EVM
+pnpm --filter @ordo/contracts test     # compile with npm solc + 19 tests on an in-process EVM
 ```
 
 ## Hedera testnet
