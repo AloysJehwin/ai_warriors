@@ -56,6 +56,17 @@ npx vercel env pull server/.env --environment=development
 
 The push uses Vercel's API with upsert, marks keys, secrets, passcodes and database URLs as **sensitive** (write-only in the dashboard), and never prints values. Variables take effect on the next deployment.
 
+### Secrets that live in GitHub
+
+Chain keys are kept as GitHub environment secrets (`hedera-testnet`, later `sepolia` and `zerog-testnet`) and copied to Vercel by the **Sync secrets to Vercel** workflow, so they never pass through a laptop. `.github/vercel-secrets.map` lists them by name:
+
+```
+# <GitHub environment>  <GitHub secret>       <Vercel variable>     [format]  [Vercel targets]
+hedera-testnet          HEDERA_OPERATOR_KEY   TRUST_RELAYER_KEY     evm-key
+```
+
+To add one: create the secret in its GitHub environment, add a line, push. Editing the map runs the workflow (one job per environment listed); it needs `VERCEL_TOKEN` as a repository secret. `evm-key` turns a Hedera portal key (hex or DER) into `0x` + 64 hex. Locally, `pnpm secrets:sync <environment>` does the same from your shell's variables.
+
 ## Check before you test: env doctor
 
 ```bash

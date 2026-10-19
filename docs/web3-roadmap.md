@@ -85,10 +85,41 @@ That covers three sponsors with one coherent story: **a staked, named, accountab
 4. The gate waits; an unstaked person's signature is rejected on-chain; Priya signs and the gate releases.
 5. Scan the shipped lot's QR: the public page verifies the passport, the HCS trail and the validator's stake.
 
+## 7. Testnets and what each one hosts
+
+One ECDSA key can deploy on all three chains: its EVM address is derived from the key, so fund that address from each faucet. Keep each chain's key in its own GitHub environment; list the ones the app needs in `.github/vercel-secrets.map` and the **Sync secrets to Vercel** workflow copies them (names only in logs).
+
+| Testnet | Chain id | Hosts | Items | Status | You provide |
+| --- | --- | --- | --- | --- | --- |
+| **Hedera testnet** | 296 | `OrdoTrust`; HCS ledger topic; agent and vendor accounts; `AgentSpendVault` + `OrdoPolicyRegistry`; lot passport HTS NFT collection; x402 settlement | #1 #2 #3 #4 #9 #10 | `OrdoTrust` live | Done: `hedera-testnet` environment. Later: an agent account (ECDSA) as `HEDERA_AGENT_ID` / `HEDERA_AGENT_KEY` |
+| **Ethereum Sepolia** | 11155111 | ENSv2 parent name, subnames for site, people, assets and agents, text records | #6 | Not started | `sepolia` environment with `ENS_OWNER_KEY`; Sepolia ETH on its address. Confirm at the event that ENSv2 is still judged on Sepolia |
+| **0G Galileo testnet** | check docs.0g.ai | 0G Storage for evidence files, 0G Compute for root-cause analysis, ERC-7857 agent iNFT contract | #7 #8 | Adapters partly exist | `zerog-testnet` environment with `ZG_PRIVATE_KEY`; 0G faucet tokens on its address |
+
+Item #5 (public passport page) is a web route and needs no chain of its own.
+
+## 8. Plan for the ten items
+
+Each item lands as: a deploy workflow (like `deploy-trust.yml`) that prints only public values; public variables set in Vercel; secrets added to the map; tests on an in-process EVM or a mocked SDK; a demo step. Ordo is pre-existing work: record the baseline commit before 5 Nov and keep one visible, scoped item (suggested: #5 and the demo polish) for the event weekend.
+
+| # | Item | Testnet | Build | Deploy and configure | Demo moment | Effort | When |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | HCS ledger anchoring live | Hedera | Adapter exists; add a workflow that creates the topic | `HEDERA_TOPIC_ID`, `ANCHOR=hedera`; operator id and key via the map | Proof page links each anchor to HashScan | 0.5 day | 20 Oct |
+| 2 | Agents pay vendors (Agent Kit) | Hedera | Hedera Agent Kit tool behind the `open_work_order` action; vendor allow-list and caps from `AgentSpendVault`; payment written to the ledger | Run `bootstrap:hedera` and `deploy-hedera.ts` from a workflow; `HEDERA_AGENT_*`, `HEDERA_VENDOR_*`, `HEDERA_VAULT_ADDRESS`, `HEDERA_POLICY_REGISTRY_ADDRESS`, `PAYMENTS=hedera` | Drift opens a work order and the agent pays the bonded vendor inside the cap | 3 days | 21–23 Oct |
+| 3 | Validator staking and role credentials | Hedera | Done | Done; needs `TRUST_RELAYER_KEY` in Vercel | An unstaked signature is rejected on-chain | Done | — |
+| 4 | Lot passport HTS NFT | Hedera | Mint at run start (metadata = run, lot, template version); append stage results and signatures as HCS messages keyed to the serial; freeze on hold; transfer on ship | Workflow creates the NFT collection (supply, freeze and pause keys = operator); `HEDERA_PASSPORT_TOKEN_ID` | Run start mints serial #n; hold freezes it | 3 days | 24–27 Oct |
+| 5 | Public passport page + QR | — | `#/passport/<token>/<serial>` without sign-in: verifies NFT state, the HCS trail and the releasing validators' stakes; QR on the run and release views | None | Scan the shipped lot's QR | 1 day | 28 Oct |
+| 6 | ENSv2 names | Sepolia | Register the parent name; issue subnames at onboarding approval (people) and asset registration; role, site and reputation as text records; resolve names everywhere an address shows | Workflow runs `ens-bootstrap.ts`; `ENS_RPC_URL`, `ENS_PARENT_NAME`, `IDENTITY=ens`; `ENS_OWNER_KEY` via the map | The validator receives `priya.<site>.ordo…eth` on approval | 3 days | 29 Oct–1 Nov |
+| 7 | 0G Storage and Compute | 0G | Evidence blobs uploaded to 0G Storage with the Merkle root in the ledger; root-cause analysis on 0G Compute with the provider's signed response stored | `ZG_RPC_URL`, `ZG_INDEXER_URL`, `ZG_PROVIDER_ADDRESS`; `ZG_PRIVATE_KEY` via the map; deposit to the compute ledger once | Evidence file shows its 0G root; diagnosis shows "verified on 0G Compute" | 2 days | 2–3 Nov |
+| 8 | Agents as ERC-7857 iNFTs | 0G | Contract holding policy hash, model id and autonomy level; mint one per agent; autonomy changes update it | Workflow deploys it; `ZG_INFT_ADDRESS` | Agent page links to its iNFT | 1 day | 4 Nov |
+| 9 | x402 pay-per-call | Hedera | An agent buys an external inspection report per request: Ordo hosts a paid `/v1/x402/inspection` endpoint and the agent pays it through an x402 facilitator | Facilitator URL; agent key reused. Confirm a Hedera testnet facilitator exists before building | Second payment path in the agent log | 2 days | Event weekend, if confirmed |
+| 10 | Threshold approvals | Hedera | Raising autonomy to L4 or publishing a policy needs 2 of 3 plant manager signatures, checked by the contract against `OrdoTrust` roles | Redeploy `OrdoPolicyRegistry` with the threshold check | The third signature publishes the policy hash on-chain | 1.5 days | 24 Oct, alongside #4 |
+
+**Priority if time runs short.** Must: #1, #2, #3, #4, #5 (Hedera Agentic Payments and Tokenization). Should: #6 (ENS), #10. Could: #7, #8 (0G), #9.
+
 ## Status
 
 - **Done: roles, onboarding, validators, staking and slashing (#3).** `contracts/src/OrdoTrust.sol` keeps role credentials per site, granted only with a site admin's EIP-712 signature; validator stakes with a 7-day unstake cooldown; release records that require a staked reviewer and a staked plant manager; and slashing by two other active validators plus a plant manager into the site's quality fund. The contract verifies the same `OrdoSignature` typed data people sign in the console, so the relayer has no authority.
 - **In the app:** applications to join a site (by site code), to become a validator, and to register as a vendor, with files hashed on upload; an Applications queue where admins approve or decline by signature; a Validators tab with stake, request-unstake and withdraw from the person's own wallet, and slash proposals; validation "Reviewed by" / "Approved by" and quality-gate releases accepted only from validators (and, with OrdoTrust configured, only from validators with an active stake); released packages recorded on-chain.
 - **Tested:** 8 contract tests on an in-process EVM; an API test that deploys OrdoTrust and runs registration, signed grants, staking, an on-chain release and a slash; the browser flow with validator onboarding.
 - **Deployed:** OrdoTrust is live on Hedera testnet at [`0x608cba52976e34fa160fe64ff0499a8a5a4eb9e1`](https://hashscan.io/testnet/contract/0x608cba52976e34fa160fe64ff0499a8a5a4eb9e1) (deploy tx [`0x4edba9c8…f676c6`](https://hashscan.io/testnet/transaction/0x4edba9c8ca3dd02922ba1c0e322ad6c2259359814de81f54f03f6a1b10f676c6)), minimum stake 10 HBAR, 7-day unstake cooldown. It was deployed by the `Deploy OrdoTrust` workflow (`.github/workflows/deploy-trust.yml`) from the `hedera-testnet` environment's operator key.
-- **Next:** items #1 and #2.
+- **Next:** section 8, starting with #1 and #2.
