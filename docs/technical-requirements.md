@@ -337,7 +337,7 @@ ENS_RPC_URL=  ENS_PARENT_NAME=  ENS_OWNER_KEY=
 
 ## 17. Deployment
 
-- `apps/api` → container → Cloud Run (min instances 1 during demo week to avoid cold starts; SSE needs request timeout ≥ 60 min).
+- `apps/api` → container → Cloud Run in `asia-south1`, **min 1 / max 1 instance** (in-process simulator and single ledger writer), CPU always allocated, request timeout 3600 s for SSE. Full steps: [contracts-and-deployment.md](contracts-and-deployment.md).
 - `apps/web` → Vercel, `NEXT_PUBLIC_API_URL` pointing at Cloud Run; CORS restricted to the web origin.
 - Postgres → Neon (branch per PR optional). Migrations run on deploy.
 - Seed script loads line, assets, policy, scenarios.
