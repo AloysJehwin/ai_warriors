@@ -1,5 +1,7 @@
 # Ordo — Task Assignment (2 people)
 
+> **Note (19 Oct 2026):** this task list follows the old Python + Google Cloud stack. Use the milestones in [docs/technical-requirements.md](docs/technical-requirements.md) §18 until it is rewritten.
+
 Companion to [`PLAN.md`](./PLAN.md). That file explains *why* the plan is shaped this way.
 **This file is the working checklist** — everything is split by owner and every task has a test.
 

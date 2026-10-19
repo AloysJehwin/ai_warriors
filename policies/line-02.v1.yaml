@@ -1,0 +1,25 @@
+# Ordo autonomy policy for LINE-02. Versioned: any change bumps `version`.
+# The guard evaluates every proposed action against this file. Its hash is recorded
+# with every decision (and, when configured, checked against OrdoPolicyRegistry on-chain).
+id: line-02
+version: 1
+confidenceThreshold: 0.7
+defaultRole: operator
+tools:
+  adjust_line_speed:
+    autoFrom: L3            # lowest level at which it may run without a person
+    minPct: -20             # hard range; outside it the action is blocked
+    maxPct: 10
+    increaseRole: plant_manager   # any speed increase always needs this role
+  hold_gate:
+    autoFrom: L3
+  reroute_batch:
+    autoFrom: L3
+    autoMaxUnits: 100
+    overLimitRole: plant_manager
+    overLimitAutoFrom: L4
+  open_work_order:
+    autoFrom: L4
+    role: maintenance_lead
+  request_inspection:
+    autoFrom: L3

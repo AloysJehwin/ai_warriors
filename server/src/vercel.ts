@@ -1,0 +1,44 @@
+/**
+ * Vercel serverless entry. Bundled by scripts/vercel-build.mjs into .vercel/output/functions/api.func.
+ * One instance builds the system once and serves many requests; the plant is replayed from Postgres,
+ * so any number of instances stay consistent.
+ */
+import type { IncomingMessage, ServerResponse } from "node:http";
+import { getRequestListener } from "@hono/node-server";
+import policyText from "../../policies/line-02.v1.yaml";
+import { loadConfig } from "./config.js";
+import { createApp } from "./http/app.js";
+import { buildSystem } from "./wiring.js";
+
+type Listener = (req: IncomingMessage, res: ServerResponse) => Promise<void>;
+let ready: Promise<Listener> | null = null;
+
+async function init(): Promise<Listener> {
+  const cfg = loadConfig();
+  const sys = await buildSystem(cfg, { policyText });
+  for (const w of sys.warnings) console.warn(`[ordo] ${w}`);
+  const app = createApp(sys, {
+    corsOrigins: cfg.CORS_ORIGINS ? cfg.CORS_ORIGINS.split(",").map((s) => s.trim()) : [],
+    allowTamper: true,
+    passcode: cfg.DEMO_PASSCODE,
+    build: { env: cfg.VERCEL_ENV ?? "vercel", commit: cfg.VERCEL_GIT_COMMIT_SHA ?? null },
+  });
+  // Requests arrive as /v1/... (rewritten to this function) or /api/v1/...; serve both.
+  return getRequestListener((req) => {
+    const url = new URL(req.url);
+    if (url.pathname.startsWith("/api/")) {
+      url.pathname = url.pathname.slice(4);
+      return app.fetch(new Request(url, req));
+    }
+    return app.fetch(req);
+  });
+}
+
+export default async function handler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  ready ??= init().catch((e) => {
+    ready = null; // retry on the next request, e.g. after the database wakes up
+    throw e;
+  });
+  const listener = await ready;
+  await listener(req, res);
+}

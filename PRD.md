@@ -1,5 +1,7 @@
 # Product Requirement Document (PRD)
 
+> **Note (19 Oct 2026):** the stack and timeline sections of this PRD are superseded by [docs/technical-requirements.md](docs/technical-requirements.md). Product intent, scope and guardrails still apply. Review: [docs/improvements.md](docs/improvements.md).
+
 ## Project Title
 
 **Ordo** — Autonomous Self-Healing Manufacturing Orchestration Platform
