@@ -217,4 +217,11 @@ CREATE TABLE agent_nfts (site_id TEXT NOT NULL REFERENCES sites(id), agent TEXT 
   next_try_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY (site_id, agent));
 `,
   },
+  {
+    version: 10,
+    name: "public pipelines",
+    sql: `
+ALTER TABLE sites ADD COLUMN public_pipelines BOOLEAN NOT NULL DEFAULT true;
+`,
+  },
 ];

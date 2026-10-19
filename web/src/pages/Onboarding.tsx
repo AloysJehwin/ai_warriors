@@ -22,9 +22,24 @@ export const SCOPES = [
 const statusTag = (s: string) => (s === "approved" ? "ok" : s === "rejected" ? "bad" : "accent");
 
 /** One form for joining a site, applying as a validator, or registering as a vendor. */
-export function ApplyForm({ siteId, kind, onDone, onCancel }: { siteId: string; kind: OnboardingKind; onDone: (r: OnboardingView) => void; onCancel?: () => void }) {
-  const [role, setRole] = useState<string>(kind === "validator" ? "quality" : kind === "vendor" ? "vendor" : "operator");
-  const [form, setForm] = useState<Record<string, string>>({ fullName: "" });
+export function ApplyForm({
+  siteId,
+  kind,
+  initialRole,
+  context,
+  onDone,
+  onCancel,
+}: {
+  siteId: string;
+  kind: OnboardingKind;
+  initialRole?: string;
+  /** extra fields the administrator sees with the application, e.g. the pipeline it came from */
+  context?: Record<string, string>;
+  onDone: (r: OnboardingView) => void;
+  onCancel?: () => void;
+}) {
+  const [role, setRole] = useState<string>(initialRole ?? (kind === "validator" ? "quality" : kind === "vendor" ? "vendor" : "operator"));
+  const [form, setForm] = useState<Record<string, string>>({ ...context, fullName: "" });
   const [files, setFiles] = useState<File[]>([]);
   const toast = useToast();
   const set = (k: string) => (e: { target: { value: string } }) => setForm({ ...form, [k]: e.target.value });

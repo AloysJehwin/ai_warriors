@@ -59,6 +59,9 @@ export function SignIn({ onSignedIn }: { onSignedIn: (m: Me) => void }) {
           <li>Roles are granted per site by an administrator, by wallet address</li>
           <li>Decisions are EIP-712 signatures, hash-chained into an anchored ledger</li>
         </ul>
+        <p className="small">
+          New here? <a href="#/open">Browse the pipelines running now</a> and apply for a role on one.
+        </p>
       </div>
     </div>
   );

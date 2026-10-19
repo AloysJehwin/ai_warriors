@@ -174,6 +174,18 @@ export function createApp(sys: System, opts: AppOptions = {}) {
     return c.json(await sys.passports.publicView(id));
   });
 
+  // ---------------- Running pipelines: public, no sign-in, so a newcomer can see what a site runs and apply for a role ----------------
+  app.get("/v1/public/pipelines", async (c) => {
+    c.header("cache-control", "public, max-age=15");
+    return c.json(await sys.openings.list());
+  });
+  app.get("/v1/public/pipelines/:siteId/:runId", async (c) => {
+    const [siteId, runId] = [c.req.param("siteId"), c.req.param("runId")];
+    if (!/^[\w-]{1,64}$/.test(siteId) || !/^[\w-]{1,64}$/.test(runId)) throw new HttpError(404, "No public pipeline here");
+    c.header("cache-control", "public, max-age=15");
+    return c.json(await sys.openings.get(siteId, runId));
+  });
+
   // ---------------- x402: vibration assessments sold per call, paid in HBAR (no sign-in; the payment is the credential) ----------------
   const Assess = z.object({
     machineClass: z.enum(["medium", "large"]).default("medium"),
@@ -207,7 +219,7 @@ export function createApp(sys: System, opts: AppOptions = {}) {
   site.get("/", async (c) => c.json({ ...(await sys.plant.site(sid(c))), myRoles: c.get("roles") }));
   site.patch("/", async (c) => {
     need(c, "admin");
-    await sys.plant.updateSite(sid(c), await body(c, z.object({ name: z.string().trim().min(2).max(80).optional(), timezone: z.string().max(60).optional() })));
+    await sys.plant.updateSite(sid(c), await body(c, z.object({ name: z.string().trim().min(2).max(80).optional(), timezone: z.string().max(60).optional(), publicPipelines: z.boolean().optional() })));
     return c.json(await sys.plant.site(sid(c)));
   });
   site.post("/zones", async (c) => {

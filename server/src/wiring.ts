@@ -12,6 +12,7 @@ import { Inbox } from "./core/inbox.js";
 import { Jobs } from "./core/jobs.js";
 import { Monitor } from "./core/monitor.js";
 import { Names } from "./core/names.js";
+import { Openings } from "./core/openings.js";
 import { Passports } from "./core/passports.js";
 import { Proof } from "./core/proof.js";
 import { Recorder } from "./core/recorder.js";
@@ -57,6 +58,7 @@ export interface System {
   workOrders: WorkOrders;
   autonomy: Autonomy;
   passports: Passports;
+  openings: Openings;
   jobs: Jobs;
   names: Names;
   agentNfts: AgentNfts;
@@ -254,6 +256,7 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
   }
   const agentNfts = new AgentNfts(db, rec, inftRail, policy.hash, () => (llm.name === "gemini" ? `gemini:${cfg.GEMINI_MODEL}` : llm.name), now);
   passports.names = names;
+  const openings = new Openings(db, engine);
 
   const advance = async (force = false) => {
     // throttle: one cycle per 4 s across all instances (the lease is left to expire, not released)
@@ -318,6 +321,7 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
     workOrders,
     autonomy,
     passports,
+    openings,
     jobs,
     names,
     agentNfts,

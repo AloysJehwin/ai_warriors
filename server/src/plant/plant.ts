@@ -54,16 +54,18 @@ export class PlantService {
   }
 
   async site(siteId: string) {
-    const s = (await this.db.query<{ id: string; name: string; timezone: string }>("SELECT id, name, timezone FROM sites WHERE id = $1", [siteId])).rows[0];
+    const s = (await this.db.query<{ id: string; name: string; timezone: string; public_pipelines: boolean }>("SELECT id, name, timezone, public_pipelines FROM sites WHERE id = $1", [siteId])).rows[0];
     if (!s) throw new HttpError(404, "Site not found");
     const lines = (await this.db.query<{ id: string; name: string; autonomy: AutonomyLevel }>("SELECT id, name, autonomy FROM lines WHERE site_id = $1 ORDER BY created_at", [siteId])).rows;
     const zones = (await this.db.query<{ id: string; name: string; sort: number }>("SELECT id, name, sort FROM zones WHERE site_id = $1 ORDER BY sort, name", [siteId])).rows;
-    return { ...s, lines, zones };
+    const { public_pipelines, ...rest } = s;
+    return { ...rest, publicPipelines: Boolean(public_pipelines), lines, zones };
   }
 
-  async updateSite(siteId: string, patch: { name?: string; timezone?: string }) {
+  async updateSite(siteId: string, patch: { name?: string; timezone?: string; publicPipelines?: boolean }) {
     if (patch.name) await this.db.query("UPDATE sites SET name = $1 WHERE id = $2", [patch.name, siteId]);
     if (patch.timezone) await this.db.query("UPDATE sites SET timezone = $1 WHERE id = $2", [patch.timezone, siteId]);
+    if (patch.publicPipelines !== undefined) await this.db.query("UPDATE sites SET public_pipelines = $1 WHERE id = $2", [patch.publicPipelines, siteId]);
   }
   async addLine(siteId: string, name: string) {
     const id = newId("line");

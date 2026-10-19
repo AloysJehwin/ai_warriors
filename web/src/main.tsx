@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { api } from "./api";
 import { AppProvider } from "./lib/app";
 import { useRoute } from "./lib/router";
+import { Open } from "./pages/Open";
 import { Passport } from "./pages/Passport";
 import { SignerProvider } from "./lib/sign";
 import { SignIn } from "./pages/SignIn";
@@ -59,6 +60,8 @@ function Root() {
 
   // a lot's public passport (the QR code on a shipped lot) needs no account
   if (route.page === "passport" && route.id) return <Passport runId={route.id} />;
+  // running pipelines are public too: a newcomer browses them and applies for a role
+  if (route.page === "open") return <Open route={route} me={me} onSignedIn={setMe} />;
   if (error) return <div className="boot">Could not reach the Ordo API: {error}</div>;
   if (!me || !meta || !status) return <div className="boot">Loading…</div>;
   if (!me.user) return <SignIn onSignedIn={setMe} />;
