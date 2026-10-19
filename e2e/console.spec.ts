@@ -106,7 +106,7 @@ test("sign in, set up a site, build, run, sign a gate, verify", async ({ page })
   await expect(page.getByText(/Published Housing line v1/)).toBeVisible();
 
   // ---- Start a run ----
-  await page.getByRole("link", { name: "Pipelines" }).click();
+  await page.getByRole("link", { name: "Pipelines", exact: true }).click();
   await page.getByRole("button", { name: "Start a run" }).click();
   const start = page.getByRole("dialog", { name: "Start a pipeline run" });
   await choose(page, start.locator(".sel-btn").first(), /Housing line/);
@@ -119,7 +119,7 @@ test("sign in, set up a site, build, run, sign a gate, verify", async ({ page })
   // ---- The machine counts 5 parts: stage 02 completes from measured data ----
   await page.getByRole("link", { name: "Floor & fleet" }).click();
   await reading(/^part count$/, "105");
-  await page.getByRole("link", { name: "Pipelines" }).click();
+  await page.getByRole("link", { name: "Pipelines", exact: true }).click();
   // OEE cannot be measured without an ideal cycle time, so the stage waits for a person to confirm.
   await expect(page.locator(".node-hit", { hasText: "02" })).toContainText("Awaiting approval", { timeout: 30_000 });
   await page.locator(".node-hit", { hasText: "02" }).click();
@@ -192,7 +192,7 @@ test("sign in, set up a site, build, run, sign a gate, verify", async ({ page })
   await shot(page, "14-autonomy-proposal");
 
   // ---- The lot's passport: QR, ship with a signature, and the public page without signing in ----
-  await page.getByRole("link", { name: "Pipelines" }).click();
+  await page.getByRole("link", { name: "Pipelines", exact: true }).click();
   await page.getByRole("button", { name: "Lot passport" }).click();
   const pp = page.getByRole("dialog", { name: /Lot SO-7781/ });
   await expect(pp.getByRole("img", { name: /QR code/ })).toBeVisible();
