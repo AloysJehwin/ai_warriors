@@ -1,19 +1,134 @@
 export type {
-  Anomaly,
+  AgentKey,
   AnchorDto,
-  Approval,
+  AssetKind,
+  AssetStatus,
   AssetView,
   AutonomyLevel,
-  BatchView,
-  Decision,
-  Forecast,
-  Incident,
+  Criterion,
+  DataSource,
+  DecisionView,
+  InboxItemView,
+  InboxOption,
   LedgerEntryDto,
-  PlantView,
-  PolicyResult,
+  PackageType,
   Role,
-  SignalName,
-  StreamEvent,
-  ToolCall,
-  VerifyReport,
+  RunStatus,
+  RunView,
+  SignalLimit,
+  StageMode,
+  StageRunView,
+  StageSpec,
+  StageState,
+  TemplateSpec,
+  TemplateView,
 } from "../../server/src/domain/types";
+import type { AgentKey, AutonomyLevel, Role, StageMode } from "../../server/src/domain/types";
+export type StageModeT = typeof StageMode extends { options: readonly (infer X)[] } ? X : never;
+
+export interface Me {
+  user: { id: string; address: string; displayName: string | null; ens: string | null } | null;
+  memberships: { siteId: string; siteName: string; roles: Role[] }[];
+  canCreateSite: boolean;
+}
+export interface Site {
+  id: string;
+  name: string;
+  timezone: string;
+  lines: { id: string; name: string; autonomy: AutonomyLevel }[];
+  zones: { id: string; name: string; sort: number }[];
+  myRoles: Role[];
+}
+export interface Meta {
+  roles: { key: Role; label: string }[];
+  agents: { key: AgentKey; label: string; scope: string }[];
+  assetKinds: { key: string; label: string }[];
+  categories: string[];
+  packageTypes: string[];
+}
+export interface Status {
+  rails: { rail: string; mode: string; live: boolean }[];
+  warnings: string[];
+  policy: { id: string; version: number; hash: string };
+  build: { env: string; commit: string | null } | null;
+  signatureChainId: number;
+  restrictedSiteCreation: boolean;
+}
+export interface TypedSignature {
+  domain: { name: "Ordo"; version: "1"; chainId: number };
+  types: Record<string, { name: string; type: string }[]>;
+  primaryType: "OrdoSignature";
+  message: { action: string; entity: string; meaning: string; comment: string; site: string; nonce: string; issuedAt: string };
+}
+export interface Team {
+  members: { userId: string; address: string; name: string | null; ens: string | null; roles: Role[]; lastSeenAt: string | null }[];
+  invites: { id: string; address: string; role: Role; createdAt: string }[];
+}
+export interface AgentRow {
+  key: AgentKey;
+  label: string;
+  scope: string;
+  autonomy: AutonomyLevel;
+  assets: { id: string; name: string; status: string }[];
+  currentTask: string | null;
+  activeStages: number;
+  decisionsToday: number;
+  escalationsToday: number;
+  avgConfidence: number | null;
+}
+export interface Incident {
+  id: string;
+  assetId: string;
+  status: string;
+  title: string;
+  severity: string;
+  openedAt: string;
+  closedAt: string | null;
+}
+export interface PackageSummary {
+  id: string;
+  number: number;
+  code: string;
+  type: string;
+  typeLabel: string;
+  title: string;
+  status: "draft" | "in_review" | "changes_requested" | "rejected" | "released";
+  step: string;
+  stepIndex: number;
+  waitingOn: string | null;
+  needsMe: boolean;
+  owner: { address: string; name: string | null };
+  runId: string | null;
+  stageCode: string | null;
+  checks: { total: number; done: number };
+  updatedAt: string;
+}
+export interface PackageDetail extends Omit<PackageSummary, "owner" | "waitingOn" | "needsMe" | "checks"> {
+  owner: { id: string; address: string; name: string | null };
+  objective: string;
+  acceptance: string;
+  samplePlan: string;
+  windowStart: string | null;
+  windowEnd: string | null;
+  templateId: string | null;
+  assetId: string | null;
+  outcome: string;
+  returnedComment: string | null;
+  assessment: { ranAt: string; agent: string; summary: string; figures: { label: string; value: string }[]; confidence: number | null } | null;
+  checks: { id: string; criterion: string; method: string; target: string; source: string; result: string | null; actual: string | null; status: "pending" | "pass" | "fail"; auto: boolean; recordedBy: string | null; recordedAt: string | null }[];
+  evidence: { id: string; name: string; requirement: string; required: boolean; filename: string | null; mime: string | null; size: number | null; sha256: string | null; uploadedBy: string | null; uploadedAt: string | null; origin: string; version: number; removedAt: string | null }[];
+  chain: { meaning: string; label: string; role: Role; roleLabel: string; state: "signed" | "awaiting" | "pending" | "returned"; signer: { address: string; name: string | null } | null; signedAt: string | null; signature: string | null; comment: string | null }[];
+  readiness: { ready: boolean; items: { label: string; ok: boolean }[] };
+  audit: { seq: number; ts: string; actor: string; type: string; payload: Record<string, unknown>; entryHash: string }[];
+  createdAt: string;
+}
+export interface VerifyReport {
+  ok: boolean;
+  entries: number;
+  headSeq: number;
+  headHash: string | null;
+  broken: { seq: number; ok: boolean; reason?: string }[];
+  anchors: { id: number; kind: string; toSeq: number; entryHash: string; ref: string; url: string | null; ts: string; matchesChain: boolean; external: { ok: boolean; detail: string } }[];
+  subject: { id: string; entries: { seq: number; ts: string; actor: string; type: string; entryHash: string; ok: boolean }[] } | null;
+}
+export type Mode = StageModeT;

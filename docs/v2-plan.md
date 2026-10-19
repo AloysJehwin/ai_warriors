@@ -54,3 +54,13 @@ Every dropdown and date field uses Ordo components styled with the design tokens
 6. Screens.
 7. Validation packages + evidence.
 8. Hedera anchoring of signatures (needs a testnet operator account from portal.hedera.com).
+
+## Status (implemented)
+
+- Wallet accounts: SIWE sessions, per-site roles, invites by address, EIP-712 signatures for gates, inbox decisions, autonomy changes and validation sign-off.
+- Real data: MTConnect agents, CSV dataset replay, manual readings; metrics only from measured data.
+- Pipelines: 15 library templates, builder with parallel branches and rework loop, versioned publishing, run engine driven by part counters and operator records.
+- Agents on real telemetry with the policy guard; work orders start predictive-maintenance runs.
+- Validation packages with agent pre-check, hashed evidence in Postgres, separation of duties in the signature chain.
+- Console rebuilt to the mockups with custom Select, DatePicker, DateTimePicker and DateRangePicker components.
+- Tests: 80 server tests, Playwright flow with an injected wallet on the single-container and Vercel builds.

@@ -18,7 +18,7 @@ FROM base AS prod-deps
 RUN pnpm install --frozen-lockfile --prod --filter @ordo/server...
 
 FROM node:22-slim
-ENV NODE_ENV=production PORT=8080 WEB_DIST=/app/web/dist POLICY_FILE=/app/policies/line-02.v1.yaml DATA_DIR=/data SIM_AUTOSTART=true
+ENV NODE_ENV=production PORT=8080 WEB_DIST=/app/web/dist POLICY_FILE=/app/policies/default.yaml DATA_DIR=/data
 WORKDIR /app
 COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=prod-deps /app/server/node_modules ./server/node_modules

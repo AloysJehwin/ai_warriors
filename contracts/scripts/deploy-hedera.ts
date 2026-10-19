@@ -49,11 +49,11 @@ const fund = await wallet().sendTransaction({ to: vault, value: parseEther("40")
 await pub.waitForTransactionReceipt({ hash: fund });
 console.log(`funded vault with 40 HBAR (${fund})`);
 
-const policy = loadPolicy(readFileSync(new URL("../../policies/line-02.v1.yaml", import.meta.url), "utf8"));
+const policy = loadPolicy(readFileSync(new URL("../../policies/default.yaml", import.meta.url), "utf8"));
 const pm = privateKeyToAccount(d.accounts.plant_manager.key as Hex);
-const current = (await pub.readContract({ address: registry, abi: art("OrdoPolicyRegistry").abi, functionName: "policies", args: [keccak256(toBytes("LINE-02"))] })) as [number, Hex, number, bigint];
+const current = (await pub.readContract({ address: registry, abi: art("OrdoPolicyRegistry").abi, functionName: "policies", args: [keccak256(toBytes(policy.policy.id))] })) as [number, Hex, number, bigint];
 if (current[2] < policy.policy.version)
-  await send(pm, registry, "OrdoPolicyRegistry", "setPolicy", [keccak256(toBytes("LINE-02")), 3, `0x${policy.hash.slice(7)}`, policy.policy.version]);
+  await send(pm, registry, "OrdoPolicyRegistry", "setPolicy", [keccak256(toBytes(policy.policy.id)), 3, `0x${policy.hash.slice(7)}`, policy.policy.version]);
 else console.log(`policy v${current[2]} already published`);
 
 console.log(`

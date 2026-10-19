@@ -164,7 +164,7 @@ function setPolicy(bytes32 line, uint8 level, bytes32 policyHash, uint32 version
 event PolicyUpdated(bytes32 indexed line, uint8 level, bytes32 policyHash, uint32 version, address by);
 ```
 
-The API hashes `policies/line-02.v1.yaml` (canonical form) at startup and refuses to run L3/L4 automation if it differs from the registry. The Verify page shows "policy v1 ✔ matches on-chain". Changing autonomy in the UI becomes an on-chain, attributable event.
+The API hashes `policies/default.yaml` (canonical form) at startup and refuses to run L3/L4 automation if it differs from the registry. The Verify page shows "policy v1 ✔ matches on-chain". Changing autonomy in the UI becomes an on-chain, attributable event.
 
 **Tests:** only plant manager can set; version must increase; event emitted.
 
