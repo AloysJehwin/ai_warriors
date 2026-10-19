@@ -108,7 +108,9 @@ function JoinSite({ me, onSignOut, canCreate }: { me: Me; onSignOut: () => void;
       <div className="auth-card wide">
         <div className="eyebrow">Join a site · signed in as {shortAddr(addr)}</div>
         <h1>Apply to join a site</h1>
-        <p className="muted">Enter the site code your administrator shared (Settings → Site code). Your application goes to the site's administrators, who approve it with their wallet signature.</p>
+        <p className="muted">
+          Enter the site code your administrator shared (Settings → Site code), or <a href="#/open">find a running pipeline</a> and apply for a role on it. Your application goes to the site's administrators, who approve it with their wallet signature.
+        </p>
         {!site ? (
           <>
             <Field label="Site code" error={error}>

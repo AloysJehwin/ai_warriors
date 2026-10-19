@@ -35,6 +35,7 @@ export interface Site {
   id: string;
   name: string;
   timezone: string;
+  publicPipelines: boolean;
   lines: { id: string; name: string; autonomy: AutonomyLevel }[];
   zones: { id: string; name: string; sort: number }[];
   myRoles: Role[];
@@ -362,4 +363,27 @@ export interface EnsNamesResponse {
   live: boolean;
   parent: string | null;
   items: EnsNameView[];
+}
+
+// ---------- Public pipelines (no sign-in) ----------
+export interface OpenRole {
+  kind: "member" | "validator";
+  role: string;
+  label: string;
+  why: string[];
+  holders: number;
+}
+export interface PublicPipeline {
+  siteId: string;
+  site: string;
+  runId: string;
+  pipeline: { name: string; category: string; description: string; version: number };
+  status: string;
+  quantity: number;
+  startedAt: string;
+  dueAt: string | null;
+  metrics: { completed: number; total: number; gatesPending: number; rolledYield: number | null; onTrack: boolean | null };
+  stages: { code: string; column: number; name: string; state: string; mode: string; agent: string; resource: string; gateRole: string; progress: number }[];
+  roles: OpenRole[];
+  validation?: { ref: string; type: string; status: string; stageCode: string | null; waitingFor: { meaning: string; label: string; role: string; roleLabel: string } | null }[];
 }

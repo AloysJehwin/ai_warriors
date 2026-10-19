@@ -3,7 +3,7 @@ import { api } from "../api";
 import { useApp } from "../lib/app";
 import { ago, LEVEL_LABEL, shortAddr } from "../lib/format";
 import type { AutonomyLevel, AutonomyProposalView, EnsNamesResponse } from "../types";
-import { Action, Field, useToast } from "../ui/kit";
+import { Action, Field, Segmented, useToast } from "../ui/kit";
 import { AutonomyModal } from "./Pipelines";
 
 const ENS_STATUS = { pending: ["issuing…", "warn"], issued: ["issued", "ok"], revoked: ["revoked", ""], failed: ["failed", "bad"] } as const;
@@ -148,6 +148,30 @@ export function Settings() {
                 Copy join link
               </button>
             </div>
+          </div>
+        </section>
+        <section className="card">
+          <div className="card-h">
+            <h2>Public pipelines</h2>
+          </div>
+          <div className="card-b">
+            <p className="muted small">
+              Running pipelines are listed on the public <a href="#/open">Open pipelines</a> page, so people without an account can see what this site runs and apply for a role. It shows stages, progress and the roles needed; never order references, machine names, addresses or people's names.
+            </p>
+            <Segmented
+              size="sm"
+              value={site.publicPipelines ? "listed" : "hidden"}
+              onChange={async (v) => {
+                if (!can("admin")) return toast("Only an administrator can change this", "bad");
+                await api.patch(path(""), { publicPipelines: v === "listed" });
+                await reloadSite();
+                toast(v === "listed" ? "Pipelines are listed publicly" : "Pipelines are hidden from the public list", "ok");
+              }}
+              options={[
+                { value: "listed", label: "Listed" },
+                { value: "hidden", label: "Hidden" },
+              ]}
+            />
           </div>
         </section>
         <section className="card">

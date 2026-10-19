@@ -555,6 +555,23 @@ svg.flow { display: block; margin: 0 auto; overflow: visible; }
 .pp-foot { text-align: center; margin-top: 24px; }
 .pp-modal { display: grid; grid-template-columns: auto 1fr; gap: 20px; align-items: start; }
 .pp-ship { display: grid; gap: 8px; margin-top: 10px; }
+.op-top { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 20px; }
+.op-top-links { display: flex; gap: 12px; align-items: center; }
+.op-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; margin-top: 16px; }
+.op-card { display: grid; gap: 8px; color: inherit; text-decoration: none; margin: 0; }
+.op-card:hover { border-color: var(--accent); }
+.op-card h2 { margin: 0; }
+.op-stages { list-style: none; padding: 0; margin: 12px 0 0; display: grid; gap: 8px; }
+.op-stages > li { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; }
+.op-stage { border: 1px solid var(--divider); border-radius: 8px; padding: 8px 10px; }
+.op-stage .row-between { border-bottom: 0; padding: 0; }
+.op-roles { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; margin-top: 10px; }
+.op-role { border: 1px solid var(--divider); border-radius: 8px; padding: 10px 12px; display: grid; gap: 6px; align-content: start; }
+.op-role .row-between { border-bottom: 0; padding: 0; }
+.op-role ul { margin: 0; padding-left: 18px; }
+.op-role .btn { justify-self: start; }
+.op-apply { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--divider); }
+@media (max-width: 600px) { .pp-head { flex-direction: column; } }
 @media (max-width: 760px) {
   .pp { padding: 18px 16px 40px; }
   .pp-head { flex-direction: column; }
