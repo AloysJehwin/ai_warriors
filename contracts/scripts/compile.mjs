@@ -1,0 +1,41 @@
+// Compiles contracts with the npm-packaged solc (no compiler download needed).
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import solc from "solc";
+
+const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+const require = createRequire(import.meta.url);
+const sources = {};
+for (const dir of ["src", "test"])
+  for (const f of readdirSync(join(root, dir)).filter((f) => f.endsWith(".sol"))) sources[`${dir}/${f}`] = { content: readFileSync(join(root, dir, f), "utf8") };
+
+const input = {
+  language: "Solidity",
+  sources,
+  settings: {
+    // Hedera's EVM supports Cancun; "shanghai" keeps the bytecode runnable on the in-process test chain too.
+    evmVersion: "shanghai",
+    optimizer: { enabled: true, runs: 200 },
+    outputSelection: { "*": { "*": ["abi", "evm.bytecode.object", "evm.deployedBytecode.object", "metadata"] } },
+  },
+};
+const findImports = (path) => {
+  try {
+    return { contents: readFileSync(require.resolve(path), "utf8") };
+  } catch {
+    return { error: `File not found: ${path}` };
+  }
+};
+const out = JSON.parse(solc.compile(JSON.stringify(input), { import: findImports }));
+const errors = (out.errors ?? []).filter((e) => e.severity === "error");
+for (const e of out.errors ?? []) console[e.severity === "error" ? "error" : "warn"](e.formattedMessage);
+if (errors.length) process.exit(1);
+
+mkdirSync(join(root, "artifacts"), { recursive: true });
+for (const [file, contracts] of Object.entries(out.contracts))
+  for (const [name, c] of Object.entries(contracts)) {
+    writeFileSync(join(root, "artifacts", `${name}.json`), JSON.stringify({ contractName: name, sourceName: file, abi: c.abi, bytecode: `0x${c.evm.bytecode.object}` }, null, 2));
+  }
+console.log(`compiled with solc ${solc.version()} → artifacts/`);

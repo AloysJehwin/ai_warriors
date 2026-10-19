@@ -1,0 +1,31 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - name: Server tests (domain, API, ledger, LLM guard)
+        run: pnpm --filter @ordo/server test
+      - name: Contract tests (in-process EVM)
+        run: pnpm --filter @ordo/contracts test
+      - name: Build
+        run: pnpm build
+      - name: End-to-end demo (Playwright)
+        run: pnpm exec playwright install --with-deps chromium && pnpm e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: test-results

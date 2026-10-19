@@ -5,8 +5,11 @@ export interface Actor {
   role: Role;
 }
 
+/** Empty when the console is served by the API (one container); set VITE_API_BASE when hosting the console separately (e.g. Vercel). */
+export const API_BASE: string = (import.meta.env.VITE_API_BASE as string | undefined)?.replace(/\/$/, "") ?? "";
+
 async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const res = await fetch(path, { method, headers: body ? { "content-type": "application/json" } : undefined, body: body ? JSON.stringify(body) : undefined });
+  const res = await fetch(`${API_BASE}${path}`, { method, headers: body ? { "content-type": "application/json" } : undefined, body: body ? JSON.stringify(body) : undefined });
   const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error((json as { error?: string }).error ?? `${res.status} ${res.statusText}`);
   return json as T;

@@ -49,6 +49,8 @@ const Env = z.object({
   HEDERA_VAULT_ADDRESS: z.string().optional(),
   HEDERA_MIRROR_URL: z.string().optional(),
   HEDERA_POLICY_REGISTRY_ADDRESS: z.string().optional(),
+  HEDERA_JSON_RPC_URL: z.string().default("https://testnet.hashio.io/api"),
+  HEDERA_VENDOR_EVM: z.string().optional(),
 
   ENS_RPC_URL: z.string().optional(),
   ENS_PARENT_NAME: z.string().optional(),

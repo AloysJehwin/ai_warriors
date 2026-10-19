@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { api } from "./api";
+import { API_BASE, api } from "./api";
 import type { AnchorDto, Approval, Decision, Incident, LedgerEntryDto, PlantView, SignalName, StreamEvent } from "./types";
 
 export interface LiveState {
@@ -78,7 +78,7 @@ async function refresh() {
 let es: EventSource | null = null;
 export function connect() {
   if (es) return;
-  es = new EventSource("/v1/stream");
+  es = new EventSource(`${API_BASE}/v1/stream`);
   es.onopen = () => {
     set({ connected: true });
     refresh().catch((e) => pushAlert(String(e)));

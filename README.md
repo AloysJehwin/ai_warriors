@@ -1,41 +1,107 @@
-# Ordo — autonomous manufacturing orchestration
+# Ordo — self-healing manufacturing, with proof
 
-**Documentation:** read and edit it in [`docs/`](docs/README.md). Start with [architecture](docs/architecture.md) and [product overview](docs/product.md).
+Ordo watches a production line, predicts a machine failure before it happens, explains the cause, proposes a fix, and lets a **policy guard** decide whether the fix runs on its own or needs a person. Every step is written to a **hash-chained audit ledger** that is anchored outside Ordo's database, so anyone can verify later that the record was not changed.
 
-Open the `.dc.html` files directly in a browser (keep `support.js`, `doc-page.js` and `_ds/` next to them).
+![Incident timeline](docs/img/incident.png)
 
-| File | What it is |
+## The demo loop (about 60 seconds)
+
+1. **Run demo incident** starts a bearing-wear scenario on CNC-05 (simulated telemetry, deterministic seed).
+2. The **Line agent** detects vibration crossing the 4.5 mm/s warning limit.
+3. The **Maintenance agent** fits a trend and forecasts the failure: about 50 minutes to the 7.1 mm/s limit, 93% probability within 24 h.
+4. The **Diagnosis agent** (Gemini, or a grounded offline model) explains the root cause, citing only numbers it was given.
+5. The **Healer agent** proposes allow-listed actions: reroute the batch's remaining units to idle CNC-07 and open a maintenance work order.
+6. The **policy guard** (versioned YAML, L1–L4 autonomy) allows the reroute at L3 and escalates the work order to the maintenance lead.
+7. The maintenance lead approves. The work order executes and the agent pays the vendor (mock, or on-chain through `AgentSpendVault`).
+8. The incident closes with **downtime avoided** computed from its inputs, an evidence bundle, a summary, and a **ledger anchor**.
+9. **Verify** re-walks the chain from genesis. **Simulate tampering** on any entry turns the check red.
+
+If nobody acts, the bearing fails about 70 plant minutes in. The simulator models that too.
+
+## Quick start
+
+```bash
+pnpm install
+pnpm build                                   # web console + server
+cd server && SIM_AUTOSTART=true node dist/index.js
+# open http://localhost:8080 and click "Run demo incident"
+```
+
+Development with hot reload: `pnpm dev`, then open http://localhost:5173. No database or API keys are needed: Ordo uses embedded Postgres (PGlite) and offline agents by default. Set `LLM_PROVIDER=gemini` and `GEMINI_API_KEY` for live AI. All settings are in [`server/.env.example`](server/.env.example).
+
+## Tests
+
+| Command | What it covers |
 | --- | --- |
-| `Ordo Orchestrator.dc.html` | Clickable UI prototype: Pipelines (Flow / Graph / Ledger), Validation, Templates, Run history, Floor & fleet, Approvals, Builder |
-| `Ordo Documentation.dc.html` | Product, architecture and validation documentation (printable; File → Print → Save as PDF) |
-| `Ordo Architecture.dc.html` | System architecture diagram (1600 px wide) |
-| `mockups/` | PNG exports of every screen and the architecture diagram |
-| `docs/` | **Editable Markdown documentation**: architecture, product, validation, data model, API, templates, data sources ([start here](docs/README.md)) |
+| `pnpm --filter @ordo/server test` | 66 tests: simulator determinism, detector, forecast, the full policy matrix (every action × every autonomy level), ledger tamper and concurrency, LLM fallback and grounding, the whole incident loop through the HTTP API |
+| `pnpm --filter @ordo/contracts test` | 8 tests on an in-process EVM: roles, vendor allow-list, per-payment and daily caps, escrow/release/refund, pause, reentrancy, policy versioning |
+| `pnpm e2e` | Playwright drives the real console through the demo: approve as the maintenance lead, verify ✔, tamper ✘ |
 
-## Mockups
-- `00-architecture.png` — system architecture
-- `01-pipeline-flow.png` — pipeline, Flow view
-- `02-pipeline-node-block.png` — node block opened
-- `03-pipeline-graph.png` — Graph view
-- `04-pipeline-ledger.png` — Ledger view
-- `05-stage-detail-panel.png` — stage detail panel
-- `06-validation-draft.png` — validation package, draft
-- `07-validation-review-signoff.png` — validation in review with e-signature
-- `08-templates.png` — template library
-- `09-run-history.png` — run history
-- `10-floor-assets.png` / `11-floor-agents.png` — floor & fleet
-- `12-approvals-exceptions.png` — approvals inbox
-- `13-pipeline-builder.png` — builder
+## Architecture
 
-All data in the prototype and mockups is illustrative.
+```mermaid
+flowchart LR
+    ui["Web console<br/>React · SSE"] -- REST / SSE --> api
+    subgraph api["Ordo server (Node · Hono)"]
+        sim["Plant simulator"] --> line["Line agent"] --> maint["Maintenance agent"] --> diag["Diagnosis agent (LLM)"] --> heal["Healer agent (LLM, allow-listed tools)"] --> guard["Policy guard"]
+        guard -- allow --> exec["Executor"]
+        guard -- escalate --> appr["Approvals"] --> exec
+        exec --> ledger["Hash-chained ledger"]
+    end
+    ledger --> db[("Postgres / PGlite")]
+    ledger --> anchor["Anchor: signed checkpoint · Hedera HCS"]
+    appr -.-> sched["Hedera scheduled tx"]
+    exec -.-> vault["AgentSpendVault (Hedera EVM)"]
+    guard -.-> reg["OrdoPolicyRegistry"]
+    heal -.-> og["0G Compute"]
+    ledger -.-> ogs["0G Storage"]
+    ui -.-> ens["ENS names"]
+```
 
-## Changelog
+Dotted lines are optional partner rails, switched on by environment variables. Each sits behind an interface with a local implementation, so the app always runs.
 
-**v1.0.1 (October 2026)**
-- Tables (validation checks, run history, stage metrics) now render when the files are opened directly from disk.
-- Stage metrics are compared with their targets; out-of-target values show ▲ and fail the agent pre-check.
-- Step run stops at a pending or held gate; approving a gate completes the stage.
-- Run ETA shows "Done" only when every stage is complete, and flags "at risk" after the 17:00 due time.
-- Run history: runs on one consistent timeline (none in the future), all 15 templates represented, and R-2417 reflects the live pipeline.
-- Every stage now has an explicit owning agent (e.g. Predictive maintenance stages belong to the Maintenance agent).
-- Mockups 01–13 regenerated from the fixed prototype.
+| Rail | Local (default) | Partner |
+| --- | --- | --- |
+| Ledger anchor | Ed25519-signed checkpoint | Hedera Consensus Service topic, verified via the mirror node |
+| Approvals | In-app, role-checked | Hedera scheduled transaction that only the required role's key can release |
+| Agent payments | Mock | `AgentSpendVault` on Hedera EVM: allow-listed vendors, per-payment and daily caps, escrow, kill switch |
+| Policy provenance | Hash recorded with every decision | `OrdoPolicyRegistry` on Hedera; the Verify page checks the match |
+| AI inference | Gemini or offline | 0G Compute (OpenAI-compatible endpoint) |
+| Evidence | Local content-addressed files | 0G Storage (Merkle root as id) |
+| Identity | Plain ids | ENS subnames with text records (`cnc-05.<parent>.eth`) |
+
+The partner adapters, contracts and setup scripts are complete and typechecked. The contracts are tested on an in-process EVM. Live testnet runs need network access that CI does not have: follow [`contracts/README.md`](contracts/README.md), then run `pnpm --filter @ordo/server smoke:hedera`.
+
+## Repository layout
+
+```
+server/      API, agents, policy guard, ledger, simulator, partner adapters (TypeScript)
+web/         console (React + Vite)
+contracts/   AgentSpendVault, OrdoPolicyRegistry, Hedera / ENS setup scripts
+policies/    versioned autonomy policy files
+e2e/         Playwright demo test
+docs/        product, architecture, technical requirements, deployment, ETHGlobal plans
+mockups/     original design mockups (PNG) · *.dc.html: original clickable prototype
+```
+
+## Deploy
+
+Ordo is one long-running Node process: the simulator ticks every second and the console listens on a Server-Sent Events stream. It needs a host that keeps a process running, not serverless functions.
+
+- **Render (one click):** the repo has a [`render.yaml`](render.yaml) blueprint and a [`Dockerfile`](Dockerfile). New → Blueprint → pick this repo.
+- **Any Docker host** (Cloud Run with min/max 1 instance, Railway, Fly.io): `docker build -t ordo . && docker run -p 8080:8080 ordo`.
+- **Vercel for the console only:** import the repo with root directory `web`, set `VITE_API_BASE` to the API URL, and set `CORS_ORIGINS` on the API to the Vercel domain.
+
+Run exactly one instance: the simulator and the single ledger writer live in one process.
+
+## What is real and what is simulated
+
+- **Real:** detection, forecasting, the LLM calls (when enabled), the policy guard, approvals, the ledger, hashing, anchoring, verification, the contracts.
+- **Simulated:** the plant (three CNC cells, batches, wear), sensor data, maintenance outcomes.
+- **Not included:** real PLC/OPC UA connectivity, SSO (the "acting as" switch stands in for it), ERP/MES integration.
+
+Compliance features are designed to support 21 CFR Part 11-style records; they are not a certified system.
+
+## Prior work
+
+The product idea, PRD, architecture docs and UI mockups existed before the application code. See [`docs/`](docs/README.md) and the original prototype `Ordo Orchestrator.dc.html`. No application code from the prototype is reused.

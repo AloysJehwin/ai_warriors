@@ -6,10 +6,6 @@
 import {
   AccountId,
   Client,
-  ContractCallQuery,
-  ContractExecuteTransaction,
-  ContractFunctionParameters,
-  ContractId,
   Hbar,
   PrivateKey,
   ScheduleCreateTransaction,
@@ -108,32 +104,40 @@ export function hederaFromConfig(cfg: Config) {
       };
     },
 
-    /** The Healer pays the vendor through AgentSpendVault (caps enforced on-chain), or directly if no vault is set. */
+    /**
+     * The Healer pays the vendor through AgentSpendVault (caps enforced on-chain) over JSON-RPC, so
+     * msg.sender is the agent's ECDSA alias address that holds AGENT_ROLE. Without a vault it falls
+     * back to a plain HBAR transfer capped in the app.
+     */
     payments(): PaymentRail {
       if (!cfg.HEDERA_AGENT_ID || !cfg.HEDERA_AGENT_KEY || !cfg.HEDERA_VENDOR_ID) throw new Error("PAYMENTS=hedera needs HEDERA_AGENT_ID, HEDERA_AGENT_KEY and HEDERA_VENDOR_ID");
       const agent = acct(cfg.HEDERA_AGENT_ID, cfg.HEDERA_AGENT_KEY);
-      const agentClient = Client.forName(network).setOperator(agent.id, agent.key);
       const vendor = AccountId.fromString(cfg.HEDERA_VENDOR_ID);
+      const vault = cfg.HEDERA_VAULT_ADDRESS;
       return {
-        kind: cfg.HEDERA_VAULT_ADDRESS ? "hedera-vault" : "hedera-transfer",
+        kind: vault ? "hedera-vault" : "hedera-transfer",
         async pay(p) {
           if (p.amount > 10) throw new Error("Payment above the 10 HBAR app-side cap");
-          if (cfg.HEDERA_VAULT_ADDRESS) {
-            const memoHash = Buffer.from(p.incidentHash.replace("sha256:", "").padStart(64, "0").slice(0, 64), "hex");
-            const tx = await new ContractExecuteTransaction()
-              .setContractId(ContractId.fromEvmAddress(0, 0, cfg.HEDERA_VAULT_ADDRESS))
-              .setGas(300_000)
-              .setFunction(
-                "pay",
-                new ContractFunctionParameters()
-                  .addAddress(vendor.toEvmAddress())
-                  .addUint256(Math.round(p.amount * 1e8)) // tinybar inside the EVM
-                  .addBytes32(memoHash),
-              )
-              .execute(agentClient);
-            await tx.getReceipt(agentClient);
-            return { ref: tx.transactionId.toString(), url: `${hashscan}/transaction/${tx.transactionId.toString()}` };
+          if (vault) {
+            if (!cfg.HEDERA_VENDOR_EVM) throw new Error("Vault payments need HEDERA_VENDOR_EVM (the vendor's alias address)");
+            const { createWalletClient, createPublicClient, defineChain, http, parseAbi } = await import("viem");
+            const { privateKeyToAccount } = await import("viem/accounts");
+            const chain = defineChain({ id: 296, name: "Hedera", nativeCurrency: { name: "HBAR", symbol: "HBAR", decimals: 18 }, rpcUrls: { default: { http: [cfg.HEDERA_JSON_RPC_URL] } } });
+            const transport = http(cfg.HEDERA_JSON_RPC_URL);
+            const account = privateKeyToAccount((cfg.HEDERA_AGENT_KEY!.startsWith("0x") ? cfg.HEDERA_AGENT_KEY : `0x${cfg.HEDERA_AGENT_KEY}`) as `0x${string}`);
+            const memo = `0x${p.incidentHash.replace("sha256:", "").padStart(64, "0").slice(0, 64)}` as `0x${string}`;
+            const hash = await createWalletClient({ chain, transport, account }).writeContract({
+              address: vault as `0x${string}`,
+              abi: parseAbi(["function pay(address vendor, uint256 amount, bytes32 incidentHash)"]),
+              functionName: "pay",
+              args: [cfg.HEDERA_VENDOR_EVM as `0x${string}`, BigInt(Math.round(p.amount * 1e8)), memo], // tinybar inside the EVM
+              gas: 300_000n,
+            });
+            const r = await createPublicClient({ chain, transport }).waitForTransactionReceipt({ hash });
+            if (r.status !== "success") throw new Error(`Vault payment reverted (${hash})`);
+            return { ref: hash, url: `${hashscan}/transaction/${hash}` };
           }
+          const agentClient = Client.forName(network).setOperator(agent.id, agent.key);
           const tx = await new TransferTransaction()
             .addHbarTransfer(agent.id, new Hbar(-p.amount))
             .addHbarTransfer(vendor, new Hbar(p.amount))
@@ -145,21 +149,21 @@ export function hederaFromConfig(cfg: Config) {
       };
     },
 
-    /** Compares the local policy hash with OrdoPolicyRegistry.policies(keccak("LINE-02")). */
+    /** Compares the local policy hash with OrdoPolicyRegistry.policies(keccak("LINE-02")) over JSON-RPC. */
     policyRegistryCheck(policyHash: string): (() => Promise<{ ok: boolean; detail: string }>) | undefined {
       const addr = cfg.HEDERA_POLICY_REGISTRY_ADDRESS;
       if (!addr) return undefined;
       return async () => {
-        const { keccak256, toBytes } = await import("viem");
-        const line = Buffer.from(keccak256(toBytes("LINE-02")).slice(2), "hex");
-        const r = await new ContractCallQuery()
-          .setContractId(ContractId.fromEvmAddress(0, 0, addr))
-          .setGas(100_000)
-          .setFunction("policies", new ContractFunctionParameters().addBytes32(line))
-          .execute(client);
-        const onChain = Buffer.from(r.getBytes32(1)).toString("hex");
-        const ok = onChain === policyHash.replace("sha256:", "");
-        return { ok, detail: ok ? `Matches OrdoPolicyRegistry (version ${r.getUint32(2)})` : "Local policy differs from OrdoPolicyRegistry" };
+        const { createPublicClient, defineChain, http, keccak256, parseAbi, toBytes } = await import("viem");
+        const chain = defineChain({ id: 296, name: "Hedera", nativeCurrency: { name: "HBAR", symbol: "HBAR", decimals: 18 }, rpcUrls: { default: { http: [cfg.HEDERA_JSON_RPC_URL] } } });
+        const [, onChain, version] = await createPublicClient({ chain, transport: http(cfg.HEDERA_JSON_RPC_URL) }).readContract({
+          address: addr as `0x${string}`,
+          abi: parseAbi(["function policies(bytes32) view returns (uint8, bytes32, uint32, uint64)"]),
+          functionName: "policies",
+          args: [keccak256(toBytes("LINE-02"))],
+        });
+        const ok = onChain.slice(2) === policyHash.replace("sha256:", "");
+        return { ok, detail: ok ? `Matches OrdoPolicyRegistry v${version} on Hedera` : "Local policy differs from OrdoPolicyRegistry on Hedera" };
       };
     },
   };
