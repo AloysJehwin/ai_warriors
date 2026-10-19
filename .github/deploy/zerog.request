@@ -1,5 +1,6 @@
 # What the "0G setup" workflow does on its next run, one per line:
+#   key      generate Ordo's 0G key in the job (kept in Vercel, never printed); the log shows its address to fund
 #   inft     deploy OrdoAgentNFT (agents as ERC-7857 iNFTs)  → ZG_INFT_ADDRESS
 #   storage  copy validation evidence to 0G Storage          → EVIDENCE_STORE=0g
 #   ledger   fund the 0G Compute ledger (3 0G minimum)       → then set LLM_PROVIDER=0g by hand
-# Each run writes ZG_PRIVATE_KEY and the values above to Vercel. Needs the zerog-testnet environment.
+key
