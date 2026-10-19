@@ -8,6 +8,7 @@ import type { RunEngine } from "../pipelines/engine.js";
 import { newId, type PlantService } from "../plant/plant.js";
 import type { Recorder } from "./recorder.js";
 import type { Templates } from "./templates.js";
+import type { Trust } from "./trust.js";
 
 export type RaiseInput = Omit<InboxItemView, "id" | "status" | "decidedBy" | "decidedOption" | "reason" | "signatureId" | "createdAt" | "decidedAt" | "incidentId"> & { incidentId?: string | null };
 export type ActionCall = InboxOption["action"];
@@ -70,6 +71,8 @@ export const REJECT = -1;
  * person. Every decision is signed with the decider's wallet (EIP-712) and written to the ledger.
  */
 export class Inbox {
+  /** set after construction */
+  trust!: Trust;
   constructor(
     private db: Db,
     private rec: Recorder,
@@ -117,6 +120,11 @@ export class Inbox {
     return toView(r.rows[0]);
   }
 
+  /** Releasing product through a quality gate is a validator's decision. */
+  private async qualityGate(siteId: string, user: User, item: InboxItemView, option: number) {
+    if (item.category === "Quality gate" && option !== REJECT && item.options[option]?.action.tool === "release_gate") await this.trust.requireValidator(siteId, user);
+  }
+
   private optionLabel(item: InboxItemView, option: number): string {
     if (option === REJECT) return item.runId && item.stageCode ? `Reject & hold ${item.stageCode}` : "Reject";
     const o = item.options[option];
@@ -129,6 +137,7 @@ export class Inbox {
     const item = await this.get(siteId, id);
     if (item.status !== "pending") throw new HttpError(409, "Already decided");
     if (!canApproveAny(roles, item.requiredRole)) throw new HttpError(403, `Needs ${ROLE_LABEL[item.requiredRole]} or higher`);
+    await this.qualityGate(siteId, user, item, option);
     return this.sigs.request(user, { action: "inbox.decide", entity: `${id}#${option}`, meaning: `${this.optionLabel(item, option)} — ${item.title}`, comment, site: siteId, chainId });
   }
 
@@ -136,6 +145,7 @@ export class Inbox {
     const item = await this.get(siteId, id);
     if (item.status !== "pending") throw new HttpError(409, "Already decided");
     if (!canApproveAny(roles, item.requiredRole)) throw new HttpError(403, `Needs ${ROLE_LABEL[item.requiredRole]} or higher`);
+    await this.qualityGate(siteId, user, item, input.option);
     const label = this.optionLabel(item, input.option);
     const actor = `user:${user.address}`;
     const sig = await this.db.tx(async (q) => {

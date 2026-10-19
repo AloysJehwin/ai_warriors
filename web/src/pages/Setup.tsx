@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../api";
 import { shortAddr } from "../lib/format";
 import type { Me } from "../types";
-import { Field } from "../ui/kit";
+import { Action, Field } from "../ui/kit";
+import { ApplyForm, MyApplications } from "./Onboarding";
 import { Select } from "../ui/Select";
 
 const zonesAll = (() => {
@@ -14,6 +15,12 @@ const zonesAll = (() => {
 })();
 
 export function Setup({ me, onCreated, onSignOut }: { me: Me; onCreated: (id: string) => void; onSignOut: () => void }) {
+  const [joining, setJoining] = useState(() => window.location.hash.startsWith("#/join"));
+  useEffect(() => {
+    const f = () => setJoining(window.location.hash.startsWith("#/join"));
+    window.addEventListener("hashchange", f);
+    return () => window.removeEventListener("hashchange", f);
+  }, []);
   const [name, setName] = useState("");
   const [tz, setTz] = useState(Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
   const [line, setLine] = useState("Line 1");
@@ -23,31 +30,7 @@ export function Setup({ me, onCreated, onSignOut }: { me: Me; onCreated: (id: st
   const [busy, setBusy] = useState(false);
   const addr = me.user!.address;
 
-  if (!me.canCreateSite)
-    return (
-      <div className="auth">
-        <div className="auth-card">
-          <div className="brand big">
-            <b>Ordo</b>
-          </div>
-          <h1>Waiting for an invite</h1>
-          <p className="muted">You are signed in as</p>
-          <p className="mono copy">{addr}</p>
-          <p className="muted">Send this address to your site administrator. Once they add it with a role, reload this page.</p>
-          <div className="btns">
-            <button type="button" className="btn" onClick={() => navigator.clipboard?.writeText(addr)}>
-              Copy address
-            </button>
-            <button type="button" className="btn" onClick={() => window.location.reload()}>
-              Reload
-            </button>
-            <button type="button" className="btn" onClick={onSignOut}>
-              Sign out
-            </button>
-          </div>
-        </div>
-      </div>
-    );
+  if (!me.canCreateSite || joining) return <JoinSite me={me} onSignOut={onSignOut} canCreate={me.canCreateSite} />;
 
   const submit = async () => {
     setBusy(true);
@@ -101,10 +84,77 @@ export function Setup({ me, onCreated, onSignOut }: { me: Me; onCreated: (id: st
           <button type="button" className="btn accent" disabled={busy || name.trim().length < 2 || !line.trim()} onClick={submit}>
             Create site
           </button>
+          <a className="btn" href="#/join">
+            Join an existing site instead
+          </a>
           <button type="button" className="btn" onClick={onSignOut}>
             Sign out
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+/** A wallet with no site yet applies to join one with the code its administrator shared. */
+function JoinSite({ me, onSignOut, canCreate }: { me: Me; onSignOut: () => void; canCreate: boolean }) {
+  const [code, setCode] = useState(() => new URLSearchParams(window.location.hash.split("?")[1] ?? "").get("site") ?? "");
+  const [site, setSite] = useState<{ id: string; name: string } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [sent, setSent] = useState(0);
+  const addr = me.user!.address;
+  return (
+    <div className="auth">
+      <div className="auth-card wide">
+        <div className="eyebrow">Join a site · signed in as {shortAddr(addr)}</div>
+        <h1>Apply to join a site</h1>
+        <p className="muted">Enter the site code your administrator shared (Settings → Site code). Your application goes to the site's administrators, who approve it with their wallet signature.</p>
+        {!site ? (
+          <>
+            <Field label="Site code" error={error}>
+              <input className="input mono" value={code} onChange={(e) => setCode(e.target.value.trim())} placeholder="site_…" autoFocus />
+            </Field>
+            <div className="btns">
+              <Action
+                className="btn accent"
+                disabled={code.length < 6}
+                onClick={async () => {
+                  setError(null);
+                  try {
+                    setSite(await api.get<{ id: string; name: string }>(`/v1/onboarding/site/${encodeURIComponent(code)}`));
+                  } catch (e) {
+                    setError(e instanceof Error ? e.message : String(e));
+                  }
+                }}
+              >
+                Find site
+              </Action>
+              {canCreate && (
+                <a className="btn" href="#/">
+                  Create a new site instead
+                </a>
+              )}
+              <button type="button" className="btn" onClick={onSignOut}>
+                Sign out
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <p>
+              Applying to <b>{site.name}</b>.{" "}
+              <button type="button" className="link" onClick={() => setSite(null)}>
+                Change
+              </button>
+            </p>
+            <ApplyForm siteId={site.id} kind="member" onDone={() => (setSent((n) => n + 1), setSite(null))} />
+          </>
+        )}
+        <MyApplications refreshKey={sent} />
+        <p className="faint small">Once approved, reload this page. Your wallet address: <span className="mono">{addr}</span></p>
+        <button type="button" className="btn sm" onClick={() => window.location.reload()}>
+          Reload
+        </button>
       </div>
     </div>
   );

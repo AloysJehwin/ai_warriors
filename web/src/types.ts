@@ -53,6 +53,81 @@ export interface Status {
   build: { env: string; commit: string | null } | null;
   signatureChainId: number;
   restrictedSiteCreation: boolean;
+  trust: TrustChainInfo | null;
+}
+export interface TrustChainInfo {
+  chainId: number;
+  name: string;
+  rpcUrl: string;
+  explorerUrl: string | null;
+  address: string;
+  symbol: string;
+  /** decimals of native value inside the contract (8 on Hedera, 18 elsewhere) */
+  decimals: number;
+}
+export interface RelayView {
+  kind: string;
+  status: "pending" | "done" | "failed" | "waiting_site";
+  txHash: string | null;
+  txUrl: string | null;
+  error: string | null;
+}
+export type OnboardingKind = "member" | "validator" | "vendor";
+export interface OnboardingView {
+  id: string;
+  siteId: string;
+  siteName?: string;
+  userId: string;
+  address: string;
+  name: string | null;
+  kind: OnboardingKind;
+  role: string;
+  roleLabel: string;
+  form: Record<string, string>;
+  files: { name: string; sha256: string; size: number; mime: string }[];
+  status: "pending" | "approved" | "rejected";
+  decidedBy: string | null;
+  decidedAt: string | null;
+  reason: string | null;
+  createdAt: string;
+  chain: RelayView | null;
+}
+export interface ChainStatus {
+  configured: boolean;
+  info?: { chainId: number; name: string; address: string; symbol: string; decimals: number; minStake: string; unstakeCooldownSeconds: number; relayer: string; explorerUrl: string | null } | { error: string };
+  registered?: boolean;
+  txHash?: string | null;
+  txUrl?: string | null;
+  registeredAt?: string | null;
+}
+export interface ValidatorsView {
+  validators: { userId: string; address: string; name: string | null; scope: string; scopeLabel: string; status: string; approvedAt: string; onchain: { stake: string; unlockAt: number; active: boolean } | null }[];
+  me: { ok: boolean; reason: string | null; row: { scope: string; status: string } | null };
+  chain: ChainStatus;
+  proposals: {
+    id: string;
+    validatorUserId: string;
+    validatorAddress: string;
+    amount: string;
+    reason: string;
+    recallPackageId: string | null;
+    createdBy: string;
+    status: string;
+    createdAt: string;
+    executedAt: string | null;
+    signatures: { userId: string; address: string; capacity: string; at: string }[];
+    chain: RelayView | null;
+  }[];
+}
+export interface VendorRow {
+  id: string;
+  address: string;
+  company: string;
+  categories: string;
+  hourlyRate: string | null;
+  responseMinutes: number | null;
+  status: string;
+  createdAt: string;
 }
 export interface TypedSignature {
   domain: { name: "Ordo"; version: "1"; chainId: number };
@@ -121,6 +196,7 @@ export interface PackageDetail extends Omit<PackageSummary, "owner" | "waitingOn
   readiness: { ready: boolean; items: { label: string; ok: boolean }[] };
   audit: { seq: number; ts: string; actor: string; type: string; payload: Record<string, unknown>; entryHash: string }[];
   createdAt: string;
+  onchain: RelayView | null;
 }
 export interface VerifyReport {
   ok: boolean;

@@ -10,7 +10,7 @@ export interface Live {
   inbox: InboxItemView[];
   decisions: DecisionView[];
   headSeq: number;
-  counts: { approvals: number; validation: number };
+  counts: { approvals: number; validation: number; onboarding: number };
 }
 
 const RANK: Record<Role, number> = { operator: 1, supervisor: 2, process_engineer: 3, quality_engineer: 3, maintenance_lead: 3, plant_manager: 4, admin: 5 };

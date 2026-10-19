@@ -169,6 +169,21 @@ function PackageView({ id }: { id: string }) {
       {p.status === "released" && (
         <div className="notice ok">
           <b>Released.</b> {p.outcome}
+          {p.onchain && (
+            <span className="small">
+              {" "}
+              · On-chain record: {p.onchain.status.replace("_", " ")}
+              {p.onchain.txUrl && (
+                <>
+                  {" "}
+                  <a href={p.onchain.txUrl} target="_blank" rel="noreferrer">
+                    transaction
+                  </a>
+                </>
+              )}
+              {p.onchain.error && <span className="bad-text"> · {p.onchain.error}</span>}
+            </span>
+          )}
         </div>
       )}
       {editable && (

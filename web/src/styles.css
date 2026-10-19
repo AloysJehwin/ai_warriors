@@ -525,3 +525,9 @@ svg.flow { display: block; margin: 0 auto; overflow: visible; }
 .crit .sel-btn { padding: 3px 6px; gap: 2px; }
 .crit .input.num { width: 58px; }
 .crit .input.unit { width: 46px; }
+.apps { display: grid; gap: 12px; }
+.app-card { margin-bottom: 12px; }
+.app-card .card-b > * + * { margin-top: 10px; }
+.my-apps { margin-top: 22px; border-top: 1px solid var(--divider); padding-top: 12px; }
+.my-apps .label { margin-bottom: 4px; }
+.apply .drop { padding: 14px; }

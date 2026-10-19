@@ -84,3 +84,10 @@ That covers three sponsors with one coherent story: **a staked, named, accountab
 3. A machine drifts; the agent opens a work order and pays the bonded vendor through Agent Kit, inside the vault cap.
 4. The gate waits; an unstaked person's signature is rejected on-chain; Priya signs and the gate releases.
 5. Scan the shipped lot's QR: the public page verifies the passport, the HCS trail and the validator's stake.
+
+## Status
+
+- **Done: roles, onboarding, validators, staking and slashing (#3).** `contracts/src/OrdoTrust.sol` keeps role credentials per site, granted only with a site admin's EIP-712 signature; validator stakes with a 7-day unstake cooldown; release records that require a staked reviewer and a staked plant manager; and slashing by two other active validators plus a plant manager into the site's quality fund. The contract verifies the same `OrdoSignature` typed data people sign in the console, so the relayer has no authority.
+- **In the app:** applications to join a site (by site code), to become a validator, and to register as a vendor, with files hashed on upload; an Applications queue where admins approve or decline by signature; a Validators tab with stake, request-unstake and withdraw from the person's own wallet, and slash proposals; validation "Reviewed by" / "Approved by" and quality-gate releases accepted only from validators (and, with OrdoTrust configured, only from validators with an active stake); released packages recorded on-chain.
+- **Tested:** 8 contract tests on an in-process EVM; an API test that deploys OrdoTrust and runs registration, signed grants, staking, an on-chain release and a slash; the browser flow with validator onboarding.
+- **Next:** deploy OrdoTrust to Hedera testnet (`pnpm --filter @ordo/contracts deploy:trust` with a funded ECDSA key) and set the `TRUST_*` variables; then items #1 and #2.

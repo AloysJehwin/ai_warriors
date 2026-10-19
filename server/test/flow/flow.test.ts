@@ -48,6 +48,30 @@ describe("accounts", () => {
     expect((await operator.call("POST", `${S()}/team/invites`, { address: qe.address, role: "admin" })).status).toBe(403);
   });
 
+  it("onboards validators: an application, then the admin's signed approval", async () => {
+    const apply = async (c: Client, role: string, fullName: string) => {
+      const r = await c.call("POST", "/v1/onboarding", { siteId: site, kind: "validator", role, form: { fullName, qualifications: "ISO 9001 lead auditor, 6 years in machining QA" } });
+      expect(r.status).toBe(200);
+      return r.json.id as string;
+    };
+    const decide = async (id: string) => {
+      const typed = (await admin.call("POST", `${S()}/onboarding/${id}/sign-request`, { decision: "approve" })).json;
+      expect(typed.message.action).toBe("role.grant");
+      expect(typed.message.entity).toMatch(/#VALIDATOR$/);
+      const r = await admin.call("POST", `${S()}/onboarding/${id}/decide`, { decision: "approve", comment: "", nonce: typed.message.nonce, signature: await admin.sign(typed) });
+      expect(r.json.status).toBe("approved");
+    };
+    const qeReq = await apply(qe, "quality", "Meera Okafor");
+    // only an admin reviews
+    expect((await qe.call("POST", `${S()}/onboarding/${qeReq}/sign-request`, { decision: "approve" })).status).toBe(403);
+    await decide(qeReq);
+    await decide(await apply(pm, "plant", "Sven Lindqvist"));
+    const v = (await admin.call("GET", `${S()}/validators`)).json;
+    expect(v.validators.map((x: any) => x.scope).sort()).toEqual(["plant", "quality"]);
+    expect((await qe.call("GET", `${S()}/validators`)).json.me.ok).toBe(true);
+    expect((await operator.call("GET", `${S()}/validators`)).json.me.ok).toBe(false);
+  });
+
   it("blocks cross-site writes", async () => {
     const res = await app.request(`${S()}/zones`, { method: "POST", headers: { host: "localhost", origin: "https://evil.example", "content-type": "application/json" }, body: "{}" });
     expect(res.status).toBe(403);
@@ -223,6 +247,8 @@ describe("validation package", () => {
       return c.call("POST", `${S()}/validation/${id}/act`, { action, comment, nonce: t.json.message.nonce, signature: await c.sign(t.json) });
     };
     expect((await act(admin, "sign")).json.status).toBe("in_review");
+    // someone without the QE role and validator approval cannot review
+    expect((await act(operator, "sign")).status).toBe(403);
     // the same person cannot also review
     expect((await act(admin, "sign")).status).toBe(403);
     // QE returns it, owner resubmits, chain restarts

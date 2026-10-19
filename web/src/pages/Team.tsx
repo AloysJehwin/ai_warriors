@@ -1,4 +1,7 @@
 import { useState } from "react";
+import { Tabs } from "../ui/kit";
+import { ReviewQueue } from "./Onboarding";
+import { Validators, Vendors } from "./Validators";
 import { api } from "../api";
 import { useApp } from "../lib/app";
 import { ago, shortAddr } from "../lib/format";
@@ -6,7 +9,7 @@ import type { Role } from "../types";
 import { Action, Field, Modal, useToast } from "../ui/kit";
 import { Select } from "../ui/Select";
 
-export function TeamPage() {
+function Members() {
   const { team, meta, can, path, reloadSite, me } = useApp();
   const [invite, setInvite] = useState(false);
   const [addr, setAddr] = useState("");
@@ -19,9 +22,7 @@ export function TeamPage() {
     <div>
       <div className="page-head">
         <div className="ph-text">
-          <div className="eyebrow">{team?.members.length ?? 0} members</div>
-          <h1>Team</h1>
-          <p className="muted lede">People are identified by wallet address. A role decides which gates and signatures they may give; higher roles can also act for lower ones.</p>
+          <p className="muted lede">People are identified by wallet address. A role decides which gates and signatures they may give; higher roles can also act for lower ones. New people apply with the site code (Settings) and an administrator approves them with a signature.</p>
         </div>
         {admin && (
           <div className="ph-actions">
@@ -142,6 +143,29 @@ export function TeamPage() {
         </Field>
         <p className="faint small">To give one person several roles, add the address again with another role.</p>
       </Modal>
+    </div>
+  );
+}
+
+type TeamTab = "members" | "applications" | "validators" | "vendors";
+export function TeamPage() {
+  const { team, can, path, live, reloadSite, refresh } = useApp();
+  const [tab, setTab] = useState<TeamTab>("members");
+  const tabs: { value: TeamTab; label: string; count?: number }[] = [
+    { value: "members", label: "Members", count: team?.members.length },
+    ...(can("admin") ? [{ value: "applications" as TeamTab, label: "Applications", count: live?.counts.onboarding || undefined }] : []),
+    { value: "validators", label: "Validators" },
+    { value: "vendors", label: "Vendors" },
+  ];
+  return (
+    <div>
+      <div className="eyebrow">People, credentials and stakes</div>
+      <h1>Team & validators</h1>
+      <Tabs value={tab} onChange={setTab} tabs={tabs} />
+      {tab === "members" && <Members />}
+      {tab === "applications" && <ReviewQueue path={path} onChange={() => void Promise.all([reloadSite(), refresh()])} />}
+      {tab === "validators" && <Validators />}
+      {tab === "vendors" && <Vendors />}
     </div>
   );
 }

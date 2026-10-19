@@ -15,7 +15,7 @@ import { TeamPage } from "./pages/Team";
 import { Templates } from "./pages/Templates";
 import { Validation } from "./pages/Validation";
 
-const NAV: { page: string; label: string; icon: string; count?: "approvals" | "validation" }[] = [
+const NAV: { page: string; label: string; icon: string; count?: "approvals" | "validation" | "onboarding" }[] = [
   { page: "pipelines", label: "Pipelines", icon: "pipelines" },
   { page: "validation", label: "Validation", icon: "validation", count: "validation" },
   { page: "templates", label: "Templates", icon: "templates" },
@@ -24,8 +24,8 @@ const NAV: { page: string; label: string; icon: string; count?: "approvals" | "v
   { page: "approvals", label: "Approvals", icon: "approvals", count: "approvals" },
   { page: "builder", label: "Builder", icon: "builder" },
 ];
-const ADMIN_NAV = [
-  { page: "team", label: "Team", icon: "team" },
+const ADMIN_NAV: { page: string; label: string; icon: string; count?: "approvals" | "validation" | "onboarding" }[] = [
+  { page: "team", label: "Team & validators", icon: "team", count: "onboarding" },
   { page: "proof", label: "Proof & ledger", icon: "proof" },
   { page: "settings", label: "Settings", icon: "settings" },
 ];
@@ -81,7 +81,7 @@ export function Shell({ onSignOut, onSwitchSite }: { onSignOut: () => void; onSw
     default:
       page = <Pipelines />;
   }
-  const navItem = (n: { page: string; label: string; icon: string; count?: "approvals" | "validation" }) => {
+  const navItem = (n: { page: string; label: string; icon: string; count?: "approvals" | "validation" | "onboarding" }) => {
     const c = n.count && live ? live.counts[n.count] : 0;
     return (
       <a key={n.page} href={href(n.page)} className={route.page === n.page || (route.page === "pipelines" && n.page === "pipelines") ? "active" : ""}>

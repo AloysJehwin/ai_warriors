@@ -39,6 +39,20 @@ export function Settings() {
         </section>
         <section className="card">
           <div className="card-h">
+            <h2>Site code</h2>
+          </div>
+          <div className="card-b">
+            <p className="muted small">People apply to join with this code. Share the link; their application appears under Team & validators → Applications.</p>
+            <p className="mono copy">{site.id}</p>
+            <div className="btns">
+              <button type="button" className="btn sm" onClick={() => void navigator.clipboard?.writeText(`${window.location.origin}/#/join?site=${site.id}`).then(() => toast("Join link copied", "ok"))}>
+                Copy join link
+              </button>
+            </div>
+          </div>
+        </section>
+        <section className="card">
+          <div className="card-h">
             <h2>Zones</h2>
           </div>
           <div className="card-b">

@@ -11,6 +11,9 @@ import { Proof } from "./core/proof.js";
 import { Recorder } from "./core/recorder.js";
 import { Templates } from "./core/templates.js";
 import { Validation } from "./core/validation.js";
+import { Trust } from "./core/trust.js";
+import { TrustChain } from "./chain/trust.js";
+import type { Transport } from "viem";
 import { migrate, openDb, type Db } from "./db/db.js";
 import { LedgerStore } from "./db/ledger-store.js";
 import { loadPolicy } from "./domain/policy.js";
@@ -40,6 +43,7 @@ export interface System {
   monitor: Monitor;
   proof: Proof;
   validation: Validation;
+  trust: Trust;
   agents: Agents;
   payments: PaymentRail;
   ensNames: { lookup(addresses: string[]): Promise<Record<string, string | null>> } | null;
@@ -49,7 +53,7 @@ export interface System {
   close(): Promise<void>;
 }
 
-export async function buildSystem(cfg: Config, opts: { now?: () => number; policyText?: string; llm?: LlmProvider } = {}): Promise<System> {
+export async function buildSystem(cfg: Config, opts: { now?: () => number; policyText?: string; llm?: LlmProvider; trustTransport?: Transport } = {}): Promise<System> {
   const warnings: string[] = [];
   if (cfg.VERCEL && !cfg.DATABASE_URL) throw new Error("On Vercel, DATABASE_URL is required (add Neon from the Vercel Marketplace)");
   const now = opts.now ?? Date.now;
@@ -116,7 +120,27 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
   const agents = new Agents(llm);
   const monitor = new Monitor(db, plant, agents, inbox, rec, policy, now);
   const proof = new Proof(db, ledger, anchor);
-  const validation = new Validation(db, rec, ledger, sigs, engine, inbox, cfg.SIGNATURE_CHAIN_ID);
+  let trustChain: TrustChain | null = null;
+  if (cfg.TRUST_CONTRACT_ADDRESS && cfg.TRUST_RELAYER_KEY && cfg.TRUST_CHAIN_ID && (cfg.TRUST_RPC_URL || opts.trustTransport)) {
+    trustChain = new TrustChain(
+      {
+        chainId: cfg.TRUST_CHAIN_ID,
+        name: cfg.TRUST_CHAIN_NAME,
+        rpcUrl: cfg.TRUST_RPC_URL ?? "http://in-process",
+        explorerUrl: cfg.TRUST_EXPLORER_URL ?? null,
+        address: cfg.TRUST_CONTRACT_ADDRESS as `0x${string}`,
+        relayerKey: cfg.TRUST_RELAYER_KEY as `0x${string}`,
+        symbol: cfg.TRUST_SYMBOL,
+        decimals: cfg.TRUST_DECIMALS,
+      },
+      opts.trustTransport,
+    );
+  } else if (cfg.TRUST_CONTRACT_ADDRESS || cfg.TRUST_RELAYER_KEY) {
+    warnings.push("OrdoTrust needs TRUST_CONTRACT_ADDRESS, TRUST_RELAYER_KEY, TRUST_CHAIN_ID and TRUST_RPC_URL together; validator stakes are off");
+  }
+  const trust = new Trust(db, rec, sigs, trustChain, cfg.SIGNATURE_CHAIN_ID);
+  inbox.trust = trust;
+  const validation = new Validation(db, rec, ledger, sigs, engine, inbox, cfg.SIGNATURE_CHAIN_ID, trust);
 
   const advance = async (force = false) => {
     // throttle: one cycle per 4 s across all instances (the lease is left to expire, not released)
@@ -134,6 +158,7 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
     { rail: "database", mode: db.kind === "postgres" ? "postgres" : cfg.DATA_DIR === "memory" ? "pglite (memory)" : "pglite (disk)", live: db.kind === "postgres" },
     { rail: "identity", mode: `SIWE wallet sign-in${ensNames ? " + ENS names" : ""}`, live: true },
     { rail: "signatures", mode: "EIP-712 typed data", live: true },
+    { rail: "trust contract", mode: trustChain ? `OrdoTrust ${cfg.TRUST_CONTRACT_ADDRESS} · ${cfg.TRUST_CHAIN_NAME} (${cfg.TRUST_CHAIN_ID})` : "off: validators approved in-app, no stakes", live: Boolean(trustChain) },
     { rail: "ai", mode: llm.name === "gemini" ? `gemini:${cfg.GEMINI_MODEL}` : llm.name, live: llm.name !== "offline" },
     { rail: "anchor", mode: anchor.kind, live: anchor.kind !== "local-signed" },
     { rail: "payments", mode: payments.kind, live: payments.kind !== "mock" },
@@ -157,6 +182,7 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
     monitor,
     proof,
     validation,
+    trust,
     agents,
     payments,
     ensNames,

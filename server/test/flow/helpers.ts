@@ -5,9 +5,9 @@ import { loadConfig } from "../../src/config.js";
 import { createApp } from "../../src/http/app.js";
 import { buildSystem, type System } from "../../src/wiring.js";
 
-export async function boot(env: Record<string, string> = {}) {
+export async function boot(env: Record<string, string> = {}, opts: Parameters<typeof buildSystem>[1] = {}) {
   const cfg = loadConfig({ DATA_DIR: "memory", POLICY_FILE: resolve(__dirname, "../../../policies/default.yaml"), ...env } as NodeJS.ProcessEnv);
-  const sys = await buildSystem(cfg);
+  const sys = await buildSystem(cfg, opts);
   const app = createApp(sys);
   return { sys, app };
 }
@@ -21,8 +21,8 @@ export interface Client {
 }
 
 /** A browser-like client with its own wallet and session cookie. */
-export async function wallet(app: ReturnType<typeof createApp>): Promise<Client> {
-  const account = privateKeyToAccount(generatePrivateKey());
+export async function wallet(app: ReturnType<typeof createApp>, key: `0x${string}` = generatePrivateKey()): Promise<Client> {
+  const account = privateKeyToAccount(key);
   let cookie = "";
   const call = async (method: string, path: string, body?: unknown) => {
     const res = await app.request(path, {

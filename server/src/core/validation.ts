@@ -9,6 +9,7 @@ import { HttpError } from "../engine/errors.js";
 import type { RunEngine } from "../pipelines/engine.js";
 import { newId } from "../plant/plant.js";
 import type { Inbox } from "./inbox.js";
+import type { Trust } from "./trust.js";
 import type { Recorder } from "./recorder.js";
 
 export const PACKAGE_LABEL: Record<PackageType, string> = {
@@ -71,6 +72,7 @@ export class Validation {
     private engine: RunEngine,
     private inbox: Inbox,
     private chainId: number,
+    private trust: Trust,
   ) {}
 
   private async row(siteId: string, id: string): Promise<PkgRow> {
@@ -254,10 +256,13 @@ export class Validation {
     return CHAIN.find((c) => c.step === step) ?? null;
   }
 
-  async signatureRequest(siteId: string, user: User, roles: Role[], id: string, action: "sign" | "return" | "reject", comment: string, chainId = this.chainId) {
+  async signatureRequest(siteId: string, user: User, roles: Role[], id: string, action: "sign" | "return" | "reject", comment: string, clientChainId?: number) {
     const p = await this.row(siteId, id);
     const link = this.authorize(p, user, roles, action, comment);
     await this.segregation(id, user, action);
+    await this.validatorGate(siteId, user, action, link.meaning);
+    // signatures in the chain are relayed to OrdoTrust on release, so they are made for its chain
+    const chainId = this.trust.chainIdFor(action === "sign", clientChainId ?? this.chainId);
     return this.sigs.request(user, {
       action: `validation.${action}`,
       entity: `${id}#${link.meaning}`,
@@ -266,6 +271,11 @@ export class Validation {
       site: siteId,
       chainId,
     });
+  }
+
+  /** Only a validator signs "Reviewed by" and "Approved by"; with the trust contract, a staked one. */
+  private async validatorGate(siteId: string, user: User, action: string, meaning: string) {
+    if (action === "sign" && meaning !== "performed") await this.trust.requireValidator(siteId, user);
   }
 
   /** Separation of duties: one person signs at most one link of a package's signature chain. */
@@ -292,6 +302,7 @@ export class Validation {
     const p = await this.row(siteId, id);
     const link = this.authorize(p, user, roles, input.action, input.comment);
     await this.segregation(id, user, input.action);
+    await this.validatorGate(siteId, user, input.action, link.meaning);
     if (input.action === "sign" && link.meaning === "performed") {
       const full = await this.get(siteId, id);
       if (!full.readiness.ready) throw new HttpError(409, "Not ready to submit: " + full.readiness.items.filter((i) => !i.ok).map((i) => i.label).join(", "));
@@ -334,6 +345,9 @@ export class Validation {
     }
     await this.db.query("UPDATE validation_packages SET outcome = $1 WHERE id = $2", [outcome, p.id]);
     await this.audit(siteId, actor, p.id, "released", { outcome });
+    const full = await this.get(siteId, p.id);
+    const relay = await this.trust.recordRelease(siteId, p.id, { packageId: p.id, type: p.type, title: p.title, checks: full.checks.map((c) => [c.criterion, c.target, c.status, c.actual]), evidence: full.evidence.filter((e) => e.sha256 && !e.removedAt).map((e) => e.sha256) });
+    if (relay) await this.audit(siteId, "system:relayer", p.id, relay.status === "done" ? "recorded_onchain" : "onchain_failed", { txHash: relay.txHash, error: relay.error });
   }
 
   async list(siteId: string, user: User, roles: Role[]) {
@@ -435,6 +449,7 @@ export class Validation {
       evidence,
       chain,
       readiness: this.readiness(p, checks, live),
+      onchain: await this.trust.relayOf(siteId, id),
       audit,
       createdAt: new Date(p.created_at).toISOString(),
       updatedAt: new Date(p.updated_at).toISOString(),

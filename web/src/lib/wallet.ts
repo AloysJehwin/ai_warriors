@@ -1,7 +1,7 @@
-import { createWalletClient, custom, getAddress, type EIP1193Provider } from "viem";
+import { createWalletClient, custom, formatUnits, getAddress, parseAbi, parseEther, type EIP1193Provider } from "viem";
 import { createSiweMessage } from "viem/siwe";
 import { api } from "../api";
-import type { Me, TypedSignature } from "../types";
+import type { Me, TrustChainInfo, TypedSignature } from "../types";
 
 export interface WalletInfo {
   id: string;
@@ -98,3 +98,42 @@ export async function signTyped(typed: TypedSignature, expectedAddress: string):
 
 export const hasActiveWallet = () => active !== null;
 export const short = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
+
+// ---------------- Chains and contract calls ----------------
+
+/** Put the wallet on the chain a signature or transaction is for, adding the chain if the wallet lacks it. */
+export async function ensureChain(chainId: number, trust: TrustChainInfo | null): Promise<void> {
+  if (!active) throw new Error("Connect your wallet first");
+  const c = createWalletClient({ transport: custom(active.provider) });
+  const current = await c.getChainId().catch(() => undefined);
+  if (current === chainId) return;
+  const hex = `0x${chainId.toString(16)}`;
+  try {
+    await active.provider.request({ method: "wallet_switchEthereumChain", params: [{ chainId: hex }] } as never);
+  } catch (e) {
+    const code = (e as { code?: number }).code;
+    if ((code === 4902 || code === -32603) && trust && trust.chainId === chainId) {
+      await active.provider.request({
+        method: "wallet_addEthereumChain",
+        params: [{ chainId: hex, chainName: trust.name, rpcUrls: [trust.rpcUrl], nativeCurrency: { name: trust.symbol, symbol: trust.symbol, decimals: 18 }, blockExplorerUrls: trust.explorerUrl ? [trust.explorerUrl] : undefined }],
+      } as never);
+    } else throw new Error(`Switch your wallet to chain ${chainId}${trust?.chainId === chainId ? ` (${trust.name})` : ""} and try again`);
+  }
+}
+
+const TRUST_WRITE_ABI = parseAbi(["function stake(string siteId) payable", "function requestUnstake(string siteId)", "function withdraw(string siteId)"]);
+
+/** A staking transaction from the person's own wallet. `amount` is in whole native units (e.g. "10" HBAR). */
+export async function trustTx(trust: TrustChainInfo, expected: string, fn: "stake" | "requestUnstake" | "withdraw", siteId: string, amount?: string): Promise<`0x${string}`> {
+  await ensureChain(trust.chainId, trust);
+  const { c, account } = await client(expected);
+  const chain = { id: trust.chainId, name: trust.name, nativeCurrency: { name: trust.symbol, symbol: trust.symbol, decimals: 18 }, rpcUrls: { default: { http: [trust.rpcUrl] } } };
+  // Wallets and JSON-RPC relays (Hedera's included) take value in 18-decimal units.
+  return c.writeContract({ account, chain, address: trust.address as `0x${string}`, abi: TRUST_WRITE_ABI, functionName: fn, args: [siteId], value: fn === "stake" ? parseEther(amount ?? "0") : undefined } as never);
+}
+
+/** Contract units (tinybars on Hedera) to a display amount. */
+export const fromUnits = (v: string | bigint, decimals: number) => {
+  const s = formatUnits(BigInt(v), decimals);
+  return s.includes(".") ? s.replace(/\.?0+$/, "") : s;
+};

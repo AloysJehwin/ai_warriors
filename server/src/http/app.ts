@@ -8,6 +8,7 @@ import { z } from "zod";
 import { SESSION_COOKIE, type Principal } from "../auth/auth.js";
 import { CATEGORIES } from "../core/templates.js";
 import { REJECT } from "../core/inbox.js";
+import { ONBOARDING_KINDS } from "../core/trust.js";
 import { canApproveAny } from "../domain/policy.js";
 import { AGENT_INFO, AGENTS, ASSET_KIND_LABEL, ASSET_KINDS, AgentKey, AssetKind, AutonomyLevel, DataSource, PackageType, Role, ROLE_LABEL, ROLES, SignalLimit, TemplateSpec } from "../domain/types.js";
 import { HttpError } from "../engine/errors.js";
@@ -83,6 +84,9 @@ export function createApp(sys: System, opts: AppOptions = {}) {
       policy: { id: sys.policy.policy.id, version: sys.policy.policy.version, hash: sys.policy.hash },
       build: opts.build ?? null,
       signatureChainId: sys.cfg.SIGNATURE_CHAIN_ID,
+      trust: sys.trust.chain
+        ? { chainId: sys.trust.chain.cfg.chainId, name: sys.trust.chain.cfg.name, rpcUrl: sys.trust.chain.cfg.rpcUrl, explorerUrl: sys.trust.chain.cfg.explorerUrl, address: sys.trust.chain.cfg.address, symbol: sys.trust.chain.cfg.symbol, decimals: sys.trust.chain.cfg.decimals }
+        : null,
       restrictedSiteCreation: Boolean(sys.cfg.BOOTSTRAP_ADMIN_ADDRESS),
     }),
   );
@@ -135,6 +139,29 @@ export function createApp(sys: System, opts: AppOptions = {}) {
     const id = await sys.plant.createSite(b, p.user.id);
     await sys.rec.decide(id, { agent: `user:${p.user.address}`, kind: "site.created", summary: `Created site ${b.name} with line ${b.lineName}` });
     return c.json({ id });
+  });
+
+  // ---------------- Onboarding (any signed-in wallet, member or not) ----------------
+  const OnboardingBody = z.object({
+    siteId: z.string().min(3).max(60),
+    kind: z.enum(ONBOARDING_KINDS),
+    role: z.string().min(2).max(40),
+    form: z.record(z.string(), z.string().max(2000)).refine((f) => Object.keys(f).length <= 20, "Too many fields"),
+  });
+  app.get("/v1/onboarding/site/:siteId", async (c) => {
+    me(c);
+    return c.json(await sys.trust.publicSite(c.req.param("siteId")));
+  });
+  app.get("/v1/onboarding/mine", async (c) => c.json(await sys.trust.mine(me(c).user)));
+  app.post("/v1/onboarding", async (c) => {
+    const b = await body(c, OnboardingBody);
+    return c.json(await sys.trust.submit(b.siteId, me(c).user, b));
+  });
+  app.post("/v1/onboarding/:siteId/requests/:id/files", async (c) => {
+    const form = await c.req.parseBody();
+    const file = form.file;
+    if (!(file instanceof File)) throw new HttpError(400, "Attach a file");
+    return c.json(await sys.trust.attach(c.req.param("siteId"), me(c).user, c.req.param("id"), { name: file.name, mime: file.type || "application/octet-stream", bytes: new Uint8Array(await file.arrayBuffer()) }));
   });
 
   // ---------------- Site scope ----------------
@@ -435,6 +462,62 @@ export function createApp(sys: System, opts: AppOptions = {}) {
   });
   site.post("/validation/:id/act", async (c) => c.json(await sys.validation.act(sid(c), me(c).user, c.get("roles"), c.req.param("id"), await body(c, PkgAction.merge(SignedBody)))));
 
+
+  // ---- Onboarding review, validators, vendors, on-chain trust ----
+  site.get("/onboarding", async (c) => {
+    need(c, "admin");
+    return c.json(await sys.trust.list(sid(c), c.req.query("status") ?? "pending"));
+  });
+  site.get("/onboarding/:id/files/:sha", async (c) => {
+    const r = await sys.trust.get(sid(c), c.req.param("id"));
+    if (r.userId !== me(c).user.id) need(c, "admin");
+    const f = await sys.trust.file(sid(c), c.req.param("id"), c.req.param("sha"));
+    return new Response(Buffer.from(f.bytes), { headers: { "content-type": f.mime, "content-disposition": `attachment; filename="${f.name.replace(/"/g, "")}"`, "x-content-type-options": "nosniff" } });
+  });
+  const Decision = z.object({ decision: z.enum(["approve", "reject"]), comment: z.string().max(500).default("") });
+  site.post("/onboarding/:id/sign-request", async (c) => {
+    need(c, "admin");
+    const b = await body(c, Decision.extend({ chainId: z.number().int().optional() }));
+    return c.json(await sys.trust.decisionRequest(sid(c), me(c).user, c.req.param("id"), b.decision, b.comment, b.chainId));
+  });
+  site.post("/onboarding/:id/decide", async (c) => {
+    need(c, "admin");
+    return c.json(await sys.trust.decide(sid(c), me(c).user, c.req.param("id"), await body(c, Decision.merge(SignedBody))));
+  });
+  site.get("/validators", async (c) => {
+    const [validators, mine, chain, proposals] = await Promise.all([
+      sys.trust.validators(sid(c)),
+      sys.trust.isValidator(sid(c), me(c).user),
+      sys.trust.chainStatus(sid(c)),
+      sys.trust.proposals(sid(c)),
+    ]);
+    return c.json({ validators, me: { ...mine, row: await sys.trust.validatorRow(sid(c), me(c).user.id) }, chain, proposals });
+  });
+  site.get("/vendors", async (c) => c.json(await sys.trust.vendors(sid(c))));
+  site.get("/chain", async (c) => c.json(await sys.trust.chainStatus(sid(c))));
+  site.post("/chain/register/sign-request", async (c) => {
+    need(c, "admin");
+    const s = await sys.plant.site(sid(c));
+    return c.json(await sys.trust.registerRequest(sid(c), me(c).user, s.name));
+  });
+  site.post("/chain/register", async (c) => {
+    need(c, "admin");
+    return c.json(await sys.trust.register(sid(c), me(c).user, await body(c, SignedBody)));
+  });
+  site.post("/chain/retry", async (c) => {
+    need(c, "admin");
+    return c.json(await sys.trust.retry(sid(c), (await body(c, z.object({ ref: z.string().min(3) }))).ref));
+  });
+  site.post("/slash", async (c) => {
+    const b = await body(c, z.object({ validatorUserId: z.string(), amount: z.string().regex(/^\d+$/), reason: z.string().trim().min(10).max(1000), recallPackageId: z.string().nullable().optional() }));
+    return c.json({ id: await sys.trust.propose(sid(c), me(c).user, c.get("roles"), b) });
+  });
+  site.post("/slash/:id/sign-request", async (c) => c.json(await sys.trust.slashRequest(sid(c), me(c).user, c.get("roles"), c.req.param("id"))));
+  site.post("/slash/:id/sign", async (c) => {
+    await sys.trust.signSlash(sid(c), me(c).user, c.get("roles"), c.req.param("id"), await body(c, SignedBody));
+    return c.json(await sys.trust.proposals(sid(c)));
+  });
+
   // ---- Ledger & proof ----
   site.get("/ledger", async (c) => {
     const subject = c.req.query("subject") || undefined;
@@ -474,6 +557,7 @@ export function createApp(sys: System, opts: AppOptions = {}) {
       counts: {
         approvals: inbox.filter((i) => canApproveAny(roles, i.requiredRole)).length,
         validation: validation.filter((v) => v.needsMe).length,
+        onboarding: canApproveAny(roles, "admin") ? (await sys.trust.list(s, "pending")).length : 0,
       },
     });
   });

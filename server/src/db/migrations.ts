@@ -126,4 +126,30 @@ CREATE TABLE package_signatures (id TEXT PRIMARY KEY, package_id TEXT NOT NULL R
 CREATE TABLE blobs (sha256 TEXT PRIMARY KEY, mime TEXT NOT NULL, size INTEGER NOT NULL, bytes BYTEA NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now());
 `,
   },
+  {
+    version: 4,
+    name: "onboarding, validators, vendors, on-chain trust",
+    sql: `
+CREATE TABLE onboarding_requests (id TEXT PRIMARY KEY, site_id TEXT NOT NULL REFERENCES sites(id), user_id TEXT NOT NULL REFERENCES users(id),
+  address TEXT NOT NULL, kind TEXT NOT NULL, role TEXT NOT NULL, form_json TEXT NOT NULL, files_json TEXT NOT NULL DEFAULT '[]',
+  status TEXT NOT NULL DEFAULT 'pending', decided_by TEXT, decided_at TIMESTAMPTZ, reason TEXT, signature_id TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE INDEX onboarding_site ON onboarding_requests (site_id, status, created_at DESC);
+CREATE TABLE validators (site_id TEXT NOT NULL REFERENCES sites(id), user_id TEXT NOT NULL REFERENCES users(id), scope TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'approved', request_id TEXT, approved_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY (site_id, user_id));
+CREATE TABLE vendors (id TEXT PRIMARY KEY, site_id TEXT NOT NULL REFERENCES sites(id), user_id TEXT, address TEXT NOT NULL, company TEXT NOT NULL,
+  categories TEXT NOT NULL DEFAULT '', hourly_rate TEXT, response_minutes INTEGER, status TEXT NOT NULL DEFAULT 'approved', request_id TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE TABLE chain_sites (site_id TEXT PRIMARY KEY REFERENCES sites(id), chain_id INTEGER NOT NULL, contract TEXT NOT NULL, tx_hash TEXT NOT NULL,
+  registered_at TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE TABLE chain_relays (id TEXT PRIMARY KEY, site_id TEXT NOT NULL, kind TEXT NOT NULL, ref TEXT NOT NULL, payload_json TEXT NOT NULL,
+  status TEXT NOT NULL, tx_hash TEXT, error TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE INDEX chain_relays_ref ON chain_relays (site_id, ref);
+CREATE TABLE slash_proposals (id TEXT PRIMARY KEY, site_id TEXT NOT NULL REFERENCES sites(id), validator_user_id TEXT NOT NULL,
+  validator_address TEXT NOT NULL, amount TEXT NOT NULL, reason TEXT NOT NULL, recall_package_id TEXT, created_by TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'open', created_at TIMESTAMPTZ NOT NULL DEFAULT now(), executed_at TIMESTAMPTZ);
+CREATE TABLE slash_signatures (proposal_id TEXT NOT NULL REFERENCES slash_proposals(id), user_id TEXT NOT NULL, address TEXT NOT NULL,
+  signature_id TEXT NOT NULL, capacity TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY (proposal_id, user_id));
+`,
+  },
 ];

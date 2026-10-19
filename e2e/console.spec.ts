@@ -69,6 +69,28 @@ test("sign in, set up a site, build, run, sign a gate, verify", async ({ page })
   await expect(page.locator("table.t")).toContainText("Running");
   await shot(page, "02-floor");
 
+  // ---- Only validators release quality gates: the admin applies as one and approves it with a signature ----
+  await page.getByRole("link", { name: /Team & validators/ }).click();
+  await page.getByRole("tab", { name: /Validators/ }).click();
+  await expect(page.getByText("Stakes are off.")).toBeVisible();
+  await page.getByRole("button", { name: "Apply as validator" }).click();
+  const ap = page.getByRole("dialog", { name: "Apply as a validator" });
+  await ap.getByRole("textbox", { name: "Full name" }).fill("Aloys Jehwin");
+  await ap.getByRole("textbox", { name: "Qualifications" }).fill("ISO 9001 internal auditor, 4 years in machining QA");
+  await ap.getByRole("button", { name: "Send application" }).click();
+  await expect(ap).toBeHidden();
+  await page.getByRole("tab", { name: /Applications/ }).click();
+  await expect(page.locator(".app-card")).toContainText("Validator · Quality engineer");
+  await shot(page, "11-applications");
+  await page.getByRole("button", { name: "Approve and sign" }).click();
+  const grant = page.getByRole("dialog", { name: /Approve Aloys Jehwin/ });
+  await expect(grant).toContainText("role.grant");
+  await grant.getByRole("button", { name: "Sign with wallet" }).click();
+  await expect(grant).toBeHidden({ timeout: 15_000 });
+  await page.getByRole("tab", { name: /Validators/ }).click();
+  await expect(page.locator("table.t")).toContainText("Can sign");
+  await shot(page, "12-validators");
+
   // ---- Builder: publish a 3-stage pipeline ----
   await page.getByRole("link", { name: "Builder" }).click();
   await expect(page.getByRole("heading", { name: "Pipeline builder" })).toBeVisible();

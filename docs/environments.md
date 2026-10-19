@@ -77,6 +77,7 @@ It validates every variable and checks each configured rail against the real ser
 | `AUTH_RPC_URL` | – | optional | optional | Lets smart-contract wallets (ERC-1271) sign in and sign decisions |
 | `SIGNATURE_CHAIN_ID` | 296 | 296 | 296 | Chain id in EIP-712 signatures when the wallet does not report one |
 | `ANCHOR_EVERY` | 50 | 50 | 50 | Anchor the ledger head after this many new entries (and every 30 min) |
+| `TRUST_RPC_URL`, `TRUST_CHAIN_ID`, `TRUST_CONTRACT_ADDRESS`, `TRUST_RELAYER_KEY` (+ `TRUST_CHAIN_NAME`, `TRUST_EXPLORER_URL`, `TRUST_SYMBOL`, `TRUST_DECIMALS`) | – | Hedera testnet | Hedera testnet | OrdoTrust: on-chain role credentials, validator stakes, release records, slashing. From `pnpm --filter @ordo/contracts deploy:trust`. Without them validators are approved in-app only |
 | `LLM_PROVIDER`, `GEMINI_API_KEY`, `GEMINI_MODEL` | offline or gemini | gemini | gemini | `gemini-flash-latest` tracks the current Flash model |
 | `ANCHOR`, `PAYMENTS` | local/mock | hedera | hedera | Decisions are signed with each person's wallet (EIP-712), so there is no approvals rail |
 | `HEDERA_*` | – | testnet | testnet | From `pnpm --filter @ordo/contracts bootstrap:hedera` and `deploy:hedera` |

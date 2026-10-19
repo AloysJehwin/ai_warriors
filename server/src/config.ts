@@ -28,6 +28,19 @@ const Env = z.object({
   /** Chain id put in EIP-712 signatures when the client does not send its own. */
   SIGNATURE_CHAIN_ID: z.coerce.number().int().default(296),
 
+  // ---- On-chain trust (OrdoTrust: role credentials, validator stakes, releases, slashing) ----
+  /** JSON-RPC of the chain OrdoTrust is deployed on, e.g. https://testnet.hashio.io/api for Hedera testnet */
+  TRUST_RPC_URL: z.string().optional(),
+  TRUST_CHAIN_ID: z.coerce.number().int().optional(),
+  TRUST_CHAIN_NAME: z.string().default("Hedera Testnet"),
+  TRUST_EXPLORER_URL: z.string().optional(),
+  TRUST_CONTRACT_ADDRESS: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
+  /** Pays gas to relay signed grants, releases and slashes. Holds no authority: the contract checks the signers. */
+  TRUST_RELAYER_KEY: z.string().regex(/^0x[0-9a-fA-F]{64}$/).optional(),
+  TRUST_SYMBOL: z.string().default("HBAR"),
+  /** decimals of native value inside the contract: 8 on Hedera (tinybars), 18 on other EVM chains */
+  TRUST_DECIMALS: z.coerce.number().int().min(0).max(18).default(8),
+
   // ---- Agents ----
   LLM_PROVIDER: z.enum(["offline", "gemini", "openai_compat", "0g"]).default("offline"),
   LLM_TIMEOUT_MS: z.coerce.number().int().default(15000),

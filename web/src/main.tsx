@@ -71,7 +71,7 @@ function Root() {
     );
   return (
     <AppProvider key={siteId} me={me} setMe={setMe} siteId={siteId} meta={meta} status={status}>
-      <SignerProvider address={me.user.address}>
+      <SignerProvider address={me.user.address} trust={status.trust}>
         <Shell
           onSignOut={signOut}
           onSwitchSite={(id) => {

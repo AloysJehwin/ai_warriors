@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { Modal, Spinner, useToast } from "../ui/kit";
-import type { TypedSignature } from "../types";
-import { discoverWallets, hasActiveWallet, rememberedWallet, setActiveWallet, short, signTyped, walletChainId, type WalletInfo } from "./wallet";
+import type { TrustChainInfo, TypedSignature } from "../types";
+import { discoverWallets, ensureChain, hasActiveWallet, rememberedWallet, setActiveWallet, short, signTyped, walletChainId, type WalletInfo } from "./wallet";
 
 export interface SignJob<T> {
   /** What the person is doing, in plain words. */
@@ -21,7 +21,7 @@ export const useSign = () => useContext(SignCtx);
  * Every decision that matters is signed with the person's wallet (EIP-712). This dialog shows
  * exactly what is being signed before the wallet prompt opens.
  */
-export function SignerProvider(props: { address: string; children: ReactNode }) {
+export function SignerProvider(props: { address: string; trust: TrustChainInfo | null; children: ReactNode }) {
   const toast = useToast();
   const [job, setJob] = useState<SignJob<unknown> | null>(null);
   const [typed, setTyped] = useState<TypedSignature | null>(null);
@@ -70,6 +70,8 @@ export function SignerProvider(props: { address: string; children: ReactNode }) 
     setState("signing");
     setError(null);
     try {
+      // wallets refuse typed data for a chain they are not on
+      await ensureChain(typed.domain.chainId, props.trust);
       const signature = await signTyped(typed, props.address);
       const out = await job.submit({ nonce: typed.message.nonce, signature });
       toast(job.done ?? "Signed and recorded in the ledger", "ok");
@@ -133,7 +135,10 @@ export function SignerProvider(props: { address: string; children: ReactNode }) 
               <dt>Nonce</dt>
               <dd className="mono">{typed.message.nonce}</dd>
               <dt>Chain</dt>
-              <dd className="mono">{typed.domain.chainId}</dd>
+              <dd className="mono">
+                {typed.domain.chainId}
+                {props.trust?.chainId === typed.domain.chainId ? ` · ${props.trust.name} · verified by OrdoTrust` : ""}
+              </dd>
             </dl>
             <p className="faint small">Signing costs no gas and sends no transaction. The signature is verified by Ordo, stored with the decision, and hash-chained into the ledger.</p>
           </div>
