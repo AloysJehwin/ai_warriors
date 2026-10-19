@@ -2,7 +2,7 @@
  * Versioned, forward-only migrations. Each runs once, in order, inside a transaction.
  * v1 = the original demo schema (kept so existing databases upgrade cleanly).
  * v2 = real accounts, sites, assets, telemetry, templates, runs, inbox, validation, signatures.
- * v3 = validation workflow · v4 = onboarding and on-chain trust · v5 = agent work orders and autonomy proposals · v6 = lot passports · v7 = jobs on other networks (ENS, 0G) · v11–15 = ENS lot names and credentials, Hedera schedules, one World ID per validator, zero-knowledge spec proofs, agent licences.
+ * v3 = validation workflow · v4 = onboarding and on-chain trust · v5 = agent work orders and autonomy proposals · v6 = lot passports · v7 = jobs on other networks (ENS, 0G) · v11–15 = Hedera schedules, ENS lot names and credentials, one World ID per validator, zero-knowledge spec proofs, agent licences.
  */
 export const MIGRATIONS: { version: number; name: string; sql: string }[] = [
   {
@@ -226,6 +226,17 @@ ALTER TABLE sites ADD COLUMN public_pipelines BOOLEAN NOT NULL DEFAULT true;
   },
   {
     version: 11,
+    name: "Hedera schedules",
+    sql: `
+CREATE TABLE hedera_schedules (id TEXT PRIMARY KEY, site_id TEXT NOT NULL, kind TEXT NOT NULL, ref TEXT NOT NULL,
+  execute_at TIMESTAMPTZ NOT NULL, schedule_id TEXT, tx_id TEXT, status TEXT NOT NULL, executed_at TIMESTAMPTZ, error TEXT,
+  next_check_at TIMESTAMPTZ NOT NULL DEFAULT now(), created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE UNIQUE INDEX hedera_schedules_ref ON hedera_schedules (kind, ref);
+CREATE INDEX hedera_schedules_open ON hedera_schedules (kind, status, execute_at);
+`,
+  },
+  {
+    version: 12,
     name: "ENS lot names and credentials",
     sql: `
 CREATE TABLE ens_lots (id TEXT PRIMARY KEY, site_id TEXT NOT NULL REFERENCES sites(id), kind TEXT NOT NULL, ref TEXT NOT NULL, run_id TEXT,
@@ -236,17 +247,6 @@ CREATE UNIQUE INDEX ens_lots_ref ON ens_lots (kind, ref);
 CREATE UNIQUE INDEX ens_lots_lot_name ON ens_lots (name) WHERE kind = 'lot';
 CREATE INDEX ens_lots_due ON ens_lots (status, next_try_at);
 CREATE INDEX ens_lots_run ON ens_lots (run_id);
-`,
-  },
-  {
-    version: 12,
-    name: "Hedera schedules",
-    sql: `
-CREATE TABLE hedera_schedules (id TEXT PRIMARY KEY, site_id TEXT NOT NULL, kind TEXT NOT NULL, ref TEXT NOT NULL,
-  execute_at TIMESTAMPTZ NOT NULL, schedule_id TEXT, tx_id TEXT, status TEXT NOT NULL, executed_at TIMESTAMPTZ, error TEXT,
-  next_check_at TIMESTAMPTZ NOT NULL DEFAULT now(), created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
-CREATE UNIQUE INDEX hedera_schedules_ref ON hedera_schedules (kind, ref);
-CREATE INDEX hedera_schedules_open ON hedera_schedules (kind, status, execute_at);
 `,
   },
   {
