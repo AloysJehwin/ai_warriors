@@ -18,6 +18,10 @@ const Env = z.object({
   VERCEL: z.string().optional(),
   VERCEL_ENV: z.string().optional(),
   VERCEL_GIT_COMMIT_SHA: z.string().optional(),
+  /** Vercel sets this to the production domain; public links (lot passports, QR codes) use it when PUBLIC_URL is unset */
+  VERCEL_PROJECT_PRODUCTION_URL: z.string().optional(),
+  /** Base URL people and wallets reach this deployment at, e.g. https://aiwarriors.vercel.app */
+  PUBLIC_URL: z.string().url().optional(),
 
   // ---- Accounts ----
   SESSION_TTL_HOURS: z.coerce.number().min(1).max(24 * 30).default(72),
@@ -71,6 +75,8 @@ const Env = z.object({
   HEDERA_AGENT_ID: z.string().optional(),
   HEDERA_AGENT_KEY: z.string().optional(),
   HEDERA_MIRROR_URL: z.string().optional(),
+  /** HTS NFT collection for lot passports (the operator is treasury, supply and metadata key) */
+  HEDERA_PASSPORT_TOKEN_ID: z.string().optional(),
 
   ENS_RPC_URL: z.string().optional(),
   ENS_PARENT_NAME: z.string().optional(),
@@ -82,5 +88,9 @@ const Env = z.object({
 });
 
 export type Config = z.infer<typeof Env>;
+/** Where the public can reach this deployment, for links that leave the app (NFT metadata, QR codes). */
+export const publicBase = (c: Config): string | null =>
+  (c.PUBLIC_URL ?? (c.VERCEL_PROJECT_PRODUCTION_URL ? `https://${c.VERCEL_PROJECT_PRODUCTION_URL}` : null))?.replace(/\/$/, "") ?? null;
+
 export const timerEnabled = (c: Config) => (c.ENGINE_TIMER === "auto" ? !c.VERCEL : c.ENGINE_TIMER === "on");
 export const loadConfig = (env: NodeJS.ProcessEnv = process.env): Config => Env.parse(env);

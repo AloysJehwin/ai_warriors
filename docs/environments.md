@@ -93,6 +93,7 @@ It validates every variable and checks each configured rail against the real ser
 | `LLM_PROVIDER`, `GEMINI_API_KEY`, `GEMINI_MODEL` | offline or gemini | gemini | gemini | `gemini-flash-latest` tracks the current Flash model |
 | `ANCHOR` | local | hedera | hedera | `hedera` anchors the ledger head to `HEDERA_TOPIC_ID` with the operator account |
 | `HEDERA_OPERATOR_ID`, `HEDERA_OPERATOR_KEY`, `HEDERA_TOPIC_ID` | – | testnet | testnet | Operator from the `hedera-testnet` GitHub environment (copied by **Sync secrets to Vercel**); topic from **Hedera setup** (`topic`) |
+| `HEDERA_PASSPORT_TOKEN_ID`, `PUBLIC_URL` | – | testnet | testnet | Lot passport NFT collection, from **Hedera setup** (`passport`). NFT metadata and QR codes point at `PUBLIC_URL` (on Vercel, the production domain when unset) |
 | `HEDERA_AGENT_ID`, `HEDERA_AGENT_KEY` | – | testnet | testnet | The maintenance agent's own account; it escrows through Hedera Agent Kit. From **Hedera setup** (`agent`), which writes the key to Vercel directly |
 | `IDENTITY`, `ENS_RPC_URL` | plain | ens | ens | `ens` shows people's primary ENS names (mainnet reverse resolution) |
 | `EVIDENCE_STORE`, `ZG_*` | local | 0g (optional) | 0g (optional) | |

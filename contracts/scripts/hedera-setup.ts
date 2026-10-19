@@ -5,11 +5,12 @@
  *   HEDERA_OPERATOR_ID=0.0.x HEDERA_OPERATOR_KEY=0x… pnpm --filter @ordo/contracts setup:hedera topic
  *   … setup:hedera agent        SECRET_OUT=<file> receives HEDERA_AGENT_KEY; the key is never printed
  *   … setup:hedera contracts    TRUST_CONTRACT_ADDRESS=0x… (OrdoTrust) is required
+ *   … setup:hedera passport     the HTS NFT collection for lot passports
  *
  * Prints only public values: the variables to set in Vercel.
  */
 import { readFileSync, writeFileSync } from "node:fs";
-import { AccountCreateTransaction, Client, Hbar, PrivateKey, TopicCreateTransaction } from "@hiero-ledger/sdk";
+import { AccountCreateTransaction, Client, Hbar, PrivateKey, TokenCreateTransaction, TokenSupplyType, TokenType, TopicCreateTransaction } from "@hiero-ledger/sdk";
 import { createPublicClient, createWalletClient, defineChain, http, type Abi, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { need } from "./env.js";
@@ -68,7 +69,29 @@ HEDERA_AGENT_ID=${id}
 TRUST_WORKORDERS_ADDRESS=${deployed.OrdoWorkOrders}
 TRUST_POLICIES_ADDRESS=${deployed.OrdoPolicies}
 `);
+} else if (task === "passport") {
+  const client = Client.forTestnet().setOperator(operatorId, operatorKey);
+  // The operator is treasury, mints (supply key) and updates metadata as the lot moves on (metadata key, HIP-657).
+  const tx = await new TokenCreateTransaction()
+    .setTokenName("Ordo Lot Passport")
+    .setTokenSymbol("ORDOLOT")
+    .setTokenType(TokenType.NonFungibleUnique)
+    .setSupplyType(TokenSupplyType.Infinite)
+    .setTreasuryAccountId(operatorId)
+    .setAdminKey(operatorKey.publicKey)
+    .setSupplyKey(operatorKey.publicKey)
+    .setMetadataKey(operatorKey.publicKey)
+    .setTokenMemo("One NFT per production lot: its passport, from Ordo")
+    .execute(client);
+  const id = (await tx.getReceipt(client)).tokenId!.toString();
+  client.close();
+  console.log(`Lot passport collection created: https://hashscan.io/testnet/token/${id}
+
+# ---- set in Vercel (Production and Preview) ----
+HEDERA_PASSPORT_TOKEN_ID=${id}
+PUBLIC_URL=<the deployment's public URL, e.g. https://aiwarriors.vercel.app>
+`);
 } else {
-  console.error("usage: hedera-setup.ts topic | agent | contracts");
+  console.error("usage: hedera-setup.ts topic | agent | contracts | passport");
   process.exit(1);
 }

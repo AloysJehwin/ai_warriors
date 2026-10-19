@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import type { Config } from "./config.js";
+import { publicBase, type Config } from "./config.js";
 import { geminiProvider, OfflineLlm, openAiCompatProvider, type LlmProvider } from "./adapters/llm.js";
 import { LocalSignedAnchor, type AnchorAdapter } from "./adapters/rails.js";
 import { Agents } from "./agents/agents.js";
@@ -8,6 +8,7 @@ import { Auth, Signatures } from "./auth/auth.js";
 import { Autonomy } from "./core/autonomy.js";
 import { Inbox } from "./core/inbox.js";
 import { Monitor } from "./core/monitor.js";
+import { Passports } from "./core/passports.js";
 import { Proof } from "./core/proof.js";
 import { Recorder } from "./core/recorder.js";
 import { Templates } from "./core/templates.js";
@@ -50,6 +51,7 @@ export interface System {
   agents: Agents;
   workOrders: WorkOrders;
   autonomy: Autonomy;
+  passports: Passports;
   ensNames: { lookup(addresses: string[]): Promise<Record<string, string | null>> } | null;
   /** One engine cycle: pull data, advance runs, watch for anomalies, refund expired escrows, anchor. Throttled and lease-guarded. */
   advance(force?: boolean): Promise<void>;
@@ -92,11 +94,11 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
   if (anchor instanceof LocalSignedAnchor && anchor.ephemeral)
     warnings.push(cfg.VERCEL ? "LEDGER_SIGNING_KEY not set: each serverless instance signs with a different key." : "LEDGER_SIGNING_KEY not set; checkpoints use a key that changes on restart");
   let hedera: Awaited<ReturnType<typeof import("./chain/hedera.js")["hederaFromConfig"]>> | null = null;
-  if (cfg.ANCHOR === "hedera") {
+  if (cfg.ANCHOR === "hedera" || cfg.HEDERA_PASSPORT_TOKEN_ID) {
     try {
       const h = await import("./chain/hedera.js");
       hedera = h.hederaFromConfig(cfg);
-      anchor = hedera.anchor();
+      if (cfg.ANCHOR === "hedera") anchor = hedera.anchor();
     } catch (e) {
       warnings.push(`Hedera not configured (${e instanceof Error ? e.message : e}); using the local signed anchor`);
     }
@@ -175,6 +177,10 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
   const workOrders = new WorkOrders(db, rec, sigs, trust, payer, now);
   inbox.workOrders = workOrders;
   const autonomy = new Autonomy(db, rec, sigs, plant, trust, policy, cfg.SIGNATURE_CHAIN_ID);
+  let passportRail: import("./chain/passport.js").PassportRail | null = null;
+  if (cfg.HEDERA_PASSPORT_TOKEN_ID && hedera) passportRail = (await import("./chain/passport.js")).hederaPassports(hedera.client, cfg.HEDERA_NETWORK, cfg.HEDERA_PASSPORT_TOKEN_ID);
+  if (cfg.HEDERA_PASSPORT_TOKEN_ID && !publicBase(cfg)) warnings.push("Set PUBLIC_URL so lot passport NFTs point at a public page");
+  const passports = new Passports(db, rec, sigs, engine, trust, proof, passportRail, publicBase(cfg), cfg.SIGNATURE_CHAIN_ID, now);
 
   const advance = async (force = false) => {
     // throttle: one cycle per 4 s across all instances (the lease is left to expire, not released)
@@ -184,6 +190,7 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
     const sites = await db.query<{ id: string }>("SELECT id FROM sites");
     for (const s of sites.rows) await monitor.scan(s.id);
     await workOrders.refundExpired().catch((e) => console.error("[ordo] refunds", e));
+    await passports.reconcile().catch((e) => console.error("[ordo] passports", e));
     const head = await ledger.head();
     const last = (await proof.anchors(1))[0];
     if (head && (!last || head.seq - last.toSeq >= cfg.ANCHOR_EVERY || (head.seq > last.toSeq && now() - Date.parse(last.ts) > 30 * 60_000))) await proof.anchorHead(null, null).catch((e) => console.error("[ordo] anchor", e));
@@ -201,6 +208,7 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
       mode: workOrders.live ? `${payer!.kind === "hedera-agent-kit" ? "Hedera Agent Kit" : "agent key"} → OrdoWorkOrders ${cfg.TRUST_WORKORDERS_ADDRESS}` : "off: work orders assign a vendor, no escrow",
       live: workOrders.live,
     },
+    { rail: "lot passports", mode: passportRail ? `HTS NFT ${passportRail.tokenId}` : "in-app passports, no NFT", live: Boolean(passportRail) },
     { rail: "autonomy policies", mode: trustChain?.cfg.policies ? `OrdoPolicies ${cfg.TRUST_POLICIES_ADDRESS}` : "in-app signatures", live: Boolean(trustChain?.cfg.policies) },
   ];
 
@@ -225,6 +233,7 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
     agents,
     workOrders,
     autonomy,
+    passports,
     ensNames,
     advance,
     close: () => db.close(),

@@ -164,6 +164,15 @@ export function createApp(sys: System, opts: AppOptions = {}) {
     return c.json(await sys.trust.attach(c.req.param("siteId"), me(c).user, c.req.param("id"), { name: file.name, mime: file.type || "application/octet-stream", bytes: new Uint8Array(await file.arrayBuffer()) }));
   });
 
+  // ---------------- Lot passports: public, no sign-in (the QR code on a shipped lot and the NFT metadata) ----------------
+  app.get("/v1/public/passports/:runId", async (c) => {
+    const id = c.req.param("runId");
+    if (!/^[\w-]{1,64}$/.test(id)) throw new HttpError(404, "No passport for this lot");
+    c.header("access-control-allow-origin", "*");
+    c.header("cache-control", "public, max-age=30");
+    return c.json(await sys.passports.publicView(id));
+  });
+
   // ---------------- Site scope ----------------
   const site = new Hono<Env>();
   site.use("*", async (c, next) => {
@@ -322,6 +331,10 @@ export function createApp(sys: System, opts: AppOptions = {}) {
     const id = await sys.engine.start(sid(c), actor(c), b);
     return c.json(await sys.engine.view(sid(c), id));
   });
+  site.get("/runs/:runId/passport", async (c) => c.json(await sys.passports.get(sid(c), c.req.param("runId"))));
+  const ShipTo = z.object({ to: z.string().regex(/^(0\.0\.\d+|0x[0-9a-fA-F]{40})$/, "A Hedera account id (0.0.x) or an EVM address") });
+  site.post("/runs/:runId/ship/sign-request", async (c) => c.json(await sys.passports.shipRequest(sid(c), me(c).user, c.get("roles"), c.req.param("runId"), (await body(c, ShipTo)).to)));
+  site.post("/runs/:runId/ship", async (c) => c.json(await sys.passports.ship(sid(c), me(c).user, c.get("roles"), c.req.param("runId"), await body(c, SignedBody.merge(ShipTo)))));
   site.get("/runs/:runId", async (c) => {
     const runId = c.req.param("runId");
     const [run, decisions, inbox] = await Promise.all([sys.engine.view(sid(c), runId), sys.rec.decisions(sid(c), { runId, limit: 200 }), sys.inbox.list(sid(c), { runId, status: "all" })]);

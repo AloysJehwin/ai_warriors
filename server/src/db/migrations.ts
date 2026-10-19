@@ -2,7 +2,7 @@
  * Versioned, forward-only migrations. Each runs once, in order, inside a transaction.
  * v1 = the original demo schema (kept so existing databases upgrade cleanly).
  * v2 = real accounts, sites, assets, telemetry, templates, runs, inbox, validation, signatures.
- * v3 = validation workflow · v4 = onboarding and on-chain trust · v5 = agent work orders and autonomy proposals.
+ * v3 = validation workflow · v4 = onboarding and on-chain trust · v5 = agent work orders and autonomy proposals · v6 = lot passports.
  */
 export const MIGRATIONS: { version: number; name: string; sql: string }[] = [
   {
@@ -170,6 +170,17 @@ CREATE TABLE autonomy_proposals (id TEXT PRIMARY KEY, site_id TEXT NOT NULL REFE
   status TEXT NOT NULL DEFAULT 'open', created_by TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), decided_at TIMESTAMPTZ);
 CREATE TABLE autonomy_signatures (proposal_id TEXT NOT NULL REFERENCES autonomy_proposals(id), user_id TEXT NOT NULL, address TEXT NOT NULL,
   signature_id TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY (proposal_id, user_id));
+`,
+  },
+  {
+    version: 6,
+    name: "lot passports",
+    sql: `
+CREATE TABLE passports (run_id TEXT PRIMARY KEY REFERENCES runs(id), site_id TEXT NOT NULL REFERENCES sites(id), status TEXT NOT NULL,
+  token_id TEXT, serial INTEGER, onchain_status TEXT, mint_tx TEXT, last_tx TEXT, error TEXT, next_try_at TIMESTAMPTZ,
+  shipped_to TEXT, shipped_at TIMESTAMPTZ, ship_tx TEXT, ship_pending BOOLEAN, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE INDEX passports_site ON passports (site_id, created_at DESC);
 `,
   },
 ];

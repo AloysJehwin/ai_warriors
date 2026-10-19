@@ -269,3 +269,60 @@ export interface AutonomyProposalView {
   decidedAt: string | null;
   onchain: RelayView | null;
 }
+
+// ---------------- Lot passports ----------------
+export type PassportStatus = "in_production" | "held" | "completed" | "aborted" | "shipped";
+export interface PassportView {
+  runId: string;
+  status: PassportStatus;
+  pageUrl: string;
+  nft: { tokenId: string; serial: number | null; url: string | null; onchainStatus: string | null; mintTxUrl: string | null; error: string | null } | null;
+  shipment: { to: string; at: string; txUrl: string | null; pending: boolean | null } | null;
+}
+export interface PublicPassport {
+  name: string;
+  creator: string;
+  description: string;
+  properties: { runId: string; status: PassportStatus; orderRef: string; quantity: number; product: string };
+  passport: PassportView & {
+    site: string | null;
+    orderRef: string;
+    quantity: number;
+    product: { name: string; category: string; version: number };
+    startedAt: string;
+    finishedAt: string | null;
+    rolledYield: number | null;
+    stages: {
+      code: string;
+      name: string;
+      state: string;
+      mode: string;
+      resource: string;
+      startedAt: string | null;
+      endedAt: string | null;
+      unitsGood: number;
+      unitsScrap: number;
+      criteria: { label: string; target: string; actual: string | null; ok: boolean | null }[];
+      deviation: boolean;
+    }[];
+    signed: { kind: string; summary: string; stageCode: string | null; by: string; at: string; ledgerSeq: number | null }[];
+    agentDecisions: number;
+    releases: {
+      id: string;
+      number: number;
+      type: string;
+      title: string;
+      releasedAt: string;
+      signers: { meaning: string; address: string; stake: { amount: string; active: boolean; symbol: string; decimals: number } | null }[];
+      onchain: { txUrl: string | null; contract: string | null } | null;
+    }[];
+    proof: {
+      chainIntact: boolean;
+      headSeq: number;
+      entries: number;
+      lastSeq: number;
+      anchor: { kind: string; ref: string; url: string | null; toSeq: number; at: string; matchesChain: boolean; external: { ok: boolean; detail: string } } | null;
+      checkedAt: string;
+    };
+  };
+}

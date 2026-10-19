@@ -4,6 +4,7 @@ name: Hedera setup
 # List what to create in .github/deploy/hedera.request, one per line, and push it:
 #   topic      the HCS topic the ledger is anchored to             → HEDERA_TOPIC_ID
 #   contracts  OrdoWorkOrders and OrdoPolicies, bound to OrdoTrust  → TRUST_WORKORDERS_ADDRESS, TRUST_POLICIES_ADDRESS
+#   passport   the HTS NFT collection for lot passports             → HEDERA_PASSPORT_TOKEN_ID
 #   agent      the maintenance agent's own Hedera account           → HEDERA_AGENT_ID; its key goes straight to Vercel
 #              (needs VERCEL_TOKEN as a repository secret, and is never printed)
 # The log and summary show only public values.
@@ -50,6 +51,9 @@ jobs:
           TRUST_RPC_URL: https://testnet.hashio.io/api
           TRUST_CHAIN_ID: "296"
         run: pnpm --filter @ordo/contracts setup:hedera contracts | tee -a setup.log
+      - name: Lot passport collection
+        if: contains(steps.what.outputs.tasks, ' passport ')
+        run: pnpm --filter @ordo/contracts setup:hedera passport | tee -a setup.log
       - name: Agent account
         if: contains(steps.what.outputs.tasks, ' agent ')
         env:

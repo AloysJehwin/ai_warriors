@@ -190,4 +190,26 @@ test("sign in, set up a site, build, run, sign a gate, verify", async ({ page })
   await expect(page.locator(".notice.warn")).toContainText("Waiting for another plant manager");
   await expect(page.locator(".side .accent-text")).toContainText("L2");
   await shot(page, "14-autonomy-proposal");
+
+  // ---- The lot's passport: QR, ship with a signature, and the public page without signing in ----
+  await page.getByRole("link", { name: "Pipelines" }).click();
+  await page.getByRole("button", { name: "Lot passport" }).click();
+  const pp = page.getByRole("dialog", { name: /Lot SO-7781/ });
+  await expect(pp.getByRole("img", { name: /QR code/ })).toBeVisible();
+  await pp.getByRole("group", { name: /Ship to/ }).locator("input").fill("0.0.4242");
+  await pp.getByRole("button", { name: "Sign and ship" }).click();
+  await page.getByRole("dialog", { name: /Ship lot SO-7781/ }).getByRole("button", { name: "Sign with wallet" }).click();
+  await expect(pp).toContainText("Shipped");
+  const publicUrl = await pp.getByRole("link", { name: "Open the public page" }).getAttribute("href");
+  await shot(page, "15-passport-dialog");
+  const anon = await page.context().browser()!.newContext({ viewport: { width: 390, height: 844 } });
+  const pub = await anon.newPage();
+  await pub.goto(publicUrl!);
+  await expect(pub.getByRole("heading", { name: "Lot SO-7781" })).toBeVisible();
+  await expect(pub.getByText("Shipped").first()).toBeVisible();
+  await expect(pub.getByText(/every hash links/)).toBeVisible();
+  await expect(pub.getByRole("heading", { name: "Stage by stage" })).toBeVisible();
+  await expect(pub.getByRole("img", { name: /QR code/ })).toBeVisible();
+  if (shotDir) await pub.screenshot({ path: `${shotDir}/16-public-passport-mobile.png`, fullPage: true });
+  await anon.close();
 });
