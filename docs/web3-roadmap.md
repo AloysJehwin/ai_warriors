@@ -1,0 +1,86 @@
+# Web3 roadmap: roles, onboarding, staking, and the prize tracks
+
+Written 19 Oct 2026, 17 days before ETHGlobal Mumbai (5–7 Nov). Mumbai's sponsor track rules are still "coming soon"; the shapes below come from ETHOnline 2026 (Sep 2026), the most recent event with the same sponsors. Re-check https://ethglobal.com/events/mumbai/prizes when rules land.
+
+## What the sponsors reward right now
+
+| Sponsor (Mumbai pool) | Recent track shape | What qualifies |
+| --- | --- | --- |
+| Hedera (USD 15k) | AI & Agentic Payments 6k (3 × 2k) · Tokenization of Anything 6k · Improve the Hedera Harness 2k · Continuity 1k | An agent that executes a payment on Hedera testnet with Hedera Agent Kit or x402; public repo; demo ≤ 5 min |
+| 0G (USD 15k) | Best AI product on 0G | Inference on 0G Compute, data on 0G Storage, agents as ERC-7857 iNFTs |
+| ENS (USD 10k) | Best Use of ENSv2 4.5k · Best Integration 0.5k (Continuity only) | Built on ENSv2 (Sepolia), with ENSv2 central to the product, not cosmetic |
+
+Ordo is pre-existing work, so every track entered must also respect the Continuity rules (document what existed before the event).
+
+## 1. Who can do what: roles become on-chain credentials
+
+Today roles live in Postgres and are enforced by the server. For the hackathon, each role becomes a **non-transferable credential** that a contract can check, so "only a validator can validate" is enforced on-chain, not only in our API.
+
+| Persona | Credential | Can | Earned by |
+| --- | --- | --- | --- |
+| Site admin | `ADMIN` | Approve onboarding, set policy | Creating the site |
+| Operator | `OPERATOR` | Record units, hold a stage | Onboarding form + admin approval |
+| Supervisor | `SUPERVISOR` | Start runs, release supervisor gates | Onboarding form + admin approval |
+| **Validator** | `VALIDATOR` (+ scope: quality, process, plant) | Sign validation packages and quality gates | Onboarding form + qualification evidence + admin approval + **stake** |
+| Maintenance vendor | `VENDOR` | Accept work orders, get paid by agents | Vendor form + **bond** |
+| Agent | iNFT (ERC-7857) | Act within policy | Minted per agent with its policy hash and model id |
+| Auditor / customer | none | Read and verify | Wallet only |
+
+The existing roles map onto this: quality engineer, process engineer and plant manager become validator scopes; separation of duties (one signature per person per package) already exists in the server.
+
+## 2. Onboarding flows ("entries")
+
+Each flow is a form in the console, an admin review in the inbox, and an on-chain mint at approval. Every step writes to the ledger.
+
+1. **Site onboarding.** Name, time zone, lines, zones (exists), plus an ENSv2 name for the site (`pune-plant-1.ordo.eth`) and the policy hash published to `OrdoPolicyRegistry`.
+2. **Person onboarding.** Invite by wallet (exists) → the person fills a form: name, requested role, employee id, training certificates (files hashed, stored on 0G Storage) → admin approves in the inbox with an EIP-712 signature → credential minted and an ENS subname issued (`priya.pune-plant-1.ordo.eth`) with text records for role and site.
+3. **Validator onboarding.** Person onboarding plus qualification evidence (for example an ISO 9001 auditor or GMP training certificate) and a **stake** of N HBAR into `ValidatorStaking`. Only an active, staked validator's EIP-712 signature counts in a validation package's chain.
+4. **Vendor onboarding.** Company, wallet, service categories, hourly rate, response-time commitment, and a **bond**. Agents can only pay allow-listed vendors (`AgentSpendVault` already enforces this).
+5. **Asset onboarding.** Register the machine (exists), give it an ENS subname (`cnc-05.pune-plant-1.ordo.eth`) with its limits and data source as text records, then run an **operational qualification** package. When validators release it, the asset joins its agent's pool, a flow the product docs already describe.
+6. **Agent onboarding.** Each of the 8 agents is minted as an iNFT holding its scope, policy hash and model id; autonomy changes update it.
+
+## 3. Staking, bonds and slashing
+
+- **Why a stake.** A validator's signature releases product to customers. A stake makes a careless signature expensive, and turns "trust the QE" into "the QE has skin in the game", a strong judging story.
+- **Mechanics** (`ValidatorStaking` on Hedera EVM): stake ≥ minimum to activate; unstaking has a 7-day cooldown so open disputes can still act; the stake is locked while the validator has a release inside its warranty window.
+- **Slashing, carefully.** Only through a **recall package**: a new validation package that proves a released lot was defective, signed by two other validators and the plant manager. Slashed stake goes to a quality fund, not to the accusers, so nobody profits from a recall. Any automatic, agent-triggered slashing would be unfair and hard to defend to judges; avoid it.
+- **Vendor bond.** A vendor that misses the response window on a work order loses a fixed share of its bond to the plant; one that delivers gets paid from the vault and its reputation record (on its ENS name) is updated.
+
+## 4. The other web3 pieces worth building, ranked
+
+| # | Implementation | Prize track | Why judges like it | Effort |
+| --- | --- | --- | --- | --- |
+| 1 | **HCS ledger anchoring live** (adapter exists) | Hedera | Every decision provable with HashScan links | S: needs a Hedera operator account |
+| 2 | **Agents pay vendors** for work orders through Hedera Agent Kit, capped by `AgentSpendVault` | Hedera AI & Agentic Payments | This is the track's exact qualification | M |
+| 3 | **Validator staking + role credentials** (sections 1–3) | Hedera; also strengthens every demo | "Only a staked validator can release product" on-chain | M |
+| 4 | **Lot passport as an HTS NFT**: each production lot minted at run start, stage results and signatures appended, frozen when held, transferred to the customer on ship | Hedera Tokenization of Anything | Real regulation: the EU Digital Product Passport | M |
+| 5 | **Public passport page**: a QR code on the shipped lot opens a page anyone can verify against HCS and the NFT | Hedera, ENS | Makes the proof tangible in a 5-minute demo | S |
+| 6 | **ENSv2 names** for sites, people, assets and agents, with roles, limits and reputation as records; the console resolves names everywhere | ENS Best Use of ENSv2 | ENSv2 is central (identity and permissions), as the rules require | M |
+| 7 | **0G Storage for evidence files** (Merkle root recorded in the ledger) and **0G Compute** for root-cause analysis | 0G | Verifiable AI and data, adapters partly exist | M |
+| 8 | **Agents as iNFTs (ERC-7857)** with policy hash and model id | 0G | Agent identity and accountability | S–M |
+| 9 | **x402 pay-per-call**: an agent buys an external inspection or data service per request | Hedera AI & Agentic Payments | Second qualifying payment path | M |
+| 10 | **Threshold approvals**: autonomy L4 or a policy change needs 2-of-3 plant managers (Hedera threshold key or a Safe) | Hedera | Shows governance, not just logging | S–M |
+| 11 | **Gasless smart wallets for the shop floor** (passkeys, sponsored gas) so operators never see a seed phrase | All | Adoption realism; strong UX point | M |
+| 12 | **World ID** proof-of-personhood for signers (one human, one signer) | World (if Mumbai allows web apps) | Maps to 21 CFR Part 11 "unique signature" | M; may require a Mini App |
+| 13 | **Chainlink** feeds machine data on-chain to settle vendor SLA disputes | Chainlink (5k, crowded) | Oracle use is real but secondary | M |
+
+## 5. Recommended scope for the 17 days
+
+Build in this order; stop at any line and still have a coherent demo.
+
+1. Hedera operator account, HCS anchoring live, policy hash in `OrdoPolicyRegistry` (#1).
+2. `OrdoRoles` credentials + `ValidatorStaking`, onboarding forms for people, validators and vendors, validator-only signatures checked on-chain (#3).
+3. Agent pays the vendor for a work order through Agent Kit within the vault caps (#2).
+4. Lot passport HTS NFT + public QR verify page (#4, #5).
+5. ENSv2 names for site, people and assets with role and reputation records (#6).
+6. 0G Storage for evidence and iNFT agents (#7, #8) if time remains.
+
+That covers three sponsors with one coherent story: **a staked, named, accountable human signs; an accountable agent acts and pays within on-chain limits; every lot carries its proof to the customer.**
+
+## 6. Demo script (5 minutes)
+
+1. A validator onboards: fills the form, stakes HBAR, receives `priya.pune-plant-1.ordo.eth` with a validator credential.
+2. A run starts; its lot is minted as a passport NFT.
+3. A machine drifts; the agent opens a work order and pays the bonded vendor through Agent Kit, inside the vault cap.
+4. The gate waits; an unstaked person's signature is rejected on-chain; Priya signs and the gate releases.
+5. Scan the shipped lot's QR: the public page verifies the passport, the HCS trail and the validator's stake.
