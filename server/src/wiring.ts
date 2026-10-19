@@ -7,6 +7,7 @@ import { Agents } from "./agents/agents.js";
 import { Auth, Signatures } from "./auth/auth.js";
 import { Autonomy } from "./core/autonomy.js";
 import { Inbox } from "./core/inbox.js";
+import { Jobs } from "./core/jobs.js";
 import { Monitor } from "./core/monitor.js";
 import { Passports } from "./core/passports.js";
 import { Proof } from "./core/proof.js";
@@ -52,6 +53,7 @@ export interface System {
   workOrders: WorkOrders;
   autonomy: Autonomy;
   passports: Passports;
+  jobs: Jobs;
   ensNames: { lookup(addresses: string[]): Promise<Record<string, string | null>> } | null;
   /** One engine cycle: pull data, advance runs, watch for anomalies, refund expired escrows, anchor. Throttled and lease-guarded. */
   advance(force?: boolean): Promise<void>;
@@ -110,6 +112,7 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
   }
 
   const ledger = new LedgerStore(db);
+  const jobs = new Jobs(db, now);
   const rec = new Recorder(db, ledger);
   const auth = new Auth(db, { sessionTtlMs: cfg.SESSION_TTL_HOURS * 3_600_000, rpcUrl: cfg.AUTH_RPC_URL, bootstrapAdmin: cfg.BOOTSTRAP_ADMIN_ADDRESS });
   const sigs = new Signatures(db, cfg.AUTH_RPC_URL);
@@ -191,6 +194,7 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
     for (const s of sites.rows) await monitor.scan(s.id);
     await workOrders.refundExpired().catch((e) => console.error("[ordo] refunds", e));
     await passports.reconcile().catch((e) => console.error("[ordo] passports", e));
+    await jobs.run().catch((e) => console.error("[ordo] jobs", e));
     const head = await ledger.head();
     const last = (await proof.anchors(1))[0];
     if (head && (!last || head.seq - last.toSeq >= cfg.ANCHOR_EVERY || (head.seq > last.toSeq && now() - Date.parse(last.ts) > 30 * 60_000))) await proof.anchorHead(null, null).catch((e) => console.error("[ordo] anchor", e));
@@ -234,6 +238,7 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
     workOrders,
     autonomy,
     passports,
+    jobs,
     ensNames,
     advance,
     close: () => db.close(),
