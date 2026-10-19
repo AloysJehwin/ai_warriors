@@ -192,6 +192,12 @@ export function WorkOrders() {
                         <div className="faint small">
                           {w.escrow && link(w.escrow.url, "Escrow tx")}
                           {w.escrow?.expiresAt && w.status === "escrowed" && ` · refundable ${dateTime(w.escrow.expiresAt)}`}
+                          {w.refundSchedule?.url && (w.status === "escrowed" || w.status === "refunded") && (
+                            <>
+                              {" · "}
+                              {link(w.refundSchedule.url, w.status === "refunded" && w.refundSchedule.status === "executed" ? "Refunded by Hedera schedule" : "Refund scheduled on Hedera")}
+                            </>
+                          )}
                           {w.release?.txUrl && <> · {link(w.release.txUrl, "Payment tx")}</>}
                           {w.release?.status === "failed" && <span className="field-e"> {w.release.error}</span>}
                           {w.error && w.status === "escrow_failed" && <span className="field-e"> {w.error}</span>}

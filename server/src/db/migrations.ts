@@ -238,4 +238,15 @@ CREATE INDEX ens_lots_due ON ens_lots (status, next_try_at);
 CREATE INDEX ens_lots_run ON ens_lots (run_id);
 `,
   },
+  {
+    version: 12,
+    name: "Hedera schedules",
+    sql: `
+CREATE TABLE hedera_schedules (id TEXT PRIMARY KEY, site_id TEXT NOT NULL, kind TEXT NOT NULL, ref TEXT NOT NULL,
+  execute_at TIMESTAMPTZ NOT NULL, schedule_id TEXT, tx_id TEXT, status TEXT NOT NULL, executed_at TIMESTAMPTZ, error TEXT,
+  next_check_at TIMESTAMPTZ NOT NULL DEFAULT now(), created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE UNIQUE INDEX hedera_schedules_ref ON hedera_schedules (kind, ref);
+CREATE INDEX hedera_schedules_open ON hedera_schedules (kind, status, execute_at);
+`,
+  },
 ];

@@ -21,6 +21,7 @@ import { Replicas } from "./core/replicas.js";
 import { Templates } from "./core/templates.js";
 import { Validation } from "./core/validation.js";
 import { WorkOrders } from "./core/workorders.js";
+import { Schedules, type ScheduleRail } from "./core/schedules.js";
 import { Trust } from "./core/trust.js";
 import { EvmAgentPayer, type AgentPayer } from "./chain/agent.js";
 import { TrustChain } from "./chain/trust.js";
@@ -57,6 +58,8 @@ export interface System {
   trust: Trust;
   agents: Agents;
   workOrders: WorkOrders;
+  /** Deadlines on Hedera's Schedule Service, when the operator is configured */
+  schedules: Schedules | null;
   autonomy: Autonomy;
   passports: Passports;
   openings: Openings;
@@ -72,7 +75,7 @@ export interface System {
   close(): Promise<void>;
 }
 
-export async function buildSystem(cfg: Config, opts: { now?: () => number; policyText?: string; llm?: LlmProvider; trustTransport?: Transport; x402Facilitator?: import("@x402/core/server").FacilitatorClient; x402Fetch?: typeof fetch; ensTransport?: Transport; blobStore?: import("./chain/zerog.js").BlobStore; inftTransport?: Transport } = {}): Promise<System> {
+export async function buildSystem(cfg: Config, opts: { now?: () => number; policyText?: string; llm?: LlmProvider; trustTransport?: Transport; x402Facilitator?: import("@x402/core/server").FacilitatorClient; x402Fetch?: typeof fetch; ensTransport?: Transport; blobStore?: import("./chain/zerog.js").BlobStore; inftTransport?: Transport; scheduler?: ScheduleRail } = {}): Promise<System> {
   const warnings: string[] = [];
   if (cfg.VERCEL && !cfg.DATABASE_URL) throw new Error("On Vercel, DATABASE_URL is required (add Neon from the Vercel Marketplace)");
   const now = opts.now ?? Date.now;
@@ -108,7 +111,7 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
   if (anchor instanceof LocalSignedAnchor && anchor.ephemeral)
     warnings.push(cfg.VERCEL ? "LEDGER_SIGNING_KEY not set: each serverless instance signs with a different key." : "LEDGER_SIGNING_KEY not set; checkpoints use a key that changes on restart");
   let hedera: Awaited<ReturnType<typeof import("./chain/hedera.js")["hederaFromConfig"]>> | null = null;
-  if (cfg.ANCHOR === "hedera" || cfg.HEDERA_PASSPORT_TOKEN_ID) {
+  if (cfg.ANCHOR === "hedera" || cfg.HEDERA_PASSPORT_TOKEN_ID || (cfg.HEDERA_SCHEDULES === "on" && cfg.HEDERA_OPERATOR_ID && cfg.HEDERA_OPERATOR_KEY)) {
     try {
       const h = await import("./chain/hedera.js");
       hedera = h.hederaFromConfig(cfg);
@@ -200,6 +203,17 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
   }
   const workOrders = new WorkOrders(db, rec, sigs, trust, payer, now);
   inbox.workOrders = workOrders;
+  // ---- Deadlines on Hedera's Schedule Service: escrow refunds, validator payouts, stage timeouts ----
+  let schedules: Schedules | null = null;
+  const scheduleRail = opts.scheduler ?? (hedera && cfg.HEDERA_SCHEDULES === "on" ? hedera.scheduler() : null);
+  if (scheduleRail) {
+    // contract calls are scheduled only on a trust chain on Hedera itself
+    const onHedera = Boolean(opts.scheduler || (trustChain && [295, 296, 297].includes(trustChain.cfg.chainId)));
+    schedules = new Schedules(db, rec, scheduleRail, () => (onHedera ? trust.chain : null), now);
+    workOrders.schedules = schedules;
+    trust.schedules = schedules;
+    if (cfg.HEDERA_TOPIC_ID || opts.scheduler) engine.timeouts = schedules;
+  }
   const autonomy = new Autonomy(db, rec, sigs, plant, trust, policy, cfg.SIGNATURE_CHAIN_ID);
   let passportRail: import("./chain/passport.js").PassportRail | null = null;
   if (cfg.HEDERA_PASSPORT_TOKEN_ID && hedera) passportRail = (await import("./chain/passport.js")).hederaPassports(hedera.client, cfg.HEDERA_NETWORK, cfg.HEDERA_PASSPORT_TOKEN_ID);
@@ -273,6 +287,7 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
     await engine.tick();
     const sites = await db.query<{ id: string }>("SELECT id FROM sites");
     for (const s of sites.rows) await monitor.scan(s.id);
+    await schedules?.reconcile();
     await workOrders.refundExpired().catch((e) => console.error("[ordo] refunds", e));
     await passports.reconcile().catch((e) => console.error("[ordo] passports", e));
     await jobs.run().catch((e) => console.error("[ordo] jobs", e));
@@ -306,6 +321,11 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
       mode: [x402 ? `sells at ${Number(cfg.X402_PRICE_TINYBARS) / 1e8} HBAR to ${x402.terms.payTo}` : null, workOrders.assessments ? "agent buys one per work order" : null].filter(Boolean).join(" · ") || "off",
       live: Boolean(x402 && workOrders.assessments),
     },
+    {
+      rail: "hedera schedules",
+      mode: schedules ? [trustChain && (opts.scheduler || [295, 296, 297].includes(trustChain.cfg.chainId)) ? "escrow refunds · validator payouts" : null, engine.timeouts ? "stage timeouts" : null].filter(Boolean).join(" · ") || "on, nothing to schedule" : "off: the server runs deadlines",
+      live: Boolean(schedules),
+    },
     { rail: "autonomy policies", mode: trustChain?.cfg.policies ? `OrdoPolicies ${cfg.TRUST_POLICIES_ADDRESS}` : "in-app signatures", live: Boolean(trustChain?.cfg.policies) },
   ];
 
@@ -329,6 +349,7 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
     trust,
     agents,
     workOrders,
+    schedules,
     autonomy,
     passports,
     openings,

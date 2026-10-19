@@ -129,6 +129,21 @@ describe("OrdoTrust: validator staking", () => {
     await t.write(1, "withdraw", [SITE]);
     expect((await t.pub.getBalance({ address: t.acct[1]! })) - before).toBeGreaterThan(parseEther("9.99"));
   });
+
+  it("after the cooldown anyone can pay a stake back, only to the validator (the call Hedera's scheduler makes)", async () => {
+    const t = await setup();
+    await t.write(4, "registerSite", [SITE, t.acct[6], await t.sign(0, "site.register", SITE)]);
+    await t.grant(1, "VALIDATOR");
+    await t.write(1, "stake", [SITE], parseEther("10"));
+    await reverts(t.write(4, "withdrawFor", [SITE, t.acct[1]]), "StillLocked");
+    await t.write(1, "requestUnstake", [SITE]);
+    await reverts(t.write(4, "withdrawFor", [SITE, t.acct[1]]), "StillLocked");
+    await t.increaseTime(7 * 24 * 3600 + 1);
+    const before = await t.pub.getBalance({ address: t.acct[1]! });
+    await t.write(4, "withdrawFor", [SITE, t.acct[1]]);
+    expect((await t.pub.getBalance({ address: t.acct[1]! })) - before).toBe(parseEther("10"));
+    await reverts(t.write(4, "withdrawFor", [SITE, t.acct[1]]), "NothingStaked");
+  });
 });
 
 describe("OrdoTrust: releases need staked validators", () => {
