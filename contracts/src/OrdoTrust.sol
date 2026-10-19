@@ -212,15 +212,24 @@ contract OrdoTrust is ReentrancyGuard {
     }
 
     function withdraw(string calldata siteId) external nonReentrant {
-        bytes32 k = siteKey(siteId);
-        Stake storage s = stakes[k][msg.sender];
+        _withdraw(siteKey(siteId), msg.sender);
+    }
+
+    /// After the cooldown anyone may pay a validator's stake back to that validator. Ordo schedules this call
+    /// on Hedera's Schedule Service when the unstake is requested, so the stake comes back without anyone acting.
+    function withdrawFor(string calldata siteId, address validator) external nonReentrant {
+        _withdraw(siteKey(siteId), validator);
+    }
+
+    function _withdraw(bytes32 k, address validator) private {
+        Stake storage s = stakes[k][validator];
         if (s.amount == 0) revert NothingStaked();
         if (s.unlockAt == 0 || block.timestamp < s.unlockAt) revert StillLocked(s.unlockAt);
         uint256 amount = s.amount;
         s.amount = 0;
         s.unlockAt = 0;
-        emit Withdrawn(k, msg.sender, amount);
-        (bool ok, ) = msg.sender.call{value: amount}("");
+        emit Withdrawn(k, validator, amount);
+        (bool ok, ) = validator.call{value: amount}("");
         if (!ok) revert TransferFailed();
     }
 

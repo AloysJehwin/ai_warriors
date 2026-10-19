@@ -5,6 +5,7 @@ import { newId, type PlantService } from "../plant/plant.js";
 import type { Recorder } from "../core/recorder.js";
 import type { Templates } from "../core/templates.js";
 import type { Inbox } from "../core/inbox.js";
+import type { Schedules } from "../core/schedules.js";
 import { evaluateCriteria } from "./criteria.js";
 import { predecessors } from "./graph.js";
 
@@ -60,6 +61,8 @@ const iso = (s: string | null) => (s ? new Date(s).toISOString() : null);
 export class RunEngine {
   /** set after construction (the inbox executes engine actions and the engine raises inbox items) */
   inbox!: Inbox;
+  /** Set when stage timeouts run on Hedera's Schedule Service */
+  timeouts: Pick<Schedules, "stageTimeout"> | null = null;
   constructor(
     private db: Db,
     private plant: PlantService,
@@ -223,7 +226,14 @@ export class RunEngine {
         continue;
       }
       const startedAt = row.started_at ? Date.parse(row.started_at) : now;
-      if (!data.timeoutRaised && now - startedAt > spec.timeoutMin * 60_000) {
+      const deadline = startedAt + spec.timeoutMin * 60_000;
+      const timeout = data.timeoutRaised
+        ? null
+        : this.timeouts && row.started_at
+          ? await this.timeouts.stageTimeout({ siteId, runId, code: row.code, name: spec.name, startedAt, deadline }).catch(() => ({ due: now > deadline, schedule: null }))
+          : { due: now > deadline, schedule: null };
+      if (timeout?.due) {
+        const onHedera = timeout.schedule?.status === "executed" ? timeout.schedule : null;
         await this.patchData(runId, row.code, { timeoutRaised: true });
         await this.inbox.raise(siteId, {
           kind: "exception",
@@ -239,6 +249,7 @@ export class RunEngine {
             { label: "Recorded", value: `${good} / ${ctx.run.quantity}` },
             { label: "Elapsed", value: `${Math.round((now - startedAt) / 60_000)} min` },
             { label: "Asset", value: asset ? `${asset.name} · ${asset.status}` : "None assigned" },
+            ...(onHedera ? [{ label: "Timed out on Hedera", value: `Schedule ${onHedera.scheduleId} · ${onHedera.executedAt}` }] : []),
           ],
           options: [
             { label: "Keep running", detail: "Acknowledge the delay; the stage continues", action: { tool: "none", args: {} } },

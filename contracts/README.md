@@ -4,14 +4,14 @@ Three contracts. Every authorisation in them is an Ordo EIP-712 signature (`Ordo
 
 | Contract | Purpose |
 | --- | --- |
-| `OrdoTrust` | Role credentials per site, granted with a site admin's signature; validator stakes with an unstake cooldown; release records that need a staked reviewer and a staked plant manager; slashing by two other validators plus a plant manager into the site's quality fund. |
+| `OrdoTrust` | Role credentials per site, granted with a site admin's signature; validator stakes with an unstake cooldown, after which anyone may pay the stake back to the validator (`withdrawFor`, the call Hedera's scheduler makes); release records that need a staked reviewer and a staked plant manager; slashing by two other validators plus a plant manager into the site's quality fund. |
 | `OrdoWorkOrders` | The maintenance agent pays vendors within limits people set: a per-site fund, per-order and per-day caps an admin signs, escrow only to holders of the site's `VENDOR` credential, release on a supervisor's or plant manager's signature, refund after expiry, and a pause an admin or plant manager signs. |
 | `OrdoPolicies` | Each line's autonomy level and policy hash. Raising autonomy or changing the policy needs two different plant managers' signatures; lowering needs one. |
 
 `OrdoWorkOrders` and `OrdoPolicies` read credentials from the deployed `OrdoTrust` and share its signature scheme through `OrdoSigned`.
 
 ```bash
-pnpm --filter @ordo/contracts test     # compile with npm solc + 16 tests on an in-process EVM
+pnpm --filter @ordo/contracts test     # compile with npm solc + 17 tests on an in-process EVM
 ```
 
 ## Hedera testnet
@@ -55,6 +55,20 @@ Things to check on the day:
 - Inside the EVM Hedera counts HBAR in tinybars (8 decimals); JSON-RPC `value` uses 18 decimals. Caps and amounts in the contracts are tinybars.
 - The agent account is created with an ECDSA alias, so its EVM address (the one the caps are signed for) is derived from its key.
 - Verify contract source on Sourcify for chain 296 so HashScan shows it; `artifacts/*.json` has the ABI and bytecode.
+
+## Deadlines on Hedera's Schedule Service
+
+Three deadlines run as Hedera scheduled transactions (`ScheduleCreateTransaction` with `waitForExpiry`, HIP-423) that the network executes at their expiration time, so they happen even if Ordo is down. The operator pays and holds the admin key, and Ordo deletes a schedule that is no longer needed (`server/src/core/schedules.ts`, `server/src/chain/hedera.ts`):
+
+| Deadline | Scheduled transaction | Deleted when |
+| --- | --- | --- |
+| Work-order escrow, 72h after it opens | `OrdoWorkOrders.refund(site, workOrder)` at the on-chain `expiresAt` | a maintenance lead releases the payment |
+| Validator unstake cooldown | `OrdoTrust.withdrawFor(site, validator)` at `unlockAt`, paying the stake back to the validator | the validator stakes again |
+| Stage timeout | an HCS message `{kind:"stage.timeout"}` to the ledger topic at the deadline; Ordo raises the inbox item once the mirror node shows it executed | the stage finishes in time |
+
+Ordo only does the job itself when a schedule could not be created (less than a minute or more than 62 days away, or Hedera unreachable) or has not run 5 minutes after its time. `HEDERA_SCHEDULES=off` turns it off.
+
+`withdrawFor` is new in `OrdoTrust`, so validator payouts need it redeployed (**Deploy OrdoTrust**, then **Hedera setup** `contracts` against the new address); until then Ordo sees the function is missing and validators withdraw from their wallets as before. Refunds and timeouts work with the contracts already deployed.
 
 ## Proof of work
 

@@ -1,4 +1,4 @@
-import { createPublicClient, createWalletClient, defineChain, http, keccak256, toBytes, type Address, type Hex, type Transport } from "viem";
+import { createPublicClient, createWalletClient, defineChain, http, keccak256, toBytes, toFunctionSelector, type Address, type Hex, type Transport } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import type { TypedSignature } from "../auth/auth.js";
 import { ORDO_POLICIES_ABI, ORDO_WORK_ORDERS_ABI } from "./ordo-contracts-abi.js";
@@ -113,6 +113,12 @@ export class TrustChain {
       policies: this.cfg.policies ?? null,
     };
     return this.infoCache;
+  }
+
+  /** Whether the deployed OrdoTrust has a function (older deployments lack withdrawFor). */
+  async hasFunction(signature: string): Promise<boolean> {
+    const code = (await this.pub.getCode({ address: this.cfg.address })) ?? "0x";
+    return code.toLowerCase().includes(toFunctionSelector(`function ${signature}`).slice(2));
   }
 
   txUrl(hash: string): string | null {
