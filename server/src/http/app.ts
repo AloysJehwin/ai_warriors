@@ -85,7 +85,7 @@ export function createApp(sys: System, opts: AppOptions = {}) {
       build: opts.build ?? null,
       signatureChainId: sys.cfg.SIGNATURE_CHAIN_ID,
       trust: sys.trust.chain
-        ? { chainId: sys.trust.chain.cfg.chainId, name: sys.trust.chain.cfg.name, rpcUrl: sys.trust.chain.cfg.rpcUrl, explorerUrl: sys.trust.chain.cfg.explorerUrl, address: sys.trust.chain.cfg.address, symbol: sys.trust.chain.cfg.symbol, decimals: sys.trust.chain.cfg.decimals }
+        ? { chainId: sys.trust.chain.cfg.chainId, name: sys.trust.chain.cfg.name, rpcUrl: sys.trust.chain.cfg.rpcUrl, explorerUrl: sys.trust.chain.cfg.explorerUrl, address: sys.trust.chain.cfg.address, symbol: sys.trust.chain.cfg.symbol, decimals: sys.trust.chain.cfg.decimals, workOrders: sys.trust.chain.cfg.workOrders ?? null, policies: sys.trust.chain.cfg.policies ?? null }
         : null,
       restrictedSiteCreation: Boolean(sys.cfg.BOOTSTRAP_ADMIN_ADDRESS),
     }),
