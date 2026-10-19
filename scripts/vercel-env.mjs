@@ -6,7 +6,12 @@
 //   node scripts/vercel-env.mjs sync <map> <environment>        copy the secrets a map file lists for one GitHub environment
 //                                                               (run by .github/workflows/sync-vercel-secrets.yml; reads
 //                                                               SECRETS_JSON there, or plain environment variables locally)
+//   node scripts/vercel-env.mjs export <KEY> <file>             write KEY=value to a file (mode 600) for a later CI step;
+//                                                               only for keys pushed with --readable
 //   npx vercel env pull server/.env --environment=development   pull back down for local work (Vercel CLI)
+//
+// push --readable stores keys as "encrypted" instead of "sensitive", so a workflow holding VERCEL_TOKEN can read them
+// back with export (used for keys generated in CI that have no GitHub secret, e.g. the ENS owner key).
 //
 // Needs VERCEL_TOKEN (vercel.com/account/tokens) and a linked project (`npx vercel link` writes .vercel/project.json),
 // or VERCEL_PROJECT_ID / VERCEL_ORG_ID. Values are never printed.
@@ -61,18 +66,19 @@ const FORMATS = {
   },
 };
 
+const readable = process.argv.includes("--readable");
 const upsert = async (vars, targets) => {
   for (const [key, value] of Object.entries(vars)) {
     if (!known.includes(key)) console.warn(`! ${key} is not in server/.env.example (pushing anyway)`);
     // Vercel "sensitive" variables can't target development; use encrypted there.
-    const type = SECRET.test(key) && !targets.includes("development") ? "sensitive" : "encrypted";
+    const type = SECRET.test(key) && !targets.includes("development") && !readable ? "sensitive" : "encrypted";
     await api("POST", `/v10/projects/${projectId}/env?upsert=true`, { key, value, type, target: targets });
     console.log(`✔ ${key} → ${targets.join(", ")} (${type})`);
   }
   console.log("Redeploy for changes to take effect: push a commit, or `npx vercel redeploy <url>`.");
 };
 
-const [cmd, file, targetsArg] = process.argv.slice(2);
+const [cmd, file, targetsArg] = process.argv.slice(2).filter((a) => !a.startsWith("--"));
 if (cmd === "status") {
   const { envs } = await api("GET", `/v9/projects/${projectId}/env`);
   const targets = ["production", "preview", "development"];
@@ -101,7 +107,19 @@ if (cmd === "status") {
   if (missing.length) throw new Error(`not set in the ${targetsArg} environment: ${[...new Set(missing)].join(", ")}`);
   if (!groups.size) console.log(`Nothing listed for ${targetsArg} in ${file}.`);
   for (const [targets, vars] of groups) await upsert(vars, targets.split(","));
+} else if (cmd === "export" && file && targetsArg) {
+  const { writeFileSync } = await import("node:fs");
+  const { envs } = await api("GET", `/v9/projects/${projectId}/env`);
+  const e = envs.find((x) => x.key === file && x.target.includes("production"));
+  if (!e) {
+    console.log(`${file} is not set in Vercel`);
+    process.exit(0);
+  }
+  if (e.type === "sensitive") throw new Error(`${file} is a sensitive variable: Vercel does not return its value`);
+  const full = await api("GET", `/v1/projects/${projectId}/env/${e.id}`);
+  writeFileSync(targetsArg, `${file}=${full.value}\n`, { mode: 0o600 });
+  console.log(`✔ ${file} read from Vercel`);
 } else {
-  console.log("usage: node scripts/vercel-env.mjs status | push <file> <production|preview|development>[,…] | sync <map> <environment>");
+  console.log("usage: node scripts/vercel-env.mjs status | push <file> <production|preview|development>[,…] | sync <map> <environment> | export <KEY> <file>");
   process.exit(1);
 }

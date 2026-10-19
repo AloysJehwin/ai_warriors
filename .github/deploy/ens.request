@@ -1,1 +1,4 @@
-# The label to register on ENSv2 (Sepolia) as <label>.eth, e.g. ordo-mfg. Pushing a change runs the ENS setup workflow.
+# What the "ENS setup" workflow does on its next run:
+#   key            generate the ENS owner key in the job (kept in Vercel, never printed); the log shows its address
+#   label <name>   register <name>.eth on ENSv2 (Sepolia) once that address holds Sepolia ETH
+key
