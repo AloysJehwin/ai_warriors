@@ -67,7 +67,7 @@ flowchart LR
 | Identity | Wallet sign-in (EIP-4361) | ENS primary names shown for team members |
 | Decisions | EIP-712 signatures verified server-side | ERC-1271 smart wallets via `AUTH_RPC_URL` |
 | Ledger anchor | Ed25519-signed checkpoint | Hedera Consensus Service topic, verified through the mirror node |
-| Roles and validators | Approved in-app by signed applications | `OrdoTrust`: credentials, validator stakes, release records, slashing (Hedera EVM or any EVM chain) |
+| Roles and validators | Approved in-app by signed applications | `OrdoTrust`: credentials, validator stakes, release records, slashing (Hedera EVM or any EVM chain). Live on Hedera testnet at [`0x608c…b9e1`](https://hashscan.io/testnet/contract/0x608cba52976e34fa160fe64ff0499a8a5a4eb9e1) |
 | Policy provenance | Hash recorded with every decision | `OrdoPolicyRegistry` on Hedera |
 | Agent payments | Mock | `AgentSpendVault` on Hedera EVM: allow-listed vendors, caps, escrow, kill switch |
 | AI inference | Offline grounded model | Gemini, or 0G Compute (OpenAI-compatible) |
