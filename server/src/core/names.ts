@@ -65,7 +65,7 @@ const YEAR_MS = 365 * 86_400_000;
 
 /**
  * ENSv2 names for a site and everyone and everything in it: `<site>.<parent>` with its own registry, and in it a
- * name for each person (minted to their wallet, non-transferable, revoked when they hold no role), each asset and each
+ * name for each person (labelled from their wallet, minted to it, non-transferable, revoked when they hold no role), each asset and each
  * agent. Text records carry what Ordo knows: roles, validator scope, how many releases a person signed. The engine
  * cycle reconciles the names with what Ordo holds and retries with back-off.
  */
@@ -95,13 +95,13 @@ export class Names {
     const base = { "com.ordo.site": site.name, ...(this.publicUrl ? { url: this.publicUrl } : {}) };
     out.push({ kind: "site", ref: siteId, label: toLabel(site.name), want: { owner: ordo, addr: null, texts: { "com.ordo.type": "site", description: `${site.name}, run on Ordo`, ...base } } });
 
-    const people = await this.db.query<{ user_id: string; address: string; display_name: string | null; roles: string; scope: string | null; releases: string }>(
-      `SELECT m.user_id, u.address, u.display_name, string_agg(DISTINCT m.role, ',' ORDER BY m.role) AS roles, v.scope,
+    const people = await this.db.query<{ user_id: string; address: string; roles: string; scope: string | null; releases: string }>(
+      `SELECT m.user_id, u.address, string_agg(DISTINCT m.role, ',' ORDER BY m.role) AS roles, v.scope,
               (SELECT count(*) FROM package_signatures ps JOIN validation_packages vp ON vp.id = ps.package_id
                WHERE vp.site_id = m.site_id AND ps.user_id = m.user_id AND ps.cleared_at IS NULL)::text AS releases
        FROM memberships m JOIN users u ON u.id = m.user_id
        LEFT JOIN validators v ON v.site_id = m.site_id AND v.user_id = m.user_id AND v.status = 'approved'
-       WHERE m.site_id = $1 GROUP BY m.user_id, u.address, u.display_name, v.scope, m.site_id`,
+       WHERE m.site_id = $1 GROUP BY m.user_id, u.address, v.scope, m.site_id`,
       [siteId],
     );
     for (const p of people.rows) {
@@ -114,7 +114,8 @@ export class Names {
         ...base,
       };
       if (p.scope) texts["com.ordo.validator"] = p.scope;
-      out.push({ kind: "person", ref: p.user_id, label: toLabel(p.display_name ?? `member-${p.address.slice(2, 8)}`), want: { owner: p.address as Address, addr: p.address as Address, texts } });
+      // labels come from the wallet, never the account name: a label is public on-chain for good, even after revoking
+      out.push({ kind: "person", ref: p.user_id, label: personLabel(p.address), want: { owner: p.address as Address, addr: p.address as Address, texts } });
     }
 
     const assets = await this.db.query<{ id: string; name: string; kind: string }>("SELECT id, name, kind FROM assets WHERE site_id = $1 AND archived_at IS NULL", [siteId]);
@@ -329,5 +330,8 @@ export class Names {
     await this.db.query("UPDATE ens_names SET status = 'pending', attempts = 0, next_try_at = $1, updated_at = now() WHERE site_id = $2 AND kind = $3 AND ref = $4 AND status = 'failed'", [this.iso(), siteId, kind, ref]);
   }
 }
+
+/** A person's label: `member-` and the first six hex digits of their wallet, which their name's addr record shows anyway */
+export const personLabel = (address: string) => `member-${address.slice(2, 8).toLowerCase()}`;
 
 const COLS = "id, site_id, kind, ref, label, name, registry, want_json, have_json, status, stage, sent_json, pending_txs, sent_at::text AS sent_at, tx_hash, error, attempts";
