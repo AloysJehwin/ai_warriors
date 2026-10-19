@@ -650,9 +650,33 @@ body:has(.op) .theme-float { display: none; }
 .op-holders.open { color: var(--accent-700); background: var(--accent-50); border-radius: 999px; padding: 0 8px; font-weight: 600; }
 .op-role-why { margin: 0; font-size: 13px; color: var(--muted); }
 .op-role .btn { justify-self: start; margin-top: 4px; }
+.op-aside { display: grid; gap: 16px; }
+.op-avatar { display: inline-grid; place-items: center; width: 40px; height: 40px; border-radius: 50%; background: var(--accent-50); color: var(--accent-700); border: 1px solid var(--accent); font-weight: 600; font-size: 14px; flex: none; }
+.op-avatar.sm { width: 24px; height: 24px; font-size: 10.5px; }
+.op-me-chip { display: inline-flex; align-items: center; gap: 6px; color: var(--text); text-decoration: none; padding: 2px 10px 2px 2px; border: 1px solid var(--divider); border-radius: 999px; background: var(--surface); max-width: 200px; }
+.op-me-name { overflow: hidden; text-overflow: ellipsis; font-size: 13px; }
+.op-you-h { display: flex; gap: 12px; align-items: center; }
+.op-you-id { display: grid; gap: 1px; min-width: 0; }
+.op-you-id b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.op-addr { all: unset; cursor: pointer; font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.op-addr:hover { color: var(--accent-700); }
+.op-you-t { margin: 16px 0 6px; font-size: 11.5px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--faint); font-weight: 600; }
+.op-you-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.op-you-list > li { display: grid; gap: 6px; padding-top: 10px; border-top: 1px solid var(--divider); }
+.op-you-list .row-between { border-bottom: 0; padding: 0; }
+.op-you-list .link { justify-self: start; }
+.op-app { grid-template-columns: 1fr auto; align-items: center; }
+.op-role-pending { justify-self: start; margin-top: 4px; white-space: normal; }
+.op-you-strip { margin: 16px 0; }
+.op-you-strip .op-you { display: grid; grid-template-columns: minmax(200px, 1fr) 2fr; column-gap: 24px; }
+.op-you-strip .op-you-h { grid-row: span 4; align-self: start; }
 @media (max-width: 900px) {
+  .op-you-strip .op-you { grid-template-columns: minmax(0, 1fr); }
   .op-layout { grid-template-columns: minmax(0, 1fr); }
-  .op-aside { position: static; }
+  /* on one column a returning person's own details come first, the roles to apply for last */
+  .op-aside { display: contents; }
+  .op-aside .op-you { order: -1; }
+  .op-aside #take-part { order: 1; }
 }
 @media (max-width: 600px) {
   .op-top-links { gap: 8px; }

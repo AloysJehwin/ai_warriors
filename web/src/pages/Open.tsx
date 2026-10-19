@@ -1,12 +1,15 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import { ago, dateTime, pct, STATE_LABEL } from "../lib/format";
+import { ago, dateTime, pct, shortAddr, STATE_LABEL } from "../lib/format";
 import { href, type Route } from "../lib/router";
-import type { Me, OpenRole, PublicPipeline, StageState } from "../types";
+import type { Me, OnboardingView, OpenRole, PublicPipeline, StageState } from "../types";
 import { Empty, Modal } from "../ui/kit";
 import { ThemeToggle } from "../ui/ThemeToggle";
-import { ApplyForm, MyApplications } from "./Onboarding";
+import { ApplyForm } from "./Onboarding";
 import { SignIn } from "./SignIn";
+
+/** the member role an approved validator of each scope holds */
+const VALIDATOR_ROLE: Record<string, string> = { quality: "quality_engineer", process: "process_engineer", plant: "plant_manager" };
 
 const progressOf = (p: PublicPipeline) => p.stages.reduce((a, s) => a + s.progress, 0) / Math.max(1, p.stages.length);
 
@@ -16,20 +19,147 @@ const Progress = ({ p }: { p: PublicPipeline }) => (
   </div>
 );
 
-const Head = ({ children }: { children?: React.ReactNode }) => (
-  <header className="op-top">
-    <a className="pp-brand" href={href("open")}>
-      Ordo · Open pipelines
-    </a>
-    <span className="op-top-links">
-      {children}
-      <a className="btn sm" href="#/">
-        Console
+const ROLE_LABEL: Record<string, string> = {
+  operator: "Operator",
+  supervisor: "Supervisor",
+  process_engineer: "Process engineer",
+  quality_engineer: "Quality engineer",
+  maintenance_lead: "Maintenance lead",
+  plant_manager: "Plant manager",
+  admin: "Administrator",
+};
+const nameOf = (u: NonNullable<Me["user"]>) => u.displayName ?? u.ens ?? shortAddr(u.address);
+const initialsOf = (u: NonNullable<Me["user"]>) => {
+  const n = u.displayName ?? u.ens?.split(".")[0] ?? "";
+  const parts = n.split(/[\s._-]+/).filter(Boolean);
+  return parts.length ? parts.slice(0, 2).map((x) => x[0]!.toUpperCase()).join("") : u.address.slice(2, 4).toUpperCase();
+};
+/** Open the console on a site: the console starts on the site it last remembers. */
+const openSite = (siteId: string) => {
+  try {
+    localStorage.setItem("ordo.site", siteId);
+  } catch {
+    /* ignore */
+  }
+  window.location.hash = "#/pipelines";
+  window.location.reload();
+};
+
+/** What the page knows about whoever is looking: their account, sites and applications. */
+interface Account {
+  me: Me | null;
+  apps: OnboardingView[] | null;
+  signIn: () => void;
+  reload: () => void;
+}
+
+const Head = ({ account, children }: { account: Account; children?: React.ReactNode }) => {
+  const u = account.me?.user;
+  return (
+    <header className="op-top">
+      <a className="pp-brand" href={href("open")}>
+        Ordo · Open pipelines
       </a>
-      <ThemeToggle />
-    </span>
-  </header>
-);
+      <span className="op-top-links">
+        {children}
+        {u ? (
+          <a className="op-me-chip" href="#you" title={u.address} onClick={(e) => (e.preventDefault(), document.getElementById("you")?.scrollIntoView({ behavior: "smooth" }))}>
+            <span className="op-avatar sm">{initialsOf(u)}</span>
+            <span className="op-me-name">{nameOf(u)}</span>
+          </a>
+        ) : (
+          account.me && (
+            <button type="button" className="btn sm accent" onClick={account.signIn}>
+              Sign in
+            </button>
+          )
+        )}
+        <a className="btn sm" href="#/">
+          Console
+        </a>
+        <ThemeToggle />
+      </span>
+    </header>
+  );
+};
+
+const appTone = (s: string) => (s === "approved" ? "ok" : s === "rejected" ? "bad" : "warn");
+
+/** A returning person's own details: who they are, the roles they hold at each site, and where their applications stand. */
+function YouPanel({ account, siteId }: { account: Account; siteId?: string }) {
+  const u = account.me?.user;
+  if (!u) return null;
+  const sites = [...(account.me?.memberships ?? [])].sort((a, b) => Number(b.siteId === siteId) - Number(a.siteId === siteId));
+  const apps = account.apps ?? [];
+  const pending = apps.filter((a) => a.status === "pending");
+  const decided = apps.filter((a) => a.status !== "pending").slice(0, 4);
+  const copy = () => void navigator.clipboard?.writeText(u.address);
+  return (
+    <section className="op-section op-you" id="you">
+      <div className="op-you-h">
+        <span className="op-avatar">{initialsOf(u)}</span>
+        <div className="op-you-id">
+          <b>{nameOf(u)}</b>
+          {u.ens && u.displayName && <span className="small muted">{u.ens}</span>}
+          <button type="button" className="op-addr" onClick={copy} title="Copy address">
+            {shortAddr(u.address)}
+          </button>
+        </div>
+      </div>
+
+      <h3 className="op-you-t">Your sites</h3>
+      {sites.length ? (
+        <ul className="op-you-list">
+          {sites.map((m) => (
+            <li key={m.siteId}>
+              <div className="row-between">
+                <b>{m.siteName}</b>
+                {m.siteId === siteId && <span className="tag accent">This site</span>}
+              </div>
+              <div className="chips">
+                {m.roles.map((r) => (
+                  <span key={r} className="chip">
+                    {ROLE_LABEL[r] ?? r}
+                  </span>
+                ))}
+              </div>
+              <button type="button" className="link small" onClick={() => openSite(m.siteId)}>
+                Open in console →
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="op-none">You haven't joined a site yet.{siteId ? " Apply for a role below." : " Open a pipeline to apply for a role."}</p>
+      )}
+
+      {account.apps === null ? (
+        <p className="small muted">Loading your applications…</p>
+      ) : (
+        (pending.length > 0 || decided.length > 0) && (
+          <>
+            <h3 className="op-you-t">Your applications</h3>
+            <ul className="op-you-list">
+              {[...pending, ...decided].map((a) => (
+                <li key={a.id} className="op-app">
+                  <span>
+                    <b>{a.roleLabel}</b> <span className="muted">at {a.siteName ?? a.siteId}</span>
+                    <span className="faint small">
+                      {" "}
+                      · sent {ago(a.createdAt)}
+                      {a.reason ? ` · “${a.reason}”` : ""}
+                    </span>
+                  </span>
+                  <span className={`tag ${appTone(a.status)}`}>{a.status === "pending" ? "Waiting for approval" : a.status}</span>
+                </li>
+              ))}
+            </ul>
+          </>
+        )
+      )}
+    </section>
+  );
+}
 
 /**
  * Running pipelines anyone can browse without an account. A newcomer sees what a site is making, which roles the
@@ -37,11 +167,27 @@ const Head = ({ children }: { children?: React.ReactNode }) => (
  * the application with their signature, exactly as for anyone joining with the site code.
  */
 export function Open({ route, me, onSignedIn }: { route: Route; me: Me | null; onSignedIn: (m: Me) => void }) {
-  if (route.id && route.sub) return <PipelinePage siteId={route.id} runId={route.sub} me={me} onSignedIn={onSignedIn} />;
-  return <PipelineList />;
+  const [signingIn, setSigningIn] = useState(false);
+  const [apps, setApps] = useState<OnboardingView[] | null>(null);
+  const [n, setN] = useState(0);
+  const userId = me?.user?.id ?? null;
+  useEffect(() => {
+    if (!userId) return setApps(null);
+    // a returning person: refresh their roles and load their applications
+    void api.get<Me>("/v1/me").then(onSignedIn).catch(() => undefined);
+    api
+      .get<OnboardingView[]>("/v1/onboarding/mine")
+      .then(setApps)
+      .catch(() => setApps([]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId, n]);
+  if (signingIn && me && !me.user) return <SignIn onSignedIn={(m) => (onSignedIn(m), setSigningIn(false))} />;
+  const account: Account = { me, apps, signIn: () => setSigningIn(true), reload: () => setN((x) => x + 1) };
+  if (route.id && route.sub) return <PipelinePage siteId={route.id} runId={route.sub} account={account} onSignedIn={onSignedIn} />;
+  return <PipelineList account={account} />;
 }
 
-function PipelineList() {
+function PipelineList({ account }: { account: Account }) {
   const [rows, setRows] = useState<PublicPipeline[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -52,9 +198,14 @@ function PipelineList() {
   }, []);
   return (
     <div className="pp op">
-      <Head />
+      <Head account={account} />
       <h1>Pipelines running now</h1>
       <p className="muted">Each pipeline is a production run at an Ordo site, stage by stage. Open one to see the roles it needs and apply to take part: operating stages, signing gates, or validating the release.</p>
+      {account.me?.user && (
+        <div className="op-you-strip">
+          <YouPanel account={account} />
+        </div>
+      )}
       {error && <p className="field-e">{error}</p>}
       {!rows && !error && <p className="muted">Loading…</p>}
       {rows && rows.length === 0 && <Empty title="No pipelines are running right now">Check back later, or ask a site administrator for their join link.</Empty>}
@@ -110,12 +261,12 @@ const Stat = ({ label, value, sub }: { label: string; value: React.ReactNode; su
   </div>
 );
 
-function PipelinePage({ siteId, runId, me, onSignedIn }: { siteId: string; runId: string; me: Me | null; onSignedIn: (m: Me) => void }) {
+function PipelinePage({ siteId, runId, account, onSignedIn }: { siteId: string; runId: string; account: Account; onSignedIn: (m: Me) => void }) {
+  const me = account.me;
   const [p, setP] = useState<PublicPipeline | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [applying, setApplying] = useState<OpenRole | null>(null);
   const [sent, setSent] = useState<OpenRole | null>(null);
-  const [refresh, setRefresh] = useState(0);
   useEffect(() => {
     api
       .get<PublicPipeline>(`/v1/public/pipelines/${encodeURIComponent(siteId)}/${encodeURIComponent(runId)}`)
@@ -126,7 +277,7 @@ function PipelinePage({ siteId, runId, me, onSignedIn }: { siteId: string; runId
   if (error)
     return (
       <div className="pp op">
-        <Head />
+        <Head account={account} />
         <Empty title="This pipeline isn't public" action={<a className="btn" href={href("open")}>See all running pipelines</a>}>
           {error}
         </Empty>
@@ -137,7 +288,8 @@ function PipelinePage({ siteId, runId, me, onSignedIn }: { siteId: string; runId
   if (applying && me && !me.user) return <SignIn onSignedIn={onSignedIn} />;
 
   const roles = me?.memberships.find((m) => m.siteId === siteId)?.roles ?? [];
-  const holds = (r: OpenRole) => r.kind === "member" && (roles as string[]).includes(r.role);
+  const holds = (r: OpenRole) => (roles as string[]).includes(r.kind === "validator" ? VALIDATOR_ROLE[r.role] ?? r.role : r.role) && (r.kind === "member" || account.apps?.some((a) => a.siteId === siteId && a.kind === "validator" && a.role === r.role && a.status === "approved"));
+  const pendingFor = (r: OpenRole) => account.apps?.some((a) => a.siteId === siteId && a.kind === r.kind && a.role === r.role && a.status === "pending");
   const columns = [...new Set(p.stages.map((s) => s.column))].sort((a, b) => a - b);
   const progress = Math.round(progressOf(p) * 100);
   const waiting = p.stages.filter((s) => toneOf(s.state) === "waiting" || toneOf(s.state) === "held");
@@ -145,7 +297,7 @@ function PipelinePage({ siteId, runId, me, onSignedIn }: { siteId: string; runId
   const statusTone = p.status === "running" ? (waiting.length ? "warn" : "accent") : p.status === "completed" ? "ok" : "bad";
   return (
     <div className="pp op">
-      <Head>
+      <Head account={account}>
         <a href={href("open")}>← All pipelines</a>
       </Head>
 
@@ -244,8 +396,9 @@ function PipelinePage({ siteId, runId, me, onSignedIn }: { siteId: string; runId
           </section>
         </main>
 
-        <aside className="op-aside" id="take-part">
-          <div className="op-section">
+        <aside className="op-aside">
+          <YouPanel account={account} siteId={siteId} />
+          <div className="op-section" id="take-part">
             <div className="op-section-h">
               <h2>Take part</h2>
             </div>
@@ -269,9 +422,11 @@ function PipelinePage({ siteId, runId, me, onSignedIn }: { siteId: string; runId
                     </p>
                   ))}
                   {holds(r) ? (
-                    <a className="btn sm" href="#/pipelines">
+                    <button type="button" className="btn sm" onClick={() => openSite(siteId)}>
                       You hold this role · open console
-                    </a>
+                    </button>
+                  ) : pendingFor(r) ? (
+                    <span className="tag warn op-role-pending">Your application is waiting for approval</span>
                   ) : (
                     <button type="button" className="btn sm accent" onClick={() => setApplying(r)}>
                       Apply
@@ -280,7 +435,7 @@ function PipelinePage({ siteId, runId, me, onSignedIn }: { siteId: string; runId
                 </li>
               ))}
             </ul>
-            {me?.user && <MyApplications refreshKey={refresh} />}
+
           </div>
         </aside>
       </div>
@@ -294,7 +449,7 @@ function PipelinePage({ siteId, runId, me, onSignedIn }: { siteId: string; runId
             initialRole={applying.role}
             context={{ pipeline: `${p.pipeline.name} v${p.pipeline.version} · run ${p.runId}` }}
             onCancel={() => setApplying(null)}
-            onDone={() => (setSent(applying), setApplying(null), setRefresh((n) => n + 1))}
+            onDone={() => (setSent(applying), setApplying(null), account.reload())}
           />
         )}
       </Modal>
