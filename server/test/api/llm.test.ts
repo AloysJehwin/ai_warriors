@@ -26,6 +26,13 @@ describe("guarded LLM", () => {
     expect(r.fallback).toBe(true);
     expect(r.value.summary).toBe("offline summary text");
   });
+  it("keeps a provider's proof of the answer (0G Compute's TEE signature check)", async () => {
+    const attestation = { kind: "0g-compute" as const, provider: "0xprov", chatId: "chat-1", verified: true };
+    const llm = new GuardedLlm({ name: "0g-compute", modelId: "qwen", call: async () => ({ text: '{"summary":"live summary here","citedSeqs":[2]}', attestation }) }, 1000);
+    expect(await llm.generate(task)).toMatchObject({ fallback: false, provider: "0g-compute", attestation });
+    const bad = new GuardedLlm({ name: "0g-compute", modelId: "qwen", call: async () => ({ text: "{}", attestation }) }, 1000);
+    expect((await bad.generate(task)).attestation).toBeUndefined(); // a fallback answer is Ordo's own, not the provider's
+  });
   it("falls back on timeout", async () => {
     const llm = new GuardedLlm({ name: "fake", modelId: "m", call: (_t, signal) => new Promise((_, rej) => signal.addEventListener("abort", () => rej(new Error("aborted")))) }, 20);
     expect((await llm.generate(task)).fallback).toBe(true);

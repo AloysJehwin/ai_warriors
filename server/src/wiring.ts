@@ -14,6 +14,7 @@ import { Names } from "./core/names.js";
 import { Passports } from "./core/passports.js";
 import { Proof } from "./core/proof.js";
 import { Recorder } from "./core/recorder.js";
+import { Replicas } from "./core/replicas.js";
 import { Templates } from "./core/templates.js";
 import { Validation } from "./core/validation.js";
 import { WorkOrders } from "./core/workorders.js";
@@ -65,7 +66,7 @@ export interface System {
   close(): Promise<void>;
 }
 
-export async function buildSystem(cfg: Config, opts: { now?: () => number; policyText?: string; llm?: LlmProvider; trustTransport?: Transport; x402Facilitator?: import("@x402/core/server").FacilitatorClient; x402Fetch?: typeof fetch; ensTransport?: Transport } = {}): Promise<System> {
+export async function buildSystem(cfg: Config, opts: { now?: () => number; policyText?: string; llm?: LlmProvider; trustTransport?: Transport; x402Facilitator?: import("@x402/core/server").FacilitatorClient; x402Fetch?: typeof fetch; ensTransport?: Transport; blobStore?: import("./chain/zerog.js").BlobStore } = {}): Promise<System> {
   const warnings: string[] = [];
   if (cfg.VERCEL && !cfg.DATABASE_URL) throw new Error("On Vercel, DATABASE_URL is required (add Neon from the Vercel Marketplace)");
   const now = opts.now ?? Date.now;
@@ -153,6 +154,15 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
   const trust = new Trust(db, rec, sigs, trustChain, cfg.SIGNATURE_CHAIN_ID);
   inbox.trust = trust;
   const validation = new Validation(db, rec, ledger, sigs, engine, inbox, cfg.SIGNATURE_CHAIN_ID, trust);
+  // ---- Evidence copies on 0G Storage ----
+  if (opts.blobStore || cfg.EVIDENCE_STORE === "0g") {
+    try {
+      const store = opts.blobStore ?? new (await import("./chain/zerog.js")).ZeroGStorage(cfg);
+      validation.replicas = new Replicas(db, jobs, rec, store);
+    } catch (e) {
+      warnings.push(`0G Storage unusable (${e instanceof Error ? e.message : e}); evidence stays in the database only`);
+    }
+  }
 
   // ---- The maintenance agent's own account: it escrows vendor payments in OrdoWorkOrders ----
   let payer: AgentPayer | null = null;
@@ -262,6 +272,7 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
       mode: workOrders.live ? `${payer!.kind === "hedera-agent-kit" ? "Hedera Agent Kit" : "agent key"} → OrdoWorkOrders ${cfg.TRUST_WORKORDERS_ADDRESS}` : "off: work orders assign a vendor, no escrow",
       live: workOrders.live,
     },
+    { rail: "evidence copies", mode: validation.replicas ? `${validation.replicas.store.kind}, encrypted · ${cfg.ZG_INDEXER_URL}` : "database only", live: Boolean(validation.replicas) },
     { rail: "lot passports", mode: passportRail ? `HTS NFT ${passportRail.tokenId}` : "in-app passports, no NFT", live: Boolean(passportRail) },
     {
       rail: "x402 assessments",

@@ -89,7 +89,7 @@ export class Monitor {
       limits: a.limits,
       conditions,
     });
-    await this.rec.decide(siteId, { agent, kind: "incident.diagnosed", incidentId: id, assetId: a.id, summary: diag.value.rootCause, confidence: diag.value.confidence, modelId: diag.modelId, data: { ...diag.value, forecast: fc, promptHash: diag.promptHash, inputHash: diag.inputHash, fallback: diag.fallback } });
+    await this.rec.decide(siteId, { agent, kind: "incident.diagnosed", incidentId: id, assetId: a.id, summary: diag.value.rootCause, confidence: diag.value.confidence, modelId: diag.modelId, data: { ...diag.value, forecast: fc, promptHash: diag.promptHash, inputHash: diag.inputHash, fallback: diag.fallback, provider: diag.provider, attestation: diag.attestation ?? null } });
 
     const stage = (
       await this.db.query<{ run_id: string; code: string; name: string | null; quantity: number; good: number; scrap: number }>(
@@ -119,7 +119,7 @@ export class Monitor {
       summary: rec.value.reason,
       confidence: rec.value.confidence,
       modelId: rec.modelId,
-      data: { ...rec.value, grounding: rec.grounding, verdicts: verdicts.map((v) => ({ tool: v.action.tool, ...v.verdict })), autonomy: level },
+      data: { ...rec.value, grounding: rec.grounding, verdicts: verdicts.map((v) => ({ tool: v.action.tool, ...v.verdict })), autonomy: level, provider: rec.provider, attestation: rec.attestation ?? null },
     });
 
     const needs = verdicts.filter((v) => v.verdict.outcome === "require_approval");

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { api } from "../../api";
 import { useDecide } from "../../lib/actions";
 import { useApp } from "../../lib/app";
-import { actorLabel, AGENT_LABEL, dur, num, STATE_LABEL, time } from "../../lib/format";
+import { actorLabel, AGENT_LABEL, computeProof, dur, num, STATE_LABEL, time } from "../../lib/format";
 import { go } from "../../lib/router";
 import type { DecisionView, InboxItemView, RunView, StageRunView } from "../../types";
 import { Action, Drawer, Field, Modal, useToast } from "../../ui/kit";
@@ -274,7 +274,8 @@ export function StageDrawer(props: {
               {d.reason && <div className="muted small">{d.reason}</div>}
               <div className="faint small">
                 {actorLabel(d.agent, names)}
-                {d.confidence !== null ? ` · conf. ${d.confidence.toFixed(2)}` : ""} · ledger #{d.ledgerSeq}
+                {d.confidence !== null ? ` · conf. ${d.confidence.toFixed(2)}` : ""}
+                {computeProof(d)} · ledger #{d.ledgerSeq}
               </div>
             </div>
           </div>

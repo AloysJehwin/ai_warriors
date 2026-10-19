@@ -482,6 +482,7 @@ export function createApp(sys: System, opts: AppOptions = {}) {
     return c.json(await sys.validation.attach(sid(c), me(c).user, c.req.param("id"), { slotId: typeof form.slotId === "string" && form.slotId ? form.slotId : null, name: typeof form.name === "string" && form.name ? form.name : file.name, filename: file.name, mime: file.type || "application/octet-stream", bytes }));
   });
   site.delete("/validation/:id/evidence/:evidenceId", async (c) => c.json(await sys.validation.removeEvidence(sid(c), me(c).user, c.req.param("id"), c.req.param("evidenceId"))));
+  site.get("/validation/:id/evidence/:evidenceId/0g", async (c) => c.json(await sys.validation.verifyOnZeroG(sid(c), c.req.param("id"), c.req.param("evidenceId"))));
   site.get("/validation/:id/evidence/:evidenceId/file", async (c) => {
     const f = await sys.validation.blob(sid(c), c.req.param("id"), c.req.param("evidenceId"));
     return new Response(Buffer.from(f.bytes), { headers: { "content-type": f.mime, "content-disposition": `attachment; filename="${f.filename.replace(/"/g, "")}"`, "x-content-type-options": "nosniff" } });
