@@ -78,6 +78,14 @@ const Env = z.object({
   /** HTS NFT collection for lot passports (the operator is treasury, supply and metadata key) */
   HEDERA_PASSPORT_TOKEN_ID: z.string().optional(),
 
+  /** x402: Ordo sells vibration assessments per call; fees go to this Hedera account (default: the operator) */
+  X402_PAY_TO: z.string().optional(),
+  X402_PRICE_TINYBARS: z.coerce.bigint().default(10_000_000n),
+  X402_FACILITATOR_URL: z.string().url().default("https://x402.org/facilitator"),
+  /** Where the agent buys assessments (default: this deployment's own endpoint) and the most it pays per call */
+  X402_ASSESSMENT_URL: z.string().url().optional(),
+  X402_MAX_TINYBARS: z.coerce.bigint().default(50_000_000n),
+
   ENS_RPC_URL: z.string().optional(),
   ENS_PARENT_NAME: z.string().optional(),
 

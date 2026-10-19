@@ -8,6 +8,7 @@ import type { Role } from "../domain/types.js";
 import { HttpError } from "../engine/errors.js";
 import { newId } from "../plant/plant.js";
 import type { Recorder } from "./recorder.js";
+import type { Assessments, AssessmentView } from "./assessments.js";
 import { sigArg, type SigArg } from "../chain/trust.js";
 import type { RelayView, Trust } from "./trust.js";
 
@@ -59,6 +60,8 @@ export interface WorkOrderView {
   createdAt: string;
   updatedAt: string;
   release: RelayView | null;
+  /** The vibration assessment the agent bought over x402 for this work order */
+  assessment: AssessmentView | null;
 }
 
 /**
@@ -67,6 +70,8 @@ export interface WorkOrderView {
  * an unreleased escrow is refunded after it expires. Without the contract, work orders still assign a vendor.
  */
 export class WorkOrders {
+  /** Set when the agent buys assessments over x402 */
+  assessments: Assessments | null = null;
   constructor(
     private db: Db,
     private rec: Recorder,
@@ -209,6 +214,7 @@ export class WorkOrders {
       [id, siteId, i.assetId, i.runId, `Maintenance · ${i.assetName}`, i.priority, vendor?.id ?? null, vendor?.address.toLowerCase() ?? null, amount, incidentHash, status, status === "escrowing" ? this.payer!.kind : null, actor],
     );
     if (status === "escrowing") await this.escrow(siteId, id);
+    await this.assessments?.request(siteId, id, i.assetId);
     return this.get(siteId, id);
   }
 
@@ -234,6 +240,15 @@ export class WorkOrders {
     if (!this.live) throw new HttpError(409, "Agent payments are not configured");
     await this.db.query("UPDATE work_orders SET status = 'escrowing', updated_at = now() WHERE id = $1", [id]);
     await this.escrow(siteId, id);
+    return this.get(siteId, id);
+  }
+
+  /** Buy the assessment again after the job gave up (maintenance lead). */
+  async retryAssessment(siteId: string, roles: Role[], id: string) {
+    if (!canApproveAny(roles, "maintenance_lead")) throw new HttpError(403, "A maintenance lead retries an assessment");
+    if (!this.assessments) throw new HttpError(409, "x402 assessments are not configured");
+    await this.row(siteId, id);
+    await this.assessments.retry(id);
     return this.get(siteId, id);
   }
 
@@ -328,6 +343,7 @@ export class WorkOrders {
       createdAt: new Date(w.created_at).toISOString(),
       updatedAt: new Date(w.updated_at).toISOString(),
       release: w.status === "releasing" || w.status === "released" ? await this.trust.relayOf(w.site_id, w.id) : null,
+      assessment: (await this.assessments?.of(w.id)) ?? null,
     };
   }
   async get(siteId: string, id: string) {

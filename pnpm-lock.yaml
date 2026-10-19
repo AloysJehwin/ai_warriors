@@ -4,6 +4,10 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+overrides:
+  '@x402/hedera>@hiero-ledger/sdk': 2.90.1
+  '@x402/hedera>@hiero-ledger/proto': 2.32.0
+
 importers:
 
   .:
@@ -66,6 +70,15 @@ importers:
       '@hono/node-server':
         specifier: ^2.1.5
         version: 2.1.5(hono@4.13.13)
+      '@x402/core':
+        specifier: 2.28.0
+        version: 2.28.0
+      '@x402/fetch':
+        specifier: 2.28.0
+        version: 2.28.0
+      '@x402/hedera':
+        specifier: 2.28.0
+        version: 2.28.0(bufferutil@4.0.7)(protobufjs@8.6.6)(utf-8-validate@6.0.3)
       fast-xml-parser:
         specifier: ^5.11.2
         version: 5.11.2
@@ -743,6 +756,15 @@ packages:
 
   '@vitest/spy@5.0.5':
     resolution: {integrity: sha512-lwJRExuH417257Q5wv9QYugN9IMJkoxcrKrYxGPQkBzl7wlNpTUxD/5yNX4ESKVUIShKPgkGchYPFMWOOk0wzw==}
+
+  '@x402/core@2.28.0':
+    resolution: {integrity: sha512-Da/7zKxCKqpBoB4Msc9tFgkAv7tJTD8nG+DSSm+QdXAyJS4PQsmgVSKe17rDJTtlu0pwNbLcOje6MyQ6kaDkig==}
+
+  '@x402/fetch@2.28.0':
+    resolution: {integrity: sha512-kF5IjZIz/izg2TD/Zav+SVj0jtC0zBDfE7WcKCnMZWIsZcLCyL2GgvwXCn7CCSsNjpQ/z3Rz4OqTCA4AaeKySQ==}
+
+  '@x402/hedera@2.28.0':
+    resolution: {integrity: sha512-zHLBxc961sF6GweL9FFdhrj98faPwdNLv3Ifp5PkVZxu/SaSa+J4slinzPu3GMHxRlYRhVMHFdfv8QmS9l9M+Q==}
 
   abitype@1.2.3:
     resolution: {integrity: sha512-Ofer5QUnuUdTFsBRwARMoWKOH1ND5ehwYhJ3OJ/BQO+StkwQjHw0XyVh4vDttzHB7QOFhPHa/o413PJ82gU/Tg==}
@@ -2066,6 +2088,25 @@ snapshots:
       vite: 8.3.4(@types/node@22.7.5)(esbuild@0.28.2)(tsx@4.23.15)(yaml@2.9.1)
 
   '@vitest/spy@5.0.5': {}
+
+  '@x402/core@2.28.0':
+    dependencies:
+      zod: 3.25.76
+
+  '@x402/fetch@2.28.0':
+    dependencies:
+      '@x402/core': 2.28.0
+
+  '@x402/hedera@2.28.0(bufferutil@4.0.7)(protobufjs@8.6.6)(utf-8-validate@6.0.3)':
+    dependencies:
+      '@hiero-ledger/proto': 2.32.0(protobufjs@8.6.6)
+      '@hiero-ledger/sdk': 2.90.1(bufferutil@4.0.7)(utf-8-validate@6.0.3)
+      '@x402/core': 2.28.0
+    transitivePeerDependencies:
+      - bufferutil
+      - expo-crypto
+      - protobufjs
+      - utf-8-validate
 
   abitype@1.2.3(typescript@7.0.2)(zod@4.6.7):
     optionalDependencies:

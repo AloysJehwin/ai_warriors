@@ -5,7 +5,7 @@ import { useApp } from "../lib/app";
 import { ago, dateTime, shortAddr } from "../lib/format";
 import { useSign } from "../lib/sign";
 import { fromUnits, fundTx } from "../lib/wallet";
-import type { TypedSignature, WorkOrderStatus, WorkOrdersResponse, WorkOrderView } from "../types";
+import type { AssessmentView, TypedSignature, WorkOrderStatus, WorkOrdersResponse, WorkOrderView } from "../types";
 import { Action, Empty, Field, Loading, Modal, useToast } from "../ui/kit";
 
 const STATUS: Record<WorkOrderStatus, [string, string]> = {
@@ -29,6 +29,23 @@ const link = (url: string | null | undefined, text: string) =>
   );
 
 /** The maintenance agent's spending: the site's fund, caps an admin signed, the kill switch, and every work order it paid for. */
+const ZONE_TONE = { A: "ok", B: "ok", C: "warn", D: "bad" } as const;
+
+/** The vibration assessment the agent bought for the work order, and the HBAR payment it made for it over x402. */
+function Assessment({ a }: { a: AssessmentView | null }) {
+  if (!a) return null;
+  if (a.status === "pending") return <div className="small muted">Buying a vibration assessment over x402…</div>;
+  if (a.status === "failed") return <div className="small field-e">x402 assessment failed: {a.error}</div>;
+  if (a.skipped || !a.assessment) return <div className="small faint">No assessment: {a.skipped}</div>;
+  const x = a.assessment;
+  return (
+    <div className="small" title={`${x.standard} · ${x.samples} readings · peak ${x.peak} mm/s · trend ${x.slopePerHour} mm/s per hour`}>
+      <span className={`tag ${ZONE_TONE[x.zone]}`}>Zone {x.zone}</span> {x.level} mm/s · {x.verdict}
+      {a.payment && <> · {link(a.payment.url, "paid via x402")}</>}
+    </div>
+  );
+}
+
 export function WorkOrders() {
   const { path, me, siteId, status, can } = useApp();
   const [data, setData] = useState<WorkOrdersResponse | null>(null);
@@ -166,6 +183,7 @@ export function WorkOrders() {
                             </>
                           )}
                         </div>
+                        <Assessment a={w.assessment} />
                       </td>
                       <td>{w.vendor ? w.vendor.company : <span className="faint">Onboard a vendor</span>}</td>
                       <td className="r">{unit(w.amount)}</td>
@@ -183,6 +201,17 @@ export function WorkOrders() {
                         {w.status === "escrowed" && can("maintenance_lead") && w.vendor?.address !== me.user!.address && (
                           <Action className="btn accent sm" onClick={() => release(w)}>
                             Sign off and pay
+                          </Action>
+                        )}
+                        {w.assessment?.status === "failed" && can("maintenance_lead") && (
+                          <Action
+                            className="btn sm"
+                            onClick={async () => {
+                              await api.post(path(`/work-orders/${w.id}/assessment/retry`));
+                              await load();
+                            }}
+                          >
+                            Retry assessment
                           </Action>
                         )}
                         {w.status === "escrow_failed" && can("maintenance_lead") && (

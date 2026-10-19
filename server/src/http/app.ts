@@ -6,6 +6,7 @@ import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { cors } from "hono/cors";
 import { z } from "zod";
 import { SESSION_COOKIE, type Principal } from "../auth/auth.js";
+import { ASSESSMENT_PATH, assessVibration } from "../chain/x402.js";
 import { CATEGORIES } from "../core/templates.js";
 import { REJECT } from "../core/inbox.js";
 import { ONBOARDING_KINDS } from "../core/trust.js";
@@ -172,6 +173,23 @@ export function createApp(sys: System, opts: AppOptions = {}) {
     c.header("cache-control", "public, max-age=30");
     return c.json(await sys.passports.publicView(id));
   });
+
+  // ---------------- x402: vibration assessments sold per call, paid in HBAR (no sign-in; the payment is the credential) ----------------
+  const Assess = z.object({
+    machineClass: z.enum(["medium", "large"]).default("medium"),
+    samples: z.array(z.object({ t: z.number().finite(), v: z.number().finite().min(0).max(1000) })).min(3).max(5000),
+  });
+  const x402Cors = cors({ origin: "*", allowHeaders: ["content-type", "payment-signature", "x-payment"], exposeHeaders: ["payment-required", "payment-response"] });
+  app.get("/v1/x402", (c) => {
+    c.header("access-control-allow-origin", "*");
+    return c.json(sys.x402 ? { offers: [{ method: "POST", path: ASSESSMENT_PATH, ...sys.x402.terms, unit: "tinybar" }] } : { offers: [] });
+  });
+  app.use(ASSESSMENT_PATH, x402Cors);
+  app.use(ASSESSMENT_PATH, async (c, next) => {
+    if (!sys.x402) throw new HttpError(404, "This deployment does not sell assessments");
+    return sys.x402.middleware(c, next);
+  });
+  app.post(ASSESSMENT_PATH, async (c) => c.json(assessVibration(await body(c, Assess))));
 
   // ---------------- Site scope ----------------
   const site = new Hono<Env>();
@@ -534,6 +552,7 @@ export function createApp(sys: System, opts: AppOptions = {}) {
   });
   site.post("/work-orders/:id/release/sign-request", async (c) => c.json(await sys.workOrders.releaseRequest(sid(c), me(c).user, c.get("roles"), c.req.param("id"))));
   site.post("/work-orders/:id/release", async (c) => c.json(await sys.workOrders.release(sid(c), me(c).user, c.get("roles"), c.req.param("id"), await body(c, SignedBody))));
+  site.post("/work-orders/:id/assessment/retry", async (c) => c.json(await sys.workOrders.retryAssessment(sid(c), c.get("roles"), c.req.param("id"))));
   site.post("/work-orders/:id/retry", async (c) => c.json(await sys.workOrders.retryEscrow(sid(c), c.get("roles"), c.req.param("id"))));
 
   // ---- Ledger & proof ----

@@ -5,6 +5,7 @@ import { geminiProvider, OfflineLlm, openAiCompatProvider, type LlmProvider } fr
 import { LocalSignedAnchor, type AnchorAdapter } from "./adapters/rails.js";
 import { Agents } from "./agents/agents.js";
 import { Auth, Signatures } from "./auth/auth.js";
+import { Assessments } from "./core/assessments.js";
 import { Autonomy } from "./core/autonomy.js";
 import { Inbox } from "./core/inbox.js";
 import { Jobs } from "./core/jobs.js";
@@ -54,13 +55,15 @@ export interface System {
   autonomy: Autonomy;
   passports: Passports;
   jobs: Jobs;
+  /** x402: the paid assessment route's middleware and terms, when Ordo sells assessments */
+  x402: { middleware: import("hono").MiddlewareHandler; terms: { network: string; payTo: string; price: string; asset: string } } | null;
   ensNames: { lookup(addresses: string[]): Promise<Record<string, string | null>> } | null;
   /** One engine cycle: pull data, advance runs, watch for anomalies, refund expired escrows, anchor. Throttled and lease-guarded. */
   advance(force?: boolean): Promise<void>;
   close(): Promise<void>;
 }
 
-export async function buildSystem(cfg: Config, opts: { now?: () => number; policyText?: string; llm?: LlmProvider; trustTransport?: Transport } = {}): Promise<System> {
+export async function buildSystem(cfg: Config, opts: { now?: () => number; policyText?: string; llm?: LlmProvider; trustTransport?: Transport; x402Facilitator?: import("@x402/core/server").FacilitatorClient; x402Fetch?: typeof fetch } = {}): Promise<System> {
   const warnings: string[] = [];
   if (cfg.VERCEL && !cfg.DATABASE_URL) throw new Error("On Vercel, DATABASE_URL is required (add Neon from the Vercel Marketplace)");
   const now = opts.now ?? Date.now;
@@ -183,6 +186,25 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
   let passportRail: import("./chain/passport.js").PassportRail | null = null;
   if (cfg.HEDERA_PASSPORT_TOKEN_ID && hedera) passportRail = (await import("./chain/passport.js")).hederaPassports(hedera.client, cfg.HEDERA_NETWORK, cfg.HEDERA_PASSPORT_TOKEN_ID);
   if (cfg.HEDERA_PASSPORT_TOKEN_ID && !publicBase(cfg)) warnings.push("Set PUBLIC_URL so lot passport NFTs point at a public page");
+  // ---- x402: Ordo sells vibration assessments per call; the agent buys one for each work order ----
+  let x402: System["x402"] = null;
+  const x402Net = (await import("./chain/x402.js")).x402Network(cfg.HEDERA_NETWORK);
+  const payTo = cfg.X402_PAY_TO ?? cfg.HEDERA_OPERATOR_ID;
+  if (x402Net && payTo) {
+    const { x402Seller } = await import("./chain/x402.js");
+    x402 = x402Seller({ network: x402Net, payTo, price: cfg.X402_PRICE_TINYBARS, facilitatorUrl: cfg.X402_FACILITATOR_URL, facilitator: opts.x402Facilitator });
+  }
+  const assessUrl = cfg.X402_ASSESSMENT_URL ?? (x402 && publicBase(cfg) ? `${publicBase(cfg)}${(await import("./chain/x402.js")).ASSESSMENT_PATH}` : null);
+  if (x402Net && cfg.HEDERA_AGENT_ID && cfg.HEDERA_AGENT_KEY && assessUrl) {
+    try {
+      const { X402Buyer } = await import("./chain/x402.js");
+      const buyer = new X402Buyer({ network: x402Net, agentId: cfg.HEDERA_AGENT_ID, agentKey: cfg.HEDERA_AGENT_KEY, maxPerCall: cfg.X402_MAX_TINYBARS }, opts.x402Fetch);
+      workOrders.assessments = new Assessments(jobs, plant, rec, buyer, assessUrl);
+    } catch (e) {
+      warnings.push(`x402 buyer unusable (${e instanceof Error ? e.message : e}); work orders open without an assessment`);
+    }
+  }
+
   const passports = new Passports(db, rec, sigs, engine, trust, proof, passportRail, publicBase(cfg), cfg.SIGNATURE_CHAIN_ID, now);
 
   const advance = async (force = false) => {
@@ -213,6 +235,11 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
       live: workOrders.live,
     },
     { rail: "lot passports", mode: passportRail ? `HTS NFT ${passportRail.tokenId}` : "in-app passports, no NFT", live: Boolean(passportRail) },
+    {
+      rail: "x402 assessments",
+      mode: [x402 ? `sells at ${Number(cfg.X402_PRICE_TINYBARS) / 1e8} HBAR to ${x402.terms.payTo}` : null, workOrders.assessments ? "agent buys one per work order" : null].filter(Boolean).join(" · ") || "off",
+      live: Boolean(x402 && workOrders.assessments),
+    },
     { rail: "autonomy policies", mode: trustChain?.cfg.policies ? `OrdoPolicies ${cfg.TRUST_POLICIES_ADDRESS}` : "in-app signatures", live: Boolean(trustChain?.cfg.policies) },
   ];
 
@@ -239,6 +266,7 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
     autonomy,
     passports,
     jobs,
+    x402,
     ensNames,
     advance,
     close: () => db.close(),

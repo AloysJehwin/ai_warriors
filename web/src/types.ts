@@ -232,6 +232,15 @@ export interface WorkOrderView {
   createdAt: string;
   updatedAt: string;
   release: RelayView | null;
+  /** The vibration assessment the agent bought over x402 */
+  assessment: AssessmentView | null;
+}
+export interface AssessmentView {
+  status: "pending" | "done" | "failed";
+  error: string | null;
+  skipped: string | null;
+  assessment: { standard: string; zone: "A" | "B" | "C" | "D"; verdict: string; level: number; peak: number; slopePerHour: number; hoursToZoneD: number | null; samples: number } | null;
+  payment: { transaction: string; url: string; payer: string | null; network: string } | null;
 }
 export interface WorkOrdersSetup {
   configured: boolean;
