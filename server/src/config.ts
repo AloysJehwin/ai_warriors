@@ -50,14 +50,15 @@ const Env = z.object({
   TRUST_POLICIES_ADDRESS: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
 
   // ---- World ID: one person per validator (one World ID per validator per site, whatever wallet they use) ----
-  /** From the World Developer Portal; an app_staging_… id works with the World ID simulator */
+  /** From the World Developer Portal. For testing, set WORLD_ID_ENVIRONMENT=sandbox and verify with the World ID Sandbox test build of World App */
   WORLD_ID_APP_ID: z.string().regex(/^app_[A-Za-z0-9_]+$/).optional(),
   WORLD_ID_RP_ID: z.string().optional(),
   /** The RP signing key (hex). Server-side only: it signs each request so World App knows it came from Ordo. */
   WORLD_ID_SIGNING_KEY: z.string().optional(),
   /** An action created in the Developer Portal; allow unlimited verifications per person so one person can validate at several sites */
   WORLD_ID_ACTION: z.string().default("ordo-validator"),
-  WORLD_ID_ENVIRONMENT: z.enum(["production", "staging"]).default("staging"),
+  /** production: real World App users; sandbox: the World ID Sandbox test build (test credentials); staging: World's own staging network */
+  WORLD_ID_ENVIRONMENT: z.enum(["production", "sandbox", "staging"]).default("sandbox"),
   WORLD_ID_VERIFY_URL: z.string().url().default("https://developer.worldcoin.org"),
 
   // ---- Agents ----

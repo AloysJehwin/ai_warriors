@@ -4,7 +4,7 @@ import { api, ApiError } from "../api";
 interface WorldIdRequest {
   appId: `app_${string}`;
   action: string;
-  environment: "production" | "staging";
+  environment: "production" | "sandbox" | "staging";
   signal: string;
   rpContext: { rp_id: string; nonce: string; created_at: number; expires_at: number; signature: string };
 }

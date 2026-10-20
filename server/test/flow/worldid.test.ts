@@ -25,7 +25,7 @@ const proof = (person: string, signalWallet: string, p = "ok") => ({
   protocol_version: "4.0",
   nonce: "0x01",
   action: "ordo-validator",
-  environment: "staging",
+  environment: "sandbox",
   responses: [{ identifier: "proof_of_human", signal_hash: hashSignal(signalWallet.toLowerCase()), proof: p, nullifier: person, issuer_schema_id: 1, expires_at_min: 0 }],
 });
 const apply = (c: Client, worldId?: unknown, role = "quality") => c.call("POST", "/v1/onboarding", { siteId: site, kind: "validator", role, form: { fullName: "V", qualifications: "CQE" }, worldId });
@@ -43,7 +43,7 @@ afterAll(async () => sys.close());
 
 describe("World ID for validators", () => {
   it("hands the browser an RP-signed request bound to the wallet", async () => {
-    expect((await admin.call("GET", "/v1/status")).json.worldId).toEqual({ appId: "app_staging_ordo", action: "ordo-validator", environment: "staging" });
+    expect((await admin.call("GET", "/v1/status")).json.worldId).toEqual({ appId: "app_staging_ordo", action: "ordo-validator", environment: "sandbox" });
     const r = (await admin.call("GET", "/v1/world-id/request")).json;
     expect(r.signal).toBe(admin.address);
     expect(r.rpContext.rp_id).toBe("rp_ordo");
