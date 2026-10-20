@@ -4,7 +4,8 @@ import { useDecide } from "../../lib/actions";
 import { useApp } from "../../lib/app";
 import { actorLabel, AGENT_LABEL, computeProof, dur, num, STATE_LABEL, time } from "../../lib/format";
 import { go } from "../../lib/router";
-import type { DecisionView, InboxItemView, RunView, StageRunView } from "../../types";
+import { signTyped } from "../../lib/wallet";
+import type { DecisionView, InboxItemView, ReadingTyped, RunView, StageRunView } from "../../types";
 import { Action, Drawer, Field, Modal, useToast } from "../../ui/kit";
 
 export function useStageActions(run: RunView, inbox: InboxItemView[], reload: () => Promise<void>) {
@@ -47,8 +48,25 @@ export function useStageActions(run: RunView, inbox: InboxItemView[], reload: ()
   };
 }
 
+/**
+ * Proof of work for a stage with no gateway: the operator signs the counts Ordo recorded with their wallet. The
+ * signature covers a commitment to the counts, which Ordo uses to prove the stage's criteria without publishing them.
+ */
+async function signCounts(path: (p: string) => string, address: string, runId: string, code: string) {
+  const { run } = await api.get<{ run: RunView }>(path(`/runs/${runId}`));
+  const st = run.stages.find((s) => s.code === code);
+  if (!st?.workDoneAt) return false;
+  const counts = { good: st.unitsGood, scrap: st.unitsScrap };
+  const req = await api.post<{ typed: ReadingTyped; salt: string }>(path(`/runs/${runId}/stages/${code}/reading/sign-request`), counts);
+  const signature = await signTyped(req.typed, address);
+  const m = req.typed.message;
+  await api.post(path(`/runs/${runId}/stages/${code}/reading`), { ...counts, salt: req.salt, commitment: m.commitment, anchor: m.anchor, signedAt: Number(m.signedAt), signature });
+  return true;
+}
+
 export function RecordModal({ run, stage, onClose, onDone }: { run: RunView; stage: StageRunView | null; onClose: () => void; onDone: () => Promise<void> }) {
-  const { path } = useApp();
+  const { path, me } = useApp();
+  const [sign, setSign] = useState(true);
   const [good, setGood] = useState("");
   const [scrap, setScrap] = useState("0");
   const [complete, setComplete] = useState(true);
@@ -72,7 +90,17 @@ export function RecordModal({ run, stage, onClose, onDone }: { run: RunView; sta
             disabled={good === "" || Number(good) < 0}
             onClick={async () => {
               await api.post(path(`/runs/${run.id}/stages/${stage.code}/record`), { good: Number(good), scrap: Number(scrap || 0), complete, note: note || undefined });
-              toast("Recorded", "ok");
+              let signed = false;
+              if (complete && sign && me.user) {
+                try {
+                  signed = await signCounts(path, me.user.address, run.id, stage.code);
+                } catch (e) {
+                  const msg = e instanceof Error ? e.message : String(e);
+                  // a machine with a gateway signs its own counts
+                  if (!/gateway/.test(msg)) toast(`Recorded, but the counts are not signed: ${msg}`, "bad");
+                }
+              }
+              toast(signed ? "Recorded and signed: Ordo is proving the stage's criteria" : "Recorded", "ok");
               onClose();
               await onDone();
             }}
@@ -97,6 +125,11 @@ export function RecordModal({ run, stage, onClose, onDone }: { run: RunView; sta
       <label className="check-row">
         <input type="checkbox" checked={complete} onChange={(e) => setComplete(e.target.checked)} /> Work on this stage is complete
       </label>
+      {complete && (
+        <label className="check-row">
+          <input type="checkbox" checked={sign} onChange={(e) => setSign(e.target.checked)} /> Sign these counts with my wallet, so the lot carries a zero-knowledge proof that they meet the stage&apos;s criteria
+        </label>
+      )}
     </Modal>
   );
 }

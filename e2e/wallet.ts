@@ -20,6 +20,8 @@ export async function injectWallet(page: Page, key = generatePrivateKey()) {
       case "eth_signTypedData_v4": {
         const typed = JSON.parse(params[1] as string);
         delete typed.types.EIP712Domain;
+        // like a real wallet, take uint fields as decimal strings
+        for (const f of typed.types[typed.primaryType] ?? []) if (/^uint/.test(f.type) && typeof typed.message[f.name] !== "bigint") typed.message[f.name] = BigInt(typed.message[f.name]);
         return account.signTypedData(typed);
       }
       default:

@@ -63,8 +63,8 @@ const anchorHex = (h: string) => `0x${h.replace(/^sha256:/, "").replace(/^0x/, "
  * operator signs one in the console. Ordo checks the signer, the commitment and the anchor, keeps the counts private,
  * and flags a reading whose counts differ from the ones Ordo recorded. StageProofs then proves the criteria from it.
  *
- * Gateways authenticate each request with their own key: `x-ordo-device`, `x-ordo-ts` and `x-ordo-sig`, an EIP-191
- * signature over `ordo-edge:<ts>:<METHOD>:<path>:<sha256 of the body>`.
+ * Gateways authenticate each request with their own key: `x-ordo-device`, `x-ordo-ts`, `x-ordo-nonce` and `x-ordo-sig`,
+ * an EIP-191 signature over `ordo-edge:<ts>:<nonce>:<METHOD>:<path>:<sha256 of the body>`.
  */
 export class Readings {
   private seen = new Map<string, number>();
@@ -79,17 +79,18 @@ export class Readings {
 
   // ---------------------------------------------------------------- gateway requests
   /** The gateway that signed this request. */
-  async device(h: { device?: string; ts?: string; sig?: string }, method: string, path: string, body: string): Promise<Address> {
-    if (!h.device || !h.ts || !h.sig || !/^0x[0-9a-fA-F]{40}$/.test(h.device)) throw new HttpError(401, "Sign the request with the gateway's key (x-ordo-device, x-ordo-ts, x-ordo-sig)");
+  async device(h: { device?: string; ts?: string; nonce?: string; sig?: string }, method: string, path: string, body: string): Promise<Address> {
+    if (!h.device || !h.ts || !h.sig || !h.nonce || !/^0x[0-9a-fA-F]{40}$/.test(h.device) || !/^[\w-]{8,64}$/.test(h.nonce)) throw new HttpError(401, "Sign the request with the gateway's key (x-ordo-device, x-ordo-ts, x-ordo-nonce, x-ordo-sig)");
     const ts = Number(h.ts);
     if (!Number.isFinite(ts) || Math.abs(ts - this.now() / 1000) > SKEW_S) throw new HttpError(401, "The request's timestamp is too far from Ordo's clock");
-    const message = edgeMessage(ts, method, path, body);
+    const message = edgeMessage(ts, h.nonce, method, path, body);
     const signer = await recoverMessageAddress({ message, signature: h.sig as Hex }).catch(() => null);
     if (signer?.toLowerCase() !== h.device.toLowerCase()) throw new HttpError(401, "The request's signature is not the gateway's");
-    // each signed request is used once
+    // each signed request is used once (within the window its timestamp is accepted)
     for (const [k, at] of this.seen) if (this.now() - at > SKEW_S * 2000) this.seen.delete(k);
-    if (this.seen.has(h.sig)) throw new HttpError(401, "This request was already used");
-    this.seen.set(h.sig, this.now());
+    const key = `${h.device.toLowerCase()}:${h.nonce}`;
+    if (this.seen.has(key)) throw new HttpError(401, "This request was already used");
+    this.seen.set(key, this.now());
     return signer.toLowerCase() as Address;
   }
 
@@ -235,4 +236,5 @@ export class Readings {
 }
 
 /** What a gateway signs to authenticate one request. */
-export const edgeMessage = (ts: number, method: string, path: string, body: string) => `ordo-edge:${ts}:${method.toUpperCase()}:${path}:${createHash("sha256").update(body).digest("hex")}`;
+export const edgeMessage = (ts: number, nonce: string, method: string, path: string, body: string) =>
+  `ordo-edge:${ts}:${nonce}:${method.toUpperCase()}:${path}:${createHash("sha256").update(body).digest("hex")}`;

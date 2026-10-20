@@ -235,7 +235,7 @@ export function createApp(sys: System, opts: AppOptions = {}) {
   // ---------------- Edge: a machine's gateway, authenticated by its own key on every request ----------------
   const edge = async (c: Context<Env>) => {
     const raw = c.req.method === "GET" ? "" : await c.req.text();
-    const device = await sys.readings.device({ device: c.req.header("x-ordo-device"), ts: c.req.header("x-ordo-ts"), sig: c.req.header("x-ordo-sig") }, c.req.method, c.req.path, raw);
+    const device = await sys.readings.device({ device: c.req.header("x-ordo-device"), ts: c.req.header("x-ordo-ts"), nonce: c.req.header("x-ordo-nonce"), sig: c.req.header("x-ordo-sig") }, c.req.method, c.req.path, raw);
     return { device, json: () => JSON.parse(raw || "{}") as unknown };
   };
   const Observation = z.object({ signal: z.string().trim().min(1).max(40), ts: z.string().datetime(), value: z.number().finite().nullable(), text: z.string().max(200).nullable().default(null) });

@@ -152,6 +152,8 @@ export interface StageProofView {
   /** checked here just now: the reading's signature recovers the signer, and the proof verifies against its commitment */
   verified: boolean | null;
   detail: string;
+  /** the signed OrdoReading, so anyone can recover its signer themselves */
+  reading: { site: string; runId: string; stage: string; asset: string; commitment: string; anchor: string; signedAt: string; signature: string };
 }
 
 interface Artifacts {
@@ -316,6 +318,7 @@ export class StageProofs {
         criteria,
         system: "groth16-bn254" as const,
         circuit: "stage_check" as const,
+        reading: { site: r.site_id, runId: r.run_id, stage: r.stage_code, asset: r.asset_id ?? "", commitment: r.commitment, anchor: r.anchor, signedAt: String(r.signed_at_s), signature: r.signature },
       };
       if (proven) {
         const check = await this.check(r, proven);

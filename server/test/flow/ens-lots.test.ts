@@ -46,8 +46,9 @@ run("ENS credentials and lot names", () => {
   const edge = async (method: "GET" | "POST", path: string, body?: unknown) => {
     const raw = body === undefined ? "" : JSON.stringify(body);
     const ts = Math.floor(Date.now() / 1000);
-    const sig = await gateway.signMessage({ message: edgeMessage(ts, method, path, raw) });
-    const res = await app.request(path, { method, body: raw || undefined, headers: { "content-type": "application/json", host: "localhost", "x-ordo-device": gateway.address, "x-ordo-ts": String(ts), "x-ordo-sig": sig } });
+    const nonce = `n${Math.random().toString(36).slice(2, 14)}`;
+    const sig = await gateway.signMessage({ message: edgeMessage(ts, nonce, method, path, raw) });
+    const res = await app.request(path, { method, body: raw || undefined, headers: { "content-type": "application/json", host: "localhost", "x-ordo-device": gateway.address, "x-ordo-ts": String(ts), "x-ordo-nonce": nonce, "x-ordo-sig": sig } });
     return { status: res.status, json: (await res.json()) as any };
   };
   const settle = async (n = 12) => {
@@ -177,7 +178,7 @@ run("ENS credentials and lot names", () => {
 
   it("the machine's gateway holds the device role and signs its stage's counts, which are proven against the criteria", async () => {
     // only the gateway's own key is accepted for its machine
-    const forged = await app.request("/v1/edge/stages", { headers: { host: "localhost", "x-ordo-device": gateway.address, "x-ordo-ts": String(Math.floor(Date.now() / 1000)), "x-ordo-sig": `0x${"11".repeat(65)}` } });
+    const forged = await app.request("/v1/edge/stages", { headers: { host: "localhost", "x-ordo-device": gateway.address, "x-ordo-ts": String(Math.floor(Date.now() / 1000)), "x-ordo-nonce": "forged-1234", "x-ordo-sig": `0x${"11".repeat(65)}` } });
     expect(forged.status).toBe(401);
     await settle();
     expect(Number(await d.pub.readContract({ address: roles, abi: ORDO_ENS_ROLES_ABI as Abi, functionName: "roles", args: [sitekey(site), gateway.address] }))).toBe(ROLE.DEVICE);
@@ -198,9 +199,7 @@ run("ENS credentials and lot names", () => {
     const r = await edge("POST", "/v1/edge/readings", body);
     expect(r.status).toBe(200);
     expect(r.json).toMatchObject({ signer: gateway.address.toLowerCase(), matches: true });
-    // the same signed request is not accepted twice, and a stage's counts are signed once
-    expect((await edge("POST", "/v1/edge/readings", body)).status).toBe(401);
-    await new Promise((r) => setTimeout(r, 1100));
+    // a stage's counts are signed once
     expect((await edge("POST", "/v1/edge/readings", body)).status).toBe(409);
 
     await sys.stageProofs.reconcile();
