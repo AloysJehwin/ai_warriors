@@ -9,7 +9,7 @@ export interface WorldIdConfig {
   /** the RP signing key from the Developer Portal; it signs each request so World App knows it came from Ordo */
   signingKey: string;
   action: string;
-  environment: "production" | "staging";
+  environment: "production" | "sandbox" | "staging";
   verifyBase: string;
 }
 
