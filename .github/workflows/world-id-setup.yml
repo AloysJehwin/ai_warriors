@@ -1,0 +1,71 @@
+name: World ID setup
+
+# Sets the World ID variables in Vercel for validators (one person per validator seat).
+# Run it from the Actions tab with the app and relying party ids from the World Developer Portal.
+# It makes a fresh RP signing key, sends it straight to Vercel (never printed), and shows its signer address
+# in the summary: paste that address into the portal's "Signer address" and register the relying party.
+# Each run replaces the key, so register the new address again after every run.
+# Runs in the `hedera-testnet` environment, which holds VERCEL_TOKEN.
+on:
+  workflow_dispatch:
+    inputs:
+      app_id:
+        description: "App ID (app_…)"
+        required: true
+      rp_id:
+        description: "RP ID (rp_…)"
+        required: true
+      environment:
+        description: "World ID environment"
+        type: choice
+        options: [production, staging]
+        default: production
+
+permissions:
+  contents: read
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    environment: hedera-testnet
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_PROJECT_ID: prj_ua7E01jdI0VpLBJvZyqqulOlBzGP
+      VERCEL_ORG_ID: team_8ghjcEpH2t9p2BktkDNQ9ZXm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Push the World ID settings and a new signing key to Vercel
+        env:
+          APP_ID: ${{ inputs.app_id }}
+          RP_ID: ${{ inputs.rp_id }}
+          WORLD_ENV: ${{ inputs.environment }}
+        run: |
+          if [ -z "$VERCEL_TOKEN" ]; then echo "::error::The signing key goes straight to Vercel: add VERCEL_TOKEN to the hedera-testnet environment first"; exit 1; fi
+          app="$APP_ID"; rp="$RP_ID"; envname="$WORLD_ENV"
+          case "$app" in app_*) ;; *) echo "::error::app_id must start with app_"; exit 1;; esac
+          case "$rp" in rp_*) ;; *) echo "::error::rp_id must start with rp_"; exit 1;; esac
+          umask 077
+          out="$RUNNER_TEMP/world-id.env"
+          ( cd server && node -e '
+            const a = require("viem/accounts");
+            const k = a.generatePrivateKey();
+            require("fs").writeFileSync(process.argv[1], `WORLD_ID_SIGNING_KEY=${k}\n`);
+            console.log(a.privateKeyToAccount(k).address);
+          ' "$out" ) > signer.txt
+          printf 'WORLD_ID_APP_ID=%s\nWORLD_ID_RP_ID=%s\nWORLD_ID_ACTION=ordo-validator\nWORLD_ID_ENVIRONMENT=%s\n' "$app" "$rp" "${envname:-production}" >> "$out"
+          node scripts/vercel-env.mjs push "$out" production,preview
+          rm -f "$out"
+      - name: Summary
+        if: always()
+        run: |
+          echo '### World ID setup' >> "$GITHUB_STEP_SUMMARY"
+          if [ -s signer.txt ]; then
+            echo "Signer address to register in the World Developer Portal: $(cat signer.txt)" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "Then redeploy so the server picks up the new variables." >> "$GITHUB_STEP_SUMMARY"
+          fi
