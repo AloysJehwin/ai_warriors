@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { Modal, Spinner, useToast } from "../ui/kit";
-import type { TrustChainInfo, TypedSignature } from "../types";
+import type { ReleaseTyped, TrustChainInfo, TypedSignature } from "../types";
 import { discoverWallets, ensureChain, hasActiveWallet, rememberedWallet, setActiveWallet, short, signTyped, walletChainId, type WalletInfo } from "./wallet";
 
 export interface SignJob<T> {
@@ -70,8 +70,8 @@ export function SignerProvider(props: { address: string; trust: TrustChainInfo |
     setState("signing");
     setError(null);
     try {
-      // wallets refuse typed data for a chain they are not on
-      await ensureChain(typed.domain.chainId, props.trust);
+      // wallets refuse typed data for a chain they are not on; a release statement names no chain
+      if ("chainId" in typed.domain) await ensureChain(typed.domain.chainId, props.trust);
       const signature = await signTyped(typed, props.address);
       const out = await job.submit({ nonce: typed.message.nonce, signature });
       toast(job.done ?? "Signed and recorded in the ledger", "ok");
@@ -116,7 +116,8 @@ export function SignerProvider(props: { address: string; trust: TrustChainInfo |
             <Spinner /> Preparing the signature request…
           </p>
         )}
-        {typed && (
+        {typed?.primaryType === "OrdoRelease" && <ReleaseView typed={typed} address={props.address} />}
+        {typed?.primaryType === "OrdoSignature" && (
           <div className="sigview">
             <p className="sig-meaning">{typed.message.meaning}</p>
             <dl className="kv">
@@ -157,5 +158,37 @@ export function SignerProvider(props: { address: string; trust: TrustChainInfo |
         {error && <p className="field-e">{error}</p>}
       </Modal>
     </SignCtx.Provider>
+  );
+}
+
+const ZERO = `0x${"00".repeat(32)}`;
+/** A release statement: exactly what is released, the same for all three signers. */
+function ReleaseView({ typed, address }: { typed: ReleaseTyped; address: string }) {
+  const m = typed.message;
+  return (
+    <div className="sigview">
+      <p className="sig-meaning">{m.statement}</p>
+      <dl className="kv">
+        <dt>Signer</dt>
+        <dd className="mono">{short(address)}</dd>
+        <dt>Lot</dt>
+        <dd className="mono">{m.lot || "none"}</dd>
+        <dt>Content hash</dt>
+        <dd className="mono">{short(m.contentHash)}</dd>
+        <dt>Stage proofs</dt>
+        <dd className="mono">{m.proofRoot === ZERO ? "none: no stage was signed at its source" : `root ${short(m.proofRoot)}`}</dd>
+        {m.comment && (
+          <>
+            <dt>Comment</dt>
+            <dd>{m.comment}</dd>
+          </>
+        )}
+        <dt>Valid until</dt>
+        <dd>{new Date(Number(m.deadline) * 1000).toLocaleDateString()}</dd>
+      </dl>
+      <p className="faint small">
+        Signing costs no gas. This statement names no chain: OrdoTrust and the lot&apos;s ENS name both record it, and the ENS resolver verifies each stage proof under the root before it accepts the release.
+      </p>
+    </div>
   );
 }

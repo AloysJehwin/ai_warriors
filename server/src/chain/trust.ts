@@ -1,11 +1,11 @@
 import { createPublicClient, createWalletClient, defineChain, http, keccak256, toBytes, toFunctionSelector, type Address, type Hex, type Transport } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import type { TypedSignature } from "../auth/auth.js";
+import type { ReleaseTyped, TypedSignature } from "../auth/auth.js";
 import { ORDO_POLICIES_ABI, ORDO_WORK_ORDERS_ABI } from "./ordo-contracts-abi.js";
 import { ORDO_TRUST_ABI } from "./ordo-trust-abi.js";
 
 /** On-chain role bits in OrdoTrust. */
-export const CHAIN_ROLE = { OPERATOR: 1, SUPERVISOR: 2, VALIDATOR: 4, PLANT_MANAGER: 8, ADMIN: 16, VENDOR: 32 } as const;
+export const CHAIN_ROLE = { OPERATOR: 1, SUPERVISOR: 2, VALIDATOR: 4, PLANT_MANAGER: 8, ADMIN: 16, VENDOR: 32, DEVICE: 64 } as const;
 export type ChainRole = keyof typeof CHAIN_ROLE;
 
 export interface TrustChainConfig {
@@ -60,6 +60,19 @@ export interface PolicyUpdate {
 
 export type SigArg = { action: string; entity: string; meaning: string; comment: string; site: string; nonce: string; issuedAt: string; signature: Hex };
 export const sigArg = (typed: TypedSignature, signature: string): SigArg => ({ ...typed.message, signature: signature as Hex });
+
+/** A release statement as the contracts take it (OrdoProofs.ReleaseSig). */
+export type ReleaseSigArg = Omit<ReleaseTyped["message"], "deadline"> & { deadline: bigint; signature: Hex };
+export const releaseSigArg = (typed: ReleaseTyped, signature: string): ReleaseSigArg => ({ ...typed.message, deadline: BigInt(typed.message.deadline), signature: signature as Hex });
+/** What a release names (OrdoProofs.ReleaseLot). */
+export interface ReleaseLot {
+  siteId: string;
+  lotLabel: string;
+  packageId: string;
+  runId: string;
+  contentHash: Hex;
+  proofRoot: Hex;
+}
 
 /**
  * The OrdoTrust contract: roles as non-transferable credentials, validator stakes, releases and
@@ -152,8 +165,8 @@ export class TrustChain {
   grantRole(siteId: string, account: string, role: ChainRole, sig: SigArg) {
     return this.write("grantRole", [siteId, account, CHAIN_ROLE[role], sig]);
   }
-  recordRelease(siteId: string, packageId: string, contentHash: Hex, sigs: [SigArg, SigArg, SigArg]) {
-    return this.write("recordRelease", [siteId, packageId, contentHash, sigs]);
+  recordRelease(lot: ReleaseLot, sigs: [ReleaseSigArg, ReleaseSigArg, ReleaseSigArg]) {
+    return this.write("recordRelease", [lot, sigs]);
   }
   slash(siteId: string, validator: string, amount: bigint, proposalId: string, sigs: [SigArg, SigArg, SigArg]) {
     return this.write("slash", [siteId, validator, amount, proposalId, sigs]);

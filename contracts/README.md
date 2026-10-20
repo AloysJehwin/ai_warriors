@@ -8,11 +8,13 @@ Three contracts on Hedera, two on Sepolia for ENS (below). Every authorisation i
 | `OrdoWorkOrders` | The maintenance agent pays vendors within limits people set: a per-site fund, per-order and per-day caps an admin signs, escrow only to holders of the site's `VENDOR` credential, release on a supervisor's or plant manager's signature, refund after expiry, and a pause an admin or plant manager signs. |
 | `OrdoPolicies` | Each line's autonomy level and policy hash. Raising autonomy or changing the policy needs two different plant managers' signatures; lowering needs one. |
 | `OrdoSpecVerifier` | Generated Groth16 verifier for `circuits/spec_check.circom`: checks a lot passport's proof that a criterion was met, without the measurement. Stateless; anyone can deploy and call `verifyProof`. |
+| `OrdoStageVerifier` | Generated Groth16 verifier for `circuits/stage_check.circom`: checks that the counts a stage's gateway (or operator) signed meet the stage's criteria. `OrdoLotResolver` calls it for every stage of a release. |
+| `OrdoProofs` (library) | The two statements proof of work rests on: `OrdoReading` (a stage's counts as a signed commitment) and `OrdoRelease` (exactly what three people release: site, package, run, lot, content hash, proof root). See [docs/proof-of-work.md](../docs/proof-of-work.md). |
 
 `OrdoWorkOrders` and `OrdoPolicies` read credentials from the deployed `OrdoTrust` and share its signature scheme through `OrdoSigned`.
 
 ```bash
-pnpm --filter @ordo/contracts test     # compile with npm solc + 19 tests on an in-process EVM
+pnpm --filter @ordo/contracts test     # compile with npm solc + 25 tests on an in-process EVM
 ```
 
 ## Hedera testnet
@@ -81,7 +83,18 @@ The circuit's keys live in `server/zk`. Rebuild them after changing the circuit 
 cd contracts && CIRCOM=/path/to/circom node scripts/zk-setup.mjs
 ```
 
-## Proof of work
+## Zero-knowledge stage proofs (proof of work)
+
+Each stage's counts are signed where they were made and proven against the stage's criteria; a release signs the root of those proofs and `OrdoLotResolver` verifies them on-chain. The design, trust model and redeploy notes are in [docs/proof-of-work.md](../docs/proof-of-work.md). The circuit is on a public trusted setup (phase 1 from the PSE Perpetual Powers of Tau; phase 2 contributions are recorded in `server/zk/stage_check.ceremony.json`):
+
+```bash
+cd contracts && CIRCOM=/path/to/circom node scripts/zk-stage-setup.mjs setup      # compile + phase 2 + first contribution
+node scripts/zk-stage-setup.mjs contribute "Your name"                              # each further contributor
+node scripts/zk-stage-setup.mjs beacon <future block hash>                          # close the ceremony
+node scripts/zk-stage-setup.mjs verify                                              # anyone: check the zkey
+```
+
+## Build log on HCS
 
 Post the current commit to the HCS build topic every few hours:
 
@@ -107,8 +120,8 @@ Two more contracts on Sepolia make the names do something:
 
 | Contract | Purpose |
 | --- | --- |
-| `OrdoEnsRoles` | Ordo roles read from ENS. A wallet holds a role at a site only while it owns its `member-<hex>` name in the site's registry and the name's `com.ordo.roles` record lists the role (`com.ordo.validator` gives VALIDATOR). Revoke or let the name expire and the role is gone. It answers OrdoTrust's `sites`/`roles` calls (`IOrdoTrust`), so `OrdoWorkOrders` and `OrdoPolicies` can be deployed against it too. |
-| `OrdoLotResolver` | The resolver of each site name, so every `lot-<order>.<site>.<parent>` resolves with no registration (ENSIP-10 wildcard). `recordRelease` stores a lot's release only with the three original EIP-712 signatures from people whose member names carry the roles (any role, VALIDATOR, VALIDATOR + PLANT_MANAGER); `com.ordo.release*` records come from that. Other records (`url`, `com.ordo.status`, `com.ordo.product`…) come from Ordo's CCIP-Read gateway (`/v1/public/ens/{sender}/{data}.json`), signed with the ENS owner key. Names that are not lots go to Ordo's resolver. |
+| `OrdoEnsRoles` | Ordo roles read from ENS. A wallet holds a role at a site only while it owns its `member-<40 hex address>` name in the site's registry and the name's `com.ordo.roles` record lists the role (`com.ordo.validator` gives VALIDATOR). Revoke or let the name expire and the role is gone. It answers OrdoTrust's `sites`/`roles` calls (`IOrdoTrust`), so `OrdoWorkOrders` and `OrdoPolicies` can be deployed against it too. |
+| `OrdoLotResolver` | The resolver of each site name, so every `lot-<order>.<site>.<parent>` resolves with no registration (ENSIP-10 wildcard). `recordRelease` stores a lot's release only with the three `OrdoRelease` statements from people whose member names carry the roles (any role, VALIDATOR, VALIDATOR + PLANT_MANAGER), and only if every stage proof it is given verifies (`OrdoStageVerifier`), was signed by a holder of the DEVICE or OPERATOR role, and folds to the proof root the three signed; `com.ordo.release*` records come from that, `com.ordo.release.proofs` included. Other records (`url`, `com.ordo.status`, `com.ordo.product`…) come from Ordo's CCIP-Read gateway (`/v1/public/ens/{sender}/{data}.json`), signed with the ENS owner key. Names that are not lots go to Ordo's resolver. |
 
 Deploy them with the **ENS setup** workflow (`contracts https://<Ordo's public URL>` in `.github/deploy/ens.request`), or locally with `pnpm setup:ens-contracts` (see `scripts/ens-contracts.ts`). It sets `ENS_ROLES_ADDRESS` and `ENS_LOT_RESOLVER_ADDRESS`; the app then links each site in `OrdoEnsRoles`, points the site name at the lot resolver, and records each released package on its lot's name.
 

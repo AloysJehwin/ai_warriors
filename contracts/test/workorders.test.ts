@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { decodeErrorResult, encodeFunctionData, parseEther, type Abi, type Address, type Hex } from "viem";
 import { artifact, chain } from "./chain.js";
+import { trustDomain } from "./sigs.js";
 
 const TYPES = {
   OrdoSignature: [
@@ -21,13 +22,19 @@ let nonce = 0;
 /** 0 admin + plant manager · 1 maintenance lead (SUPERVISOR) · 2 vendor · 3 agent · 4 relayer · 5 stranger · 6 second plant manager */
 async function setup() {
   const c = await chain();
-  const trust = await c.deploy("OrdoTrust", [parseEther("10"), 7 * 24 * 3600]);
+  const trust = await c.deploy("OrdoTrust", [parseEther("10"), 7 * 24 * 3600, c.accounts[4]]);
   const orders = await c.deploy("OrdoWorkOrders", [trust.address]);
   const policies = await c.deploy("OrdoPolicies", [trust.address]);
   const acct = c.accounts;
   const sign = async (who: number, action: string, entity: string, site = SITE) => {
     const message = { action, entity, meaning: action, comment: "", site, nonce: `w${++nonce}`, issuedAt: new Date().toISOString() };
     const signature = await c.wallet(who).signTypedData({ domain: { name: "Ordo", version: "1", chainId: 31337 }, types: TYPES, primaryType: "OrdoSignature", message });
+    return { ...message, signature };
+  };
+  // OrdoTrust's own signatures name its deployment (domain version 2)
+  const signTrust = async (who: number, action: string, entity: string) => {
+    const message = { action, entity, meaning: action, comment: "", site: SITE, nonce: `w${++nonce}`, issuedAt: new Date().toISOString() };
+    const signature = await c.wallet(who).signTypedData({ domain: trustDomain(31337, trust.address), types: TYPES, primaryType: "OrdoSignature", message });
     return { ...message, signature };
   };
   const write = async (contract: { address: Address; abi: Abi }, from: number, fn: string, args: unknown[], value?: bigint) => {
@@ -39,13 +46,13 @@ async function setup() {
   const read = <T>(contract: { address: Address; abi: Abi }, fn: string, args: unknown[]) =>
     c.pub.readContract({ address: contract.address, abi: contract.abi, functionName: fn, args }) as Promise<T>;
   const grant = async (who: number, role: keyof typeof ROLE) =>
-    write(trust, 4, "grantRole", [SITE, acct[who], ROLE[role], await sign(0, "role.grant", `${acct[who]!.toLowerCase()}#${role}`)]);
+    write(trust, 4, "grantRole", [SITE, acct[who], ROLE[role], await signTrust(0, "role.grant", `${acct[who]!.toLowerCase()}#${role}`)]);
 
-  await write(trust, 4, "registerSite", [SITE, acct[0], await sign(0, "site.register", SITE)]);
+  await write(trust, 4, "registerSite", [SITE, acct[0], await signTrust(0, "site.register", `${SITE}#${acct[0]!.toLowerCase()}`)]);
   await grant(1, "SUPERVISOR");
   await grant(2, "VENDOR");
   await grant(6, "PLANT_MANAGER");
-  return { ...c, trust, orders, policies, sign, write, read, grant, acct };
+  return { ...c, trust, orders, policies, sign, signTrust, write, read, grant, acct };
 }
 type T = Awaited<ReturnType<typeof setup>>;
 
@@ -166,7 +173,7 @@ describe("OrdoWorkOrders: reentrancy", () => {
     const t = await funded();
     const evil = await t.deploy("ReentrantVendor", []);
     const ent = `${evil.address.toLowerCase()}#VENDOR`;
-    await t.write(t.trust, 4, "grantRole", [SITE, evil.address, ROLE.VENDOR, await t.sign(0, "role.grant", ent)]);
+    await t.write(t.trust, 4, "grantRole", [SITE, evil.address, ROLE.VENDOR, await t.signTrust(0, "role.grant", ent)]);
     const amount = parseEther("2");
     await t.write(t.orders, 3, "escrow", [SITE, "WO-5", evil.address, amount, 3600, HASH]);
     await t.write(t.orders, 3, "escrow", [SITE, "WO-6", evil.address, amount, 3600, HASH]);

@@ -135,12 +135,28 @@ export interface VendorRow {
   status: string;
   createdAt: string;
 }
-export interface TypedSignature {
-  domain: { name: "Ordo"; version: "1"; chainId: number };
+export interface OrdoSignatureTyped {
+  /** version 2 names the contract that checks it (OrdoTrust), so it cannot be replayed on another deployment */
+  domain: { name: "Ordo"; version: "1" | "2"; chainId: number; verifyingContract?: string };
   types: Record<string, { name: string; type: string }[]>;
   primaryType: "OrdoSignature";
   message: { action: string; entity: string; meaning: string; comment: string; site: string; nonce: string; issuedAt: string };
 }
+/** A release statement: names the lot, the content and the root of its stage proofs; no chain, so both release contracts check the same signature. */
+export interface ReleaseTyped {
+  domain: { name: "Ordo"; version: "2" };
+  types: Record<string, { name: string; type: string }[]>;
+  primaryType: "OrdoRelease";
+  message: { site: string; packageId: string; runId: string; lot: string; meaning: string; statement: string; comment: string; contentHash: string; proofRoot: string; nonce: string; deadline: string };
+}
+/** A stage's counts as their source signs them: a commitment, never the counts. */
+export interface ReadingTyped {
+  domain: { name: "Ordo"; version: "2" };
+  types: Record<string, { name: string; type: string }[]>;
+  primaryType: "OrdoReading";
+  message: { site: string; runId: string; stage: string; asset: string; commitment: string; anchor: string; signedAt: string };
+}
+export type TypedSignature = OrdoSignatureTyped | ReleaseTyped;
 export interface Team {
   members: { userId: string; address: string; name: string | null; ens: string | null; roles: Role[]; lastSeenAt: string | null }[];
   invites: { id: string; address: string; role: Role; createdAt: string }[];
@@ -362,6 +378,26 @@ export interface SpecProof {
   verified: boolean | null;
   detail: string;
 }
+/** A stage's counts signed at their source (its machine's gateway, or the operator), and the zero-knowledge proof they meet its criteria. */
+export interface StageWork {
+  stage: string;
+  signer: string;
+  signerKind: "device" | "operator";
+  signerEns: string | null;
+  matches: boolean;
+  commitment: string;
+  anchor: string;
+  signedAt: string;
+  status: "proven" | "pending" | "failed" | "not_met";
+  criteria: string[];
+  system: "groth16-bn254";
+  circuit: "stage_check";
+  publicSignals: string[] | null;
+  proof: unknown;
+  verified: boolean | null;
+  detail: string;
+  reading: { site: string; runId: string; stage: string; asset: string; commitment: string; anchor: string; signedAt: string; signature: string };
+}
 export interface PublicPassport {
   name: string;
   creator: string;
@@ -385,6 +421,8 @@ export interface PublicPassport {
       /** whether each criterion was met; the measurement stays private, with a zero-knowledge proof where it was met */
       criteria: { label: string; target: string; ok: boolean | null; zk: SpecProof | null }[];
       deviation: boolean;
+      /** proof of work: who signed the stage's counts where they were made, and the proof they meet its criteria */
+      work: StageWork | null;
     }[];
     signed: { kind: string; summary: string; stageCode: string | null; by: string; ens: string | null; at: string; ledgerSeq: number | null }[];
     agentDecisions: number;
@@ -396,6 +434,8 @@ export interface PublicPassport {
       releasedAt: string;
       signers: { meaning: string; address: string; ens: string | null; stake: { amount: string; active: boolean; symbol: string; decimals: number } | null }[];
       onchain: { txUrl: string | null; contract: string | null } | null;
+      /** what the three signed: the lot, the content hash and the root of its stage proofs */
+      statement: { lot: string; contentHash: string; proofRoot: string; stagesProven: string[] } | null;
     }[];
     proof: {
       chainIntact: boolean;
@@ -410,7 +450,7 @@ export interface PublicPassport {
 
 // ---------------- ENS names (ENSv2 on Sepolia) ----------------
 export interface EnsNameView {
-  kind: "site" | "person" | "asset" | "agent";
+  kind: "site" | "person" | "asset" | "agent" | "device";
   ref: string;
   name: string;
   status: "pending" | "issued" | "revoked" | "failed";

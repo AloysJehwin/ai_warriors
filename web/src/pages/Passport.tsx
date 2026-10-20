@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import { dateTime, shortAddr } from "../lib/format";
 import { fromUnits } from "../lib/wallet";
-import type { PassportStatus, PublicPassport, SpecProof } from "../types";
+import type { PassportStatus, PublicPassport, SpecProof, StageWork } from "../types";
 import { QR } from "../ui/QR";
 
 const STATUS: Record<PassportStatus, [string, string]> = {
@@ -34,11 +34,45 @@ async function verifyInBrowser(proofs: SpecProof[]): Promise<{ ok: number; of: n
   return { ok, of: proofs.length };
 }
 
+const READING_TYPES = {
+  OrdoReading: [
+    { name: "site", type: "string" },
+    { name: "runId", type: "string" },
+    { name: "stage", type: "string" },
+    { name: "asset", type: "string" },
+    { name: "commitment", type: "uint256" },
+    { name: "anchor", type: "bytes32" },
+    { name: "signedAt", type: "uint64" },
+  ],
+} as const;
+/**
+ * Proof of work, re-checked here: each stage reading's signature must recover the signer shown, and its proof must
+ * verify for the commitment that signer signed, with the published stage-check key.
+ */
+async function verifyWorkInBrowser(work: StageWork[]): Promise<{ ok: number; of: number }> {
+  const [{ groth16 }, { recoverTypedDataAddress }, key] = await Promise.all([import("snarkjs"), import("viem"), api.get<{ verificationKey: unknown }>("/v1/public/zk/stage-check")]);
+  let ok = 0;
+  for (const w of work) {
+    const r = w.reading;
+    const signer = await recoverTypedDataAddress({
+      domain: { name: "Ordo", version: "2" },
+      types: READING_TYPES,
+      primaryType: "OrdoReading",
+      message: { site: r.site, runId: r.runId, stage: r.stage, asset: r.asset, commitment: BigInt(r.commitment), anchor: r.anchor as `0x${string}`, signedAt: BigInt(r.signedAt) },
+      signature: r.signature as `0x${string}`,
+    }).catch(() => null);
+    if (signer?.toLowerCase() !== w.signer.toLowerCase() || !w.publicSignals || w.publicSignals[1] !== r.commitment) continue;
+    if (await groth16.verify(key.verificationKey, w.publicSignals, w.proof as never).catch(() => false)) ok++;
+  }
+  return { ok, of: work.length };
+}
+
 /** The lot's public passport: what anyone scanning the QR code on a shipped lot sees, without signing in. */
 export function Passport({ runId }: { runId: string }) {
   const [p, setP] = useState<PublicPassport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [browser, setBrowser] = useState<BrowserCheck>({ state: "idle" });
+  const [workCheck, setWorkCheck] = useState<BrowserCheck>({ state: "idle" });
   useEffect(() => {
     api
       .get<PublicPassport>(`/v1/public/passports/${encodeURIComponent(runId)}`)
@@ -65,6 +99,14 @@ export function Passport({ runId }: { runId: string }) {
     verifyInBrowser(proven)
       .then((r) => setBrowser({ state: "done", ...r }))
       .catch((e) => setBrowser({ state: "error", message: e instanceof Error ? e.message : String(e) }));
+  };
+  const work = x.stages.flatMap((s) => (s.work ? [s.work] : []));
+  const workProven = work.filter((w) => w.status === "proven");
+  const runWorkCheck = () => {
+    setWorkCheck({ state: "checking" });
+    verifyWorkInBrowser(workProven)
+      .then((r) => setWorkCheck({ state: "done", ...r }))
+      .catch((e) => setWorkCheck({ state: "error", message: e instanceof Error ? e.message : String(e) }));
   };
   const pageUrl = x.pageUrl.startsWith("http") ? x.pageUrl : `${window.location.origin}${x.pageUrl}`;
   return (
@@ -127,6 +169,26 @@ export function Passport({ runId }: { runId: string }) {
                   </b>
                 ) : (
                   <span className="field-e">{browser.message}</span>
+                ))}
+            </Check>
+          )}
+          {work.length > 0 && (
+            <Check ok={workProven.length === work.length && workProven.every((w) => w.verified && w.matches) ? true : work.some((w) => w.verified === false || w.status === "not_met") ? false : null}>
+              Proof of work: {work.length} of {x.stages.length} stages had their counts signed where they were made ({work.filter((w) => w.signerKind === "device").length} by the machine&apos;s own gateway), and {workProven.length} are proven in
+              zero knowledge to meet the stage&apos;s criteria without revealing the counts.{" "}
+              {workProven.length > 0 &&
+                (workCheck.state === "idle" ? (
+                  <button type="button" className="link" onClick={runWorkCheck}>
+                    Verify the work in this browser
+                  </button>
+                ) : workCheck.state === "checking" ? (
+                  <span className="muted">Verifying…</span>
+                ) : workCheck.state === "done" ? (
+                  <b>
+                    {workCheck.ok} of {workCheck.of} signatures and proofs verified in this browser
+                  </b>
+                ) : (
+                  <span className="field-e">{workCheck.message}</span>
                 ))}
             </Check>
           )}
@@ -223,6 +285,18 @@ export function Passport({ runId }: { runId: string }) {
                   </li>
                 ))}
               </ul>
+              {r.statement && (
+                <p className="faint small">
+                  All three signed lot <span className="mono">{r.statement.lot || "—"}</span>, content <span className="mono">{shortAddr(r.statement.contentHash)}</span>
+                  {r.statement.stagesProven.length > 0 ? (
+                    <>
+                      {" "}
+                      and the proofs of stage{r.statement.stagesProven.length === 1 ? "" : "s"} {r.statement.stagesProven.join(", ")} (root <span className="mono">{shortAddr(r.statement.proofRoot)}</span>)
+                    </>
+                  ) : null}
+                  .
+                </p>
+              )}
             </div>
           ))}
         </section>
@@ -257,6 +331,15 @@ export function Passport({ runId }: { runId: string }) {
                         )}
                       </div>
                     ))}
+                    {s.work && (
+                      <div className="small">
+                        <span className={`tag ${s.work.status === "proven" && s.work.verified ? "ok" : s.work.status === "pending" ? "warn" : "bad"}`} title={s.work.detail}>
+                          {s.work.status === "proven" ? (s.work.verified ? "Work proven" : "Work proof invalid") : s.work.status === "pending" ? "Work proof pending" : s.work.status === "not_met" ? "Signed counts miss a criterion" : "No work proof"}
+                        </span>{" "}
+                        counts signed by {s.work.signerKind === "device" ? "the machine's gateway" : "the operator"} <span className="mono">{s.work.signerEns ?? shortAddr(s.work.signer)}</span>
+                        {!s.work.matches && <span className="bad-text"> · differ from Ordo&apos;s record</span>}
+                      </div>
+                    )}
                   </td>
                   <td>{s.state.replaceAll("_", " ")}</td>
                 </tr>

@@ -100,7 +100,7 @@ beforeAll(async () => {
   pub = createPublicClient({ chain: foundry, transport });
   const deployer = createWalletClient({ chain: foundry, transport, account: privateKeyToAccount(funderKey) });
   const deploy = async (abi: Abi, bytecode: Hex, args: unknown[]) => (await pub.waitForTransactionReceipt({ hash: await deployer.deployContract({ abi, bytecode, args } as never) })).contractAddress!;
-  addr.trust = await deploy(ORDO_TRUST_ABI as Abi, ORDO_TRUST_BYTECODE, [parseEther("10"), 7n * 24n * 3600n]);
+  addr.trust = await deploy(ORDO_TRUST_ABI as Abi, ORDO_TRUST_BYTECODE, [parseEther("10"), 7n * 24n * 3600n, privateKeyToAccount(relayer).address]);
   addr.orders = await deploy(ORDO_WORK_ORDERS_ABI as Abi, ORDO_WORK_ORDERS_BYTECODE, [addr.trust]);
   const policies = await deploy(ORDO_POLICIES_ABI as Abi, ORDO_POLICIES_BYTECODE, [addr.trust]);
   ({ sys, app } = await boot(

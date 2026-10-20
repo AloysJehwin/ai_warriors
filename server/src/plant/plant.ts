@@ -231,6 +231,17 @@ export class PlantService {
     await this.saveState(assetId, { ok: true, latest: this.toLatest([row]) });
   }
 
+  /** Observations a machine's gateway pushed (its request is signed with the gateway's key; Readings checks that). */
+  async gatewayObservations(assetId: string, rows: { signal: string; ts: string; value: number | null; text: string | null }[]) {
+    const now = this.now();
+    const clean = rows
+      .map((r) => ({ signal: r.signal.trim().toLowerCase().replace(/\s+/g, "_"), ts: new Date(r.ts).toISOString(), value: r.value, text: r.text, quality: "good" as Quality }))
+      .filter((r) => KEEP_SIGNALS.has(r.signal) && Math.abs(Date.parse(r.ts) - now) < 86_400_000);
+    const inserted = await this.store(assetId, clean);
+    await this.saveState(assetId, { polled: true, ok: true, error: null, latest: this.toLatest(clean) });
+    return inserted;
+  }
+
   async samples(assetId: string, minutes: number): Promise<TelemetrySample[]> {
     const since = new Date(this.now() - minutes * 60_000).toISOString();
     const r = await this.db.query<{ signal: string; ts: string; value: number | null; quality: Quality }>(

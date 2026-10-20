@@ -1,32 +1,24 @@
 import { describe, expect, it } from "vitest";
 import { decodeErrorResult, parseEther, type Abi, type Address, type Hex } from "viem";
 import { artifact, chain } from "./chain.js";
+import { ORDO_RELEASE, ORDO_SIGNATURE, PROOF_DOMAIN, trustDomain } from "./sigs.js";
 
-const TYPES = {
-  OrdoSignature: [
-    { name: "action", type: "string" },
-    { name: "entity", type: "string" },
-    { name: "meaning", type: "string" },
-    { name: "comment", type: "string" },
-    { name: "site", type: "string" },
-    { name: "nonce", type: "string" },
-    { name: "issuedAt", type: "string" },
-  ],
-} as const;
 const SITE = "site_pune1";
-const ROLE = { OPERATOR: 1, SUPERVISOR: 2, VALIDATOR: 4, PLANT_MANAGER: 8, ADMIN: 16, VENDOR: 32 } as const;
+const ROLE = { OPERATOR: 1, SUPERVISOR: 2, VALIDATOR: 4, PLANT_MANAGER: 8, ADMIN: 16, VENDOR: 32, DEVICE: 64 } as const;
 let nonce = 0;
 
 async function setup() {
   const c = await chain();
-  const trust = await c.deploy("OrdoTrust", [parseEther("10"), 7 * 24 * 3600]);
+  // account 4 relays everything and is Ordo's registrar
+  const trust = await c.deploy("OrdoTrust", [parseEther("10"), 7 * 24 * 3600, c.accounts[4]]);
   // 0 admin/plant manager · 1 QE validator · 2 second validator · 3 process engineer · 4 relayer · 5 stranger · 6 treasury
   const acct = c.accounts;
   const sign = async (who: number, action: string, entity: string, site = SITE) => {
     const message = { action, entity, meaning: action, comment: "", site, nonce: `n${++nonce}`, issuedAt: new Date().toISOString() };
-    const signature = await c.wallet(who).signTypedData({ domain: { name: "Ordo", version: "1", chainId: 31337 }, types: TYPES, primaryType: "OrdoSignature", message });
+    const signature = await c.wallet(who).signTypedData({ domain: trustDomain(31337, trust.address), types: ORDO_SIGNATURE, primaryType: "OrdoSignature", message });
     return { ...message, signature };
   };
+  const register = async (treasury = c.accounts[6]!, by = 0, relayer = 4) => write(relayer, "registerSite", [SITE, treasury, await sign(by, "site.register", `${SITE}#${treasury.toLowerCase()}`)]);
   const write = async (from: number, fn: string, args: unknown[], value?: bigint) => {
     const account = c.wallet(from).account;
     await c.pub.simulateContract({ account, address: trust.address, abi: trust.abi, functionName: fn, args, value } as never);
@@ -36,7 +28,7 @@ async function setup() {
   const read = <T>(fn: string, args: unknown[]) => c.pub.readContract({ address: trust.address, abi: trust.abi, functionName: fn, args }) as Promise<T>;
   const ent = (a: Address, role: keyof typeof ROLE) => `${a.toLowerCase()}#${role}`;
   const grant = async (who: number, role: keyof typeof ROLE, by = 0) => write(4, "grantRole", [SITE, acct[who], ROLE[role], await sign(by, "role.grant", ent(acct[who]!, role))]);
-  return { ...c, trust, sign, write, read, ent, grant, acct };
+  return { ...c, trust, sign, write, read, ent, grant, acct, register };
 }
 type T = Awaited<ReturnType<typeof setup>>;
 
@@ -69,30 +61,52 @@ const reverts = async (p: Promise<unknown>, name: string) => {
 /** Site registered by 0 (admin + plant manager); 1 and 2 are staked validators; 3 a process engineer. */
 async function staffed(): Promise<T> {
   const t = await setup();
-  await t.write(4, "registerSite", [SITE, t.acct[6], await t.sign(0, "site.register", SITE)]);
+  await t.register();
   for (const v of [0, 1, 2]) await t.grant(v, "VALIDATOR");
   for (const v of [0, 1, 2]) await t.write(v, "stake", [SITE], parseEther("10"));
   return t;
 }
-const releaseSigs = async (t: T, pkg: string, who: [number, number, number]) => [
-  await t.sign(who[0], "validation.sign", `${pkg}#performed`),
-  await t.sign(who[1], "validation.sign", `${pkg}#reviewed`),
-  await t.sign(who[2], "validation.sign", `${pkg}#approved`),
+const lotOf = (pkg: string, contentHash: Hex = `0x${"ab".repeat(32)}`, proofRoot: Hex = `0x${"cd".repeat(32)}`) => ({ siteId: SITE, lotLabel: "lot-so-1", packageId: pkg, runId: "run_1", contentHash, proofRoot });
+type Lot = ReturnType<typeof lotOf>;
+const releaseSig = async (t: T, who: number, lot: Lot, meaning: string, deadline = BigInt(Math.floor(Date.now() / 1000) + 86_400)) => {
+  const message = { site: lot.siteId, packageId: lot.packageId, runId: lot.runId, lot: lot.lotLabel, meaning, statement: `${meaning} ${lot.packageId}`, comment: "", contentHash: lot.contentHash, proofRoot: lot.proofRoot, nonce: `r${++nonce}`, deadline };
+  const signature = await t.wallet(who).signTypedData({ domain: PROOF_DOMAIN, types: ORDO_RELEASE, primaryType: "OrdoRelease", message });
+  return { ...message, signature };
+};
+const releaseSigs = async (t: T, lot: Lot, who: [number, number, number]) => [
+  await releaseSig(t, who[0], lot, "performed"),
+  await releaseSig(t, who[1], lot, "reviewed"),
+  await releaseSig(t, who[2], lot, "approved"),
 ];
 
 describe("OrdoTrust: sites and role credentials", () => {
-  it("registers a site from the admin's signature, relayed by anyone", async () => {
+  it("registers a site from the admin's signature over the site and its treasury, sent by Ordo's registrar", async () => {
     const t = await setup();
-    await t.write(4, "registerSite", [SITE, t.acct[6], await t.sign(0, "site.register", SITE)]);
+    // nobody but the registrar can claim a site id, even with a valid admin signature
+    await reverts(t.register(t.acct[6], 5, 5), "NotRegistrar");
+    // the treasury is signed: a relayer cannot swap in its own quality fund
+    await reverts(t.write(4, "registerSite", [SITE, t.acct[4], await t.sign(0, "site.register", `${SITE}#${t.acct[6]!.toLowerCase()}`)]), "WrongEntity");
+    await t.register();
     expect(await t.read<boolean>("hasRole", [SITE, t.acct[0], ROLE.ADMIN])).toBe(true);
     expect(await t.read<boolean>("hasRole", [SITE, t.acct[0], ROLE.PLANT_MANAGER])).toBe(true);
     expect(await t.read<boolean>("hasRole", [SITE, t.acct[4], ROLE.ADMIN])).toBe(false);
-    await reverts(t.write(4, "registerSite", [SITE, t.acct[6], await t.sign(5, "site.register", SITE)]), "SiteExists");
+    expect((await t.read<readonly [boolean, Address]>("sites", [await t.read("siteKey", [SITE])]))[1]).toBe(t.acct[6]);
+    await reverts(t.register(t.acct[6], 5), "SiteExists");
+  });
+
+  it("refuses a signature made for another deployment of OrdoTrust, so old grants cannot be replayed on a new one", async () => {
+    const t = await setup();
+    const other = await t.deploy("OrdoTrust", [parseEther("10"), 7 * 24 * 3600, t.accounts[4]]);
+    const message = { action: "site.register", entity: `${SITE}#${t.acct[6]!.toLowerCase()}`, meaning: "", comment: "", site: SITE, nonce: "elsewhere", issuedAt: new Date().toISOString() };
+    const signature = await t.wallet(0).signTypedData({ domain: trustDomain(31337, other.address), types: ORDO_SIGNATURE, primaryType: "OrdoSignature", message });
+    await t.write(4, "registerSite", [SITE, t.acct[6], { ...message, signature }]);
+    // the signer recovered here is not account 0, so it holds no role
+    expect(await t.read<boolean>("hasRole", [SITE, t.acct[0], ROLE.ADMIN])).toBe(false);
   });
 
   it("grants a role only with a site admin's signature for exactly that account and role", async () => {
     const t = await setup();
-    await t.write(4, "registerSite", [SITE, t.acct[6], await t.sign(0, "site.register", SITE)]);
+    await t.register();
     await t.grant(1, "OPERATOR");
     expect(await t.read<boolean>("hasRole", [SITE, t.acct[1], ROLE.OPERATOR])).toBe(true);
     // a stranger cannot grant
@@ -114,7 +128,7 @@ describe("OrdoTrust: sites and role credentials", () => {
 describe("OrdoTrust: validator staking", () => {
   it("only credentialed validators can stake; active needs the minimum and no pending unstake", async () => {
     const t = await setup();
-    await t.write(4, "registerSite", [SITE, t.acct[6], await t.sign(0, "site.register", SITE)]);
+    await t.register();
     await reverts(t.write(1, "stake", [SITE], parseEther("10")), "NotValidator");
     await t.grant(1, "VALIDATOR");
     await t.write(1, "stake", [SITE], parseEther("4"));
@@ -132,7 +146,7 @@ describe("OrdoTrust: validator staking", () => {
 
   it("after the cooldown anyone can pay a stake back, only to the validator (the call Hedera's scheduler makes)", async () => {
     const t = await setup();
-    await t.write(4, "registerSite", [SITE, t.acct[6], await t.sign(0, "site.register", SITE)]);
+    await t.register();
     await t.grant(1, "VALIDATOR");
     await t.write(1, "stake", [SITE], parseEther("10"));
     await reverts(t.write(4, "withdrawFor", [SITE, t.acct[1]]), "StillLocked");
@@ -147,22 +161,43 @@ describe("OrdoTrust: validator staking", () => {
 });
 
 describe("OrdoTrust: releases need staked validators", () => {
-  it("records a release signed by a process engineer, a staked reviewer and a staked plant manager", async () => {
+  it("records a release signed by a process engineer, a staked reviewer and a staked plant manager, once", async () => {
     const t = await staffed();
-    const r = await t.write(4, "recordRelease", [SITE, "vp_1", `0x${"ab".repeat(32)}`, await releaseSigs(t, "vp_1", [3, 1, 0])]);
+    await t.grant(3, "OPERATOR");
+    const lot = lotOf("vp_1");
+    const r = await t.write(4, "recordRelease", [lot, await releaseSigs(t, lot, [3, 1, 0])]);
     expect(r.status).toBe("success");
-    const rel = await t.read<readonly [Hex, Address, Address, Address, bigint]>("releases", [await t.read("siteKey", [SITE]), await t.read("siteKey", ["vp_1"])]);
-    expect(rel[2]).toBe(t.acct[1]);
+    const rel = await t.read<readonly [Hex, Hex, Address, Address, Address, bigint]>("releases", [await t.read("siteKey", [SITE]), await t.read("siteKey", ["vp_1"])]);
+    expect(rel.slice(0, 4)).toEqual([lot.contentHash, lot.proofRoot, t.acct[3], t.acct[1]]);
+    // the record cannot be overwritten with another hash
+    const again = lotOf("vp_1", `0x${"ee".repeat(32)}`);
+    await reverts(t.write(4, "recordRelease", [again, await releaseSigs(t, again, [3, 1, 0])]), "AlreadyReleased");
+  });
+
+  it("signatures cover the content, the proofs and the lot: none of them can be swapped by whoever relays", async () => {
+    const t = await staffed();
+    await t.grant(3, "OPERATOR");
+    const lot = lotOf("vp_9");
+    const sigs = await releaseSigs(t, lot, [3, 1, 0]);
+    for (const swapped of [{ ...lot, contentHash: `0x${"11".repeat(32)}` }, { ...lot, proofRoot: `0x${"22".repeat(32)}` }, { ...lot, lotLabel: "lot-so-2" }, { ...lot, runId: "run_2" }])
+      await reverts(t.write(4, "recordRelease", [swapped, sigs]), "WrongRelease");
+    // a "reviewed" signature cannot stand in for "approved"
+    await reverts(t.write(4, "recordRelease", [lot, [sigs[0], sigs[1], await releaseSig(t, 0, lot, "reviewed")]]), "WrongMeaning");
+    // an expired signature is refused
+    const late = [sigs[0], sigs[1], await releaseSig(t, 0, lot, "approved", 1n)];
+    await reverts(t.write(4, "recordRelease", [lot, late]), "Expired");
   });
 
   it("rejects an unstaked reviewer, a reviewer who is unstaking, a non-manager approver and one person signing twice", async () => {
     const t = await staffed();
+    const l = (p: string) => lotOf(p);
+    // the performer is the package owner, whom Ordo checks; process engineers hold no OrdoTrust role
     await t.grant(5, "VALIDATOR"); // credential but no stake
-    await reverts(t.write(4, "recordRelease", [SITE, "vp_2", `0x${"00".repeat(32)}`, await releaseSigs(t, "vp_2", [3, 5, 0])]), "NotAuthorized");
-    await reverts(t.write(4, "recordRelease", [SITE, "vp_3", `0x${"00".repeat(32)}`, await releaseSigs(t, "vp_3", [3, 1, 2])]), "NotAuthorized");
-    await reverts(t.write(4, "recordRelease", [SITE, "vp_4", `0x${"00".repeat(32)}`, await releaseSigs(t, "vp_4", [3, 0, 0])]), "DuplicateSigner");
+    await reverts(t.write(4, "recordRelease", [l("vp_2"), await releaseSigs(t, l("vp_2"), [3, 5, 0])]), "NotAuthorized");
+    await reverts(t.write(4, "recordRelease", [l("vp_3"), await releaseSigs(t, l("vp_3"), [3, 1, 2])]), "NotAuthorized");
+    await reverts(t.write(4, "recordRelease", [l("vp_4"), await releaseSigs(t, l("vp_4"), [3, 0, 0])]), "DuplicateSigner");
     await t.write(1, "requestUnstake", [SITE]);
-    await reverts(t.write(4, "recordRelease", [SITE, "vp_5", `0x${"00".repeat(32)}`, await releaseSigs(t, "vp_5", [3, 1, 0])]), "NotAuthorized");
+    await reverts(t.write(4, "recordRelease", [l("vp_5"), await releaseSigs(t, l("vp_5"), [3, 1, 0])]), "NotAuthorized");
   });
 });
 

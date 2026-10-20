@@ -68,7 +68,7 @@ let snarkjsReady: Promise<{ m: typeof import("snarkjs"); curve: unknown }> | nul
  * shared multi-threaded curve, so a single-threaded one is put in its place first. circomlibjs bundles its own
  * ffjavascript, which clears that shared global when it loads, so it loads first and the curve is put back on every call.
  */
-async function snark() {
+export async function snark() {
   snarkjsReady ??= import("circomlibjs")
     .then(() => import("snarkjs"))
     .then(async (m) => ({ m, curve: await m.curves.getCurveFromName("bn128", { singleThread: true }) }));

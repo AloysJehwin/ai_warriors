@@ -215,6 +215,52 @@ export function createApp(sys: System, opts: AppOptions = {}) {
     });
   });
 
+  app.get("/v1/public/zk/stage-check", (c) => {
+    const vkey = sys.stageProofs.verificationKey();
+    if (!vkey) throw new HttpError(404, "This deployment does not prove stages");
+    c.header("access-control-allow-origin", "*");
+    c.header("cache-control", "public, max-age=3600");
+    return c.json({
+      circuit: "stage_check",
+      system: "groth16-bn254",
+      publicSignals: ["subject", "commitment", "kind[4]", "op[4]", "target[4]"],
+      statement:
+        "The prover knows good, scrap, startedAt, endedAt and salt with Poseidon(subject, good, scrap, startedAt, endedAt, salt) = commitment, and each used criterion holds: kind 1 yield %, 2 scrap %, 3 defects ppm, 4 cycle time in s, 5 cycle time in min; op 0 ≥, 1 ≤, 2 =; targets ×10⁴. The commitment is what the machine's gateway (or the operator) signed as an OrdoReading.",
+      subject: "sha256('ordo:stage:<siteId>:<runId>:<stageCode>') mod the BN254 scalar field",
+      verificationKey: vkey,
+      ceremony: sys.stageProofs.ceremony(),
+    });
+  });
+
+  // ---------------- Edge: a machine's gateway, authenticated by its own key on every request ----------------
+  const edge = async (c: Context<Env>) => {
+    const raw = c.req.method === "GET" ? "" : await c.req.text();
+    const device = await sys.readings.device({ device: c.req.header("x-ordo-device"), ts: c.req.header("x-ordo-ts"), nonce: c.req.header("x-ordo-nonce"), sig: c.req.header("x-ordo-sig") }, c.req.method, c.req.path, raw);
+    return { device, json: () => JSON.parse(raw || "{}") as unknown };
+  };
+  const Observation = z.object({ signal: z.string().trim().min(1).max(40), ts: z.string().datetime(), value: z.number().finite().nullable(), text: z.string().max(200).nullable().default(null) });
+  const ReadingBody = z.object({
+    runId: z.string().min(1).max(64),
+    stage: z.string().min(1).max(32),
+    good: z.number().int().min(0),
+    scrap: z.number().int().min(0),
+    salt: z.string().regex(/^\d{1,80}$/),
+    commitment: z.string().regex(/^\d{1,80}$/),
+    anchor: z.string().regex(/^0x[0-9a-fA-F]{64}$/).transform((x) => x as `0x${string}`),
+    signedAt: z.number().int().positive(),
+    signature: Hex,
+  });
+  app.get("/v1/edge/stages", async (c) => c.json({ stages: await sys.readings.edgeStages((await edge(c)).device) }));
+  app.post("/v1/edge/observations", async (c) => {
+    const e = await edge(c);
+    const b = z.object({ assetId: z.string().min(1), observations: z.array(Observation).min(1).max(1000) }).parse(e.json());
+    return c.json(await sys.readings.observations(e.device, b.assetId, b.observations));
+  });
+  app.post("/v1/edge/readings", async (c) => {
+    const e = await edge(c);
+    return c.json(await sys.readings.submitFromDevice(e.device, ReadingBody.parse(e.json())));
+  });
+
   // ---------------- Running pipelines: public, no sign-in, so a newcomer can see what a site runs and apply for a role ----------------
   app.get("/v1/public/pipelines", async (c) => {
     c.header("cache-control", "public, max-age=15");
@@ -437,6 +483,21 @@ export function createApp(sys: System, opts: AppOptions = {}) {
     const b = await body(c, z.object({ good: z.number().int().min(0), scrap: z.number().int().min(0), complete: z.boolean().default(false), note: z.string().max(300).optional() }));
     await sys.engine.record(sid(c), actor(c), c.req.param("runId"), c.req.param("code"), b);
     return c.json(await sys.engine.view(sid(c), c.req.param("runId")));
+  });
+  // the operator of a stage with no gateway signs the counts they recorded (an OrdoReading over their commitment)
+  site.post("/runs/:runId/stages/:code/reading/sign-request", async (c) => {
+    need(c, "operator");
+    const b = await body(c, z.object({ good: z.number().int().min(0), scrap: z.number().int().min(0) }));
+    return c.json(await sys.readings.operatorRequest(sid(c), me(c).user, c.req.param("runId"), c.req.param("code"), b));
+  });
+  site.post("/runs/:runId/stages/:code/reading", async (c) => {
+    need(c, "operator");
+    const b = await body(c, ReadingBody.omit({ runId: true, stage: true }));
+    return c.json(await sys.readings.submitFromOperator(sid(c), me(c).user, { ...b, runId: c.req.param("runId"), stage: c.req.param("code") }));
+  });
+  site.get("/runs/:runId/proofs", async (c) => {
+    const [run, stages] = await Promise.all([sys.engine.view(sid(c), c.req.param("runId")), sys.stageProofs.forRun(c.req.param("runId"))]);
+    return c.json({ runId: run.id, stages: [...stages.values()] });
   });
   site.post("/runs/:runId/stages/:code/hold", async (c) => {
     need(c, "operator");

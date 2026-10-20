@@ -1,7 +1,7 @@
 import { createWalletClient, custom, formatUnits, getAddress, parseAbi, parseEther, type EIP1193Provider } from "viem";
 import { createSiweMessage } from "viem/siwe";
 import { api } from "../api";
-import type { Me, TrustChainInfo, TypedSignature } from "../types";
+import type { Me, ReadingTyped, TrustChainInfo, TypedSignature } from "../types";
 
 export interface WalletInfo {
   id: string;
@@ -90,10 +90,12 @@ export async function walletChainId(): Promise<number | undefined> {
   return createWalletClient({ transport: custom(active.provider) }).getChainId().catch(() => undefined);
 }
 
-/** Sign the exact EIP-712 typed data the server issued. */
-export async function signTyped(typed: TypedSignature, expectedAddress: string): Promise<`0x${string}`> {
+/** Sign the exact EIP-712 typed data the server issued. Its uint fields arrive as decimal strings (JSON), so they become bigints. */
+export async function signTyped(typed: TypedSignature | ReadingTyped, expectedAddress: string): Promise<`0x${string}`> {
   const { c, account } = await client(expectedAddress);
-  return c.signTypedData({ account, domain: typed.domain, types: typed.types, primaryType: typed.primaryType, message: typed.message } as never);
+  const message: Record<string, unknown> = { ...typed.message };
+  for (const f of typed.types[typed.primaryType] ?? []) if (/^uint/.test(f.type) && typeof message[f.name] === "string") message[f.name] = BigInt(message[f.name] as string);
+  return c.signTypedData({ account, domain: typed.domain, types: typed.types, primaryType: typed.primaryType, message } as never);
 }
 
 export const hasActiveWallet = () => active !== null;

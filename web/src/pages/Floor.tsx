@@ -93,7 +93,7 @@ export function Floor() {
                           <td className="r">{pct(a.oee, 0)}</td>
                           <td className="agent">{AGENT_LABEL[a.owningAgent]}</td>
                           <td className="small">
-                            {a.source.type === "mtconnect" ? "MTConnect" : a.source.type === "replay" ? "Dataset" : "Manual"}
+                            {a.source.type === "mtconnect" ? "MTConnect" : a.source.type === "replay" ? "Dataset" : a.source.type === "gateway" ? "Signing gateway" : "Manual"}
                             <div className={a.sourceError ? "bad-text small" : "faint small"}>{a.sourceError ? "error" : `data ${ago(a.lastDataAt)}`}</div>
                           </td>
                         </tr>
@@ -509,6 +509,10 @@ function AssetDrawer({ id, onClose, onEdit }: { id: string; onClose: () => void;
             </>
           ) : src.type === "replay" ? (
             "Uploaded dataset replay"
+          ) : src.type === "gateway" ? (
+            <>
+              Signing gateway · <span className="mono small">{src.device}</span> · signs each stage&apos;s counts with its own key
+            </>
           ) : (
             "Manual readings"
           )}
@@ -729,6 +733,8 @@ function AssetForm({ asset, onClose }: { asset: AssetView | null; onClose: () =>
   const [device, setDevice] = useState<string | null>(src0?.type === "mtconnect" ? src0.device : null);
   const [devices, setDevices] = useState<{ name: string; model: string | null }[]>(src0?.type === "mtconnect" ? [{ name: src0.device, model: null }] : []);
   const [poll, setPoll] = useState(String(src0?.type === "mtconnect" ? src0.pollSeconds : 10));
+  const [gateway, setGateway] = useState(src0?.type === "gateway" ? src0.device : "");
+  const gatewayOk = /^0x[0-9a-fA-F]{40}$/.test(gateway.trim());
   const [cycle, setCycle] = useState(asset?.idealCycleS?.toString() ?? "");
   const [limits, setLimits] = useState<LimitRow[]>(
     asset ? Object.entries(asset.limits).map(([signal, l]) => ({ signal, warn: l.warn?.toString() ?? "", alarm: l.alarm?.toString() ?? "", unit: l.unit })) : [{ signal: "temperature", warn: "", alarm: "", unit: "°C" }],
@@ -754,7 +760,16 @@ function AssetForm({ asset, onClose }: { asset: AssetView | null; onClose: () =>
       if (!l.signal.trim() || (l.warn === "" && l.alarm === "")) continue;
       lim[l.signal.trim()] = { ...(l.warn !== "" ? { warn: Number(l.warn) } : {}), ...(l.alarm !== "" ? { alarm: Number(l.alarm) } : {}), unit: l.unit };
     }
-    const source: DataSource = type === "mtconnect" ? { type, agentUrl: url.trim(), device: device!, pollSeconds: Number(poll) } : type === "replay" ? (src0?.type === "replay" && src0.seriesId ? { type, seriesId: src0.seriesId } : { type }) : { type: "manual" };
+    const source: DataSource =
+      type === "mtconnect"
+        ? { type, agentUrl: url.trim(), device: device!, pollSeconds: Number(poll) }
+        : type === "replay"
+          ? src0?.type === "replay" && src0.seriesId
+            ? { type, seriesId: src0.seriesId }
+            : { type }
+          : type === "gateway"
+            ? { type, device: gateway.trim().toLowerCase() }
+            : { type: "manual" };
     const body = { name: name.trim(), kind, zoneId: zone, owningAgent: agent, source, limits: lim, idealCycleS: cycle ? Number(cycle) : null, description: null };
     if (asset) await api.put(path(`/assets/${asset.id}`), body);
     else await api.post(path("/assets"), body);
@@ -774,7 +789,7 @@ function AssetForm({ asset, onClose }: { asset: AssetView | null; onClose: () =>
           <button type="button" className="btn" onClick={onClose}>
             Cancel
           </button>
-          <Action className="btn accent" disabled={!name.trim() || (type === "mtconnect" && !device)} onClick={save}>
+          <Action className="btn accent" disabled={!name.trim() || (type === "mtconnect" && !device) || (type === "gateway" && !gatewayOk)} onClick={save}>
             {asset ? "Save" : "Register"}
           </Action>
         </div>
@@ -808,6 +823,7 @@ function AssetForm({ asset, onClose }: { asset: AssetView | null; onClose: () =>
           onChange={setType}
           options={[
             { value: "mtconnect", label: "MTConnect agent" },
+            { value: "gateway", label: "Signing gateway" },
             { value: "replay", label: "Dataset (CSV)" },
             { value: "manual", label: "Manual readings" },
           ]}
@@ -831,6 +847,14 @@ function AssetForm({ asset, onClose }: { asset: AssetView | null; onClose: () =>
               <Select value={poll} onChange={setPoll} options={["5", "10", "15", "30", "60"].map((s) => ({ value: s, label: `${s} seconds` }))} searchable={false} />
             </Field>
           </div>
+        </div>
+      )}
+      {type === "gateway" && (
+        <div className="subform">
+          <Field label="Gateway address" hint="The gateway next to the machine holds its own key and signs every request and each stage's counts with it. Run `pnpm --filter @ordo/server gateway` on it once to make a key and print this address.">
+            <input className="input mono" value={gateway} onChange={(e) => setGateway(e.target.value)} placeholder="0x…" />
+          </Field>
+          <p className="muted small">The site issues the gateway a member name with the device role, so the lot&apos;s ENS name accepts the counts it signs. Ordo proves each stage&apos;s criteria from them without publishing the counts.</p>
         </div>
       )}
       {type === "replay" && <p className="muted small">After registering, open the asset and upload a CSV recorded from a real machine, then play it back.</p>}

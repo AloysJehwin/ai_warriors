@@ -3,6 +3,12 @@ pragma solidity ^0.8.24;
 
 import {OrdoSigned} from "./OrdoSigned.sol";
 import {IExtendedResolver, ITextResolver, OrdoEnsName, OrdoEnsRoles} from "./OrdoEnsRoles.sol";
+import {OrdoProofs} from "./OrdoProofs.sol";
+
+/// The generated Groth16 verifier of circuits/stage_check.circom (OrdoStageVerifier).
+interface IStageVerifier {
+    function verifyProof(uint256[2] calldata a, uint256[2][2] calldata b, uint256[2] calldata c, uint256[14] calldata signals) external view returns (bool);
+}
 
 /// The gateway call a CCIP-Read client makes for an off-chain answer (EIP-3668, as in ENS's OffchainResolver).
 interface IResolverService {
@@ -15,8 +21,12 @@ interface IResolverService {
 ///
 /// It is the resolver of each site name. ENSv2 resolution walks down to the closest name with a resolver, so every
 /// `lot-…` name under a site reaches it (ENSIP-10 wildcard):
-///  - A lot's release record is on-chain: `recordRelease` stores it only with three EIP-712 signatures from people
-///    whose ENS member names carry the right roles (OrdoEnsRoles), so revoking a name stops that person releasing.
+///  - A lot's release record is on-chain, and it is the lot's proof of work. `recordRelease` stores it only when
+///      1. three people whose ENS member names carry the right roles (OrdoEnsRoles) signed an `OrdoRelease` naming this
+///         site, package, run, lot, content hash and proof root (so revoking a name stops that person releasing), and
+///      2. every stage proof checks: its reading was signed by a gateway holding DEVICE or an operator at the site,
+///         and its Groth16 proof (OrdoStageVerifier) shows the signed counts meet the stage's criteria, and the
+///         stages fold to the proof root the three people signed.
 ///    `com.ordo.release*` text records are answered from it directly.
 ///  - Everything else about the lot (passport URL, status, product…) comes from Ordo's ledger through CCIP-Read
 ///    (EIP-3668): the resolver reverts with OffchainLookup, the client asks Ordo's gateway, and `resolveWithProof`
@@ -26,6 +36,8 @@ contract OrdoLotResolver is OrdoSigned {
     struct Release {
         bytes32 site;
         bytes32 contentHash;
+        bytes32 proofRoot;
+        uint16 stagesProven;
         address performedBy;
         address reviewedBy;
         address approvedBy;
@@ -34,6 +46,7 @@ contract OrdoLotResolver is OrdoSigned {
     }
 
     OrdoEnsRoles public immutable credentials;
+    IStageVerifier public immutable stageVerifier;
     IExtendedResolver public immutable fallbackResolver;
     address public owner;
     address public signer;
@@ -43,7 +56,9 @@ contract OrdoLotResolver is OrdoSigned {
     mapping(bytes32 => Release) public latestRelease;
     mapping(bytes32 => uint256) public releaseCount;
 
-    event LotReleased(bytes32 indexed node, bytes32 indexed site, string lotLabel, string packageId, bytes32 contentHash, address performedBy, address reviewedBy, address approvedBy);
+    event LotReleased(bytes32 indexed node, bytes32 indexed site, string lotLabel, string packageId, bytes32 contentHash, bytes32 proofRoot, address performedBy, address reviewedBy, address approvedBy);
+    /// one stage of a released lot, proven: who signed its reading and the commitment the proof was checked against
+    event StageProven(bytes32 indexed node, string stage, string asset, address indexed signer, uint256 commitment, bytes32 anchor);
     event GatewayChanged(address signer, string[] urls);
 
     error OffchainLookup(address sender, string[] urls, bytes callData, bytes4 callbackFunction, bytes extraData);
@@ -54,14 +69,15 @@ contract OrdoLotResolver is OrdoSigned {
     error NotCredentialed(address signer, uint8 needs);
     error ExpiredAnswer();
     error BadAnswer();
+    error BadProof(string stage);
+    error WrongProofRoot();
+    error NotAttester(address signer);
 
     bytes4 private constant TEXT = ITextResolver.text.selector;
-    bytes32 private constant DOMAIN_TYPEHASH = keccak256("EIP712Domain(string name,string version,uint256 chainId)");
-    bytes32 private constant SIG_TYPEHASH =
-        keccak256("OrdoSignature(string action,string entity,string meaning,string comment,string site,string nonce,string issuedAt)");
 
-    constructor(OrdoEnsRoles _credentials, IExtendedResolver _fallback, address _signer, string[] memory _gateways) {
+    constructor(OrdoEnsRoles _credentials, IStageVerifier _stageVerifier, IExtendedResolver _fallback, address _signer, string[] memory _gateways) {
         credentials = _credentials;
+        stageVerifier = _stageVerifier;
         fallbackResolver = _fallback;
         owner = msg.sender;
         signer = _signer;
@@ -85,28 +101,47 @@ contract OrdoLotResolver is OrdoSigned {
 
     // ------------------------------------------------------------------ releases
 
-    /// Record that a lot was released. sigs = [performed, reviewed, approved], each action "validation.sign" with
-    /// entity "<packageId>#performed|reviewed|approved", the same signatures OrdoTrust takes. `chainIds` are the
-    /// chains each person signed for (their EIP-712 domain). Three different people: the performer must hold a role at the
+    /// Record that a lot was released, with its proof of work. sigs = [performed, reviewed, approved], each an
+    /// `OrdoRelease` (OrdoProofs) for exactly this lot. Three different people: the performer must hold a role at the
     /// site, the reviewer VALIDATOR, the approver VALIDATOR and PLANT_MANAGER, all through their ENS member names.
-    function recordRelease(string calldata siteId, string calldata lotLabel, string calldata packageId, bytes32 contentHash, uint256[3] calldata chainIds, OrdoSig[3] calldata sigs) external {
-        if (!_isLot(bytes(lotLabel))) revert NotALot();
-        bytes32 k = keccak256(bytes(siteId));
+    /// `proofs` are the lot's proven stages, in the order they fold into `lot.proofRoot`.
+    function recordRelease(OrdoProofs.ReleaseLot calldata lot, OrdoProofs.ReleaseSig[3] calldata sigs, OrdoProofs.StageProof[] calldata proofs) external {
+        if (!_isLot(bytes(lot.lotLabel))) revert NotALot();
+        bytes32 k = keccak256(bytes(lot.siteId));
         string[] memory site = credentials.siteLabels(k);
         if (site.length == 0) revert UnknownSite();
-        address performed = _consumeOn(sigs[0], siteId, string.concat(packageId, "#performed"), chainIds[0]);
-        address reviewed = _consumeOn(sigs[1], siteId, string.concat(packageId, "#reviewed"), chainIds[1]);
-        address approved = _consumeOn(sigs[2], siteId, string.concat(packageId, "#approved"), chainIds[2]);
-        if (performed == reviewed || performed == approved) revert DuplicateSigner(performed);
-        if (reviewed == approved) revert DuplicateSigner(reviewed);
-        _require(k, performed, 0);
-        _require(k, reviewed, credentials.VALIDATOR());
-        _require(k, approved, credentials.VALIDATOR() | credentials.PLANT_MANAGER());
-
-        bytes32 node = OrdoEnsName.namehash(OrdoEnsName.prepend(lotLabel, site));
-        latestRelease[node] = Release(k, contentHash, performed, reviewed, approved, uint64(block.timestamp), packageId);
+        address[3] memory who = _signers(k, lot, sigs);
+        bytes32 node = OrdoEnsName.namehash(OrdoEnsName.prepend(lot.lotLabel, site));
+        if (_proveStages(k, node, lot, proofs) != lot.proofRoot) revert WrongProofRoot();
+        latestRelease[node] = Release(k, lot.contentHash, lot.proofRoot, uint16(proofs.length), who[0], who[1], who[2], uint64(block.timestamp), lot.packageId);
         releaseCount[node] += 1;
-        emit LotReleased(node, k, lotLabel, packageId, contentHash, performed, reviewed, approved);
+        emit LotReleased(node, k, lot.lotLabel, lot.packageId, lot.contentHash, lot.proofRoot, who[0], who[1], who[2]);
+    }
+
+    /// The three signers, checked: each signed exactly this lot with its meaning, all different, each credentialed.
+    function _signers(bytes32 k, OrdoProofs.ReleaseLot calldata lot, OrdoProofs.ReleaseSig[3] calldata sigs) internal returns (address[3] memory who) {
+        who[0] = _consumeRelease(sigs[0], lot, "performed");
+        who[1] = _consumeRelease(sigs[1], lot, "reviewed");
+        who[2] = _consumeRelease(sigs[2], lot, "approved");
+        if (who[0] == who[1] || who[0] == who[2]) revert DuplicateSigner(who[0]);
+        if (who[1] == who[2]) revert DuplicateSigner(who[1]);
+        _require(k, who[0], 0);
+        _require(k, who[1], credentials.VALIDATOR());
+        _require(k, who[2], credentials.VALIDATOR() | credentials.PLANT_MANAGER());
+    }
+
+    /// Check every stage proof and fold them into the root the signers named.
+    function _proveStages(bytes32 k, bytes32 node, OrdoProofs.ReleaseLot calldata lot, OrdoProofs.StageProof[] calldata proofs) internal returns (bytes32 root) {
+        uint8 attesters = credentials.DEVICE() | credentials.OPERATOR();
+        for (uint256 i = 0; i < proofs.length; i++) {
+            OrdoProofs.StageProof calldata p = proofs[i];
+            address attester = OrdoProofs.recover(OrdoProofs.readingDigest(lot.siteId, lot.runId, p), p.readingSig);
+            if (credentials.roles(k, attester) & attesters == 0) revert NotAttester(attester);
+            uint256 subject = OrdoProofs.subjectOf(lot.siteId, lot.runId, p.stage);
+            if (!stageVerifier.verifyProof(p.a, p.b, p.c, OrdoProofs.signals(subject, p))) revert BadProof(p.stage);
+            root = OrdoProofs.fold(root, subject, p, attester);
+            emit StageProven(node, p.stage, p.asset, attester, p.commitment, p.anchor);
+        }
     }
 
     /// needs = 0: any role at the site
@@ -115,31 +150,11 @@ contract OrdoLotResolver is OrdoSigned {
         if (needs == 0 ? has == 0 : has & needs != needs) revert NotCredentialed(who, needs);
     }
 
-    function releaseDigest(OrdoSig calldata s, uint256 chainId) public pure returns (bytes32) {
-        bytes32 domain = keccak256(abi.encode(DOMAIN_TYPEHASH, keccak256("Ordo"), keccak256("1"), chainId));
-        bytes32 structHash = keccak256(
-            abi.encode(
-                SIG_TYPEHASH,
-                keccak256(bytes(s.action)),
-                keccak256(bytes(s.entity)),
-                keccak256(bytes(s.meaning)),
-                keccak256(bytes(s.comment)),
-                keccak256(bytes(s.site)),
-                keccak256(bytes(s.nonce)),
-                keccak256(bytes(s.issuedAt))
-            )
-        );
-        return keccak256(abi.encodePacked("\x19\x01", domain, structHash));
-    }
-
-    function _consumeOn(OrdoSig calldata s, string calldata siteId, string memory entity, uint256 chainId) internal returns (address) {
-        if (keccak256(bytes(s.action)) != keccak256("validation.sign")) revert WrongAction();
-        if (keccak256(bytes(s.site)) != keccak256(bytes(siteId))) revert WrongSite();
-        if (keccak256(bytes(s.entity)) != keccak256(bytes(entity))) revert WrongEntity();
-        bytes32 n = keccak256(bytes(s.nonce));
+    function _consumeRelease(OrdoProofs.ReleaseSig calldata s, OrdoProofs.ReleaseLot calldata lot, string memory meaning) internal returns (address) {
+        bytes32 n = OrdoProofs.releaseNonce(s);
         if (usedNonces[n]) revert NonceUsed();
         usedNonces[n] = true;
-        return _recover(releaseDigest(s, chainId), s.signature);
+        return OrdoProofs.releaseSigner(s, lot, meaning);
     }
 
     // ------------------------------------------------------------------ resolution
@@ -180,6 +195,7 @@ contract OrdoLotResolver is OrdoSigned {
         if (k == keccak256("com.ordo.release.package")) return (true, r.packageId);
         if (k == keccak256("com.ordo.release.at")) return (true, _dec(r.releasedAt));
         if (k == keccak256("com.ordo.release.count")) return (true, _dec(releaseCount[node]));
+        if (k == keccak256("com.ordo.release.proofs")) return (true, string.concat(_dec(r.stagesProven), " stages proven, root ", _hex32(r.proofRoot)));
         if (k == keccak256("com.ordo.release.signers"))
             return (true, string.concat(credentials.memberName(r.site, r.performedBy), ",", credentials.memberName(r.site, r.reviewedBy), ",", credentials.memberName(r.site, r.approvedBy)));
         return (false, "");

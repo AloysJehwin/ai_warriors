@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import type { Hex } from "viem";
-import type { Signatures, TypedSignature, User } from "../auth/auth.js";
+import type { ReleaseTyped, Signatures, TypedSignature, User } from "../auth/auth.js";
 import { chainErrorMessage } from "../chain/errors.js";
-import { sigArg, type ChainRole, type TrustChain } from "../chain/trust.js";
+import { releaseSigArg, sigArg, type ChainRole, type ReleaseLot, type ReleaseSigArg, type TrustChain } from "../chain/trust.js";
 import type { Db, Queryable } from "../db/db.js";
 import { hashOf } from "../domain/canonical.js";
 import { canApproveAny } from "../domain/policy.js";
@@ -68,6 +68,9 @@ export interface RelayView {
 }
 
 const iso = (s: string | null) => (s ? new Date(s).toISOString() : null);
+// relay payloads are stored as JSON, where a bigint deadline is a string
+const jsonSafe = (s: ReleaseSigArg) => ({ ...s, deadline: s.deadline.toString() });
+const fromJsonSafe = (s: ReturnType<typeof jsonSafe>): ReleaseSigArg => ({ ...s, deadline: BigInt(s.deadline) });
 
 /**
  * Who may do what, and the proof of it. Onboarding requests become roles only with a site
@@ -94,6 +97,11 @@ export class Trust {
   chainIdFor(contractChecked: boolean, client?: number): number {
     if (contractChecked && this.chain) return this.chain.cfg.chainId;
     return client ?? this.defaultChainId;
+  }
+  /** The domain for a signature OrdoTrust verifies: its chain and its address, so it cannot be replayed on another deployment. */
+  contractDomain(contractChecked: boolean, client?: number): { chainId: number; verifyingContract?: Hex } {
+    if (contractChecked && this.chain) return { chainId: this.chain.cfg.chainId, verifyingContract: this.chain.cfg.address };
+    return { chainId: client ?? this.defaultChainId };
   }
 
   // ---------------------------------------------------------------- onboarding
@@ -228,7 +236,14 @@ export class Trust {
     const label = Trust.labelOf(r.kind, r.role);
     const who = (JSON.parse(r.form_json) as Record<string, string>).fullName ?? r.address;
     if (decision === "approve")
-      return this.sigs.request(admin, { action: "role.grant", entity: this.entityOf(r), meaning: `Approve ${who} (${r.address}) as ${label}`, comment, site: siteId, chainId: this.chainIdFor(this.chainRoleOf(r.kind, r.role) !== null, clientChainId) });
+      return this.sigs.request(admin, {
+        action: "role.grant",
+        entity: this.entityOf(r),
+        meaning: `Approve ${who} (${r.address}) as ${label}`,
+        comment,
+        site: siteId,
+        ...this.contractDomain(this.chainRoleOf(r.kind, r.role) !== null, clientChainId),
+      });
     return this.sigs.request(admin, { action: "onboarding.reject", entity: id, meaning: `Decline ${who} as ${label}`, comment, site: siteId, chainId: clientChainId ?? this.defaultChainId });
   }
 
@@ -335,7 +350,7 @@ export class Trust {
     const p = JSON.parse(r.payload_json);
     await this.db.query("UPDATE chain_relays SET status = 'superseded' WHERE id = $1", [r.id]);
     if (r.kind === "grant") return this.relayGrant(siteId, ref, p.address, p.role, p.sig);
-    if (r.kind === "release") return this.relay(siteId, "release", ref, p, () => this.chain!.recordRelease(siteId, ref, p.contentHash, p.sigs));
+    if (r.kind === "release") return this.relay(siteId, "release", ref, p, () => this.chain!.recordRelease(p.lot, p.sigs.map(fromJsonSafe)));
     const other = this.retryers.get(r.kind);
     if (other) return this.relay(siteId, r.kind, ref, p, () => other(siteId, ref, p));
     return null;
@@ -354,11 +369,19 @@ export class Trust {
   async registerRequest(siteId: string, admin: User, name: string) {
     if (!this.chain) throw new HttpError(409, "No trust contract is configured");
     if (await this.siteRegistered(siteId)) throw new HttpError(409, "This site is already registered on-chain");
-    return this.sigs.request(admin, { action: "site.register", entity: siteId, meaning: `Register ${name} in OrdoTrust with you as its first administrator`, comment: "", site: siteId, chainId: this.chain.cfg.chainId });
+    // the admin is also the site's quality fund until a treasury is set; the contract checks both were signed
+    return this.sigs.request(admin, {
+      action: "site.register",
+      entity: `${siteId}#${admin.address.toLowerCase()}`,
+      meaning: `Register ${name} in OrdoTrust with you as its first administrator and your wallet as its quality fund`,
+      comment: "",
+      site: siteId,
+      ...this.contractDomain(true),
+    });
   }
   async register(siteId: string, admin: User, proof: { nonce: string; signature: Hex }) {
     if (!this.chain) throw new HttpError(409, "No trust contract is configured");
-    const sig = await this.db.tx((q) => this.sigs.consume(q, admin, { action: "site.register", entity: siteId }, proof));
+    const sig = await this.db.tx((q) => this.sigs.consume(q, admin, { action: "site.register", entity: `${siteId}#${admin.address.toLowerCase()}` }, proof));
     const tx = await this.chain.registerSite(siteId, admin.address, sigArg(sig.typed, proof.signature)).catch((e: unknown) => {
       throw new HttpError(502, `The contract refused the registration: ${e instanceof Error ? (e as Error & { shortMessage?: string }).shortMessage ?? e.message : e}`);
     });
@@ -442,9 +465,15 @@ export class Trust {
   }
 
   // ---------------------------------------------------------------- releases on-chain
-  /** Relay a released validation package's three signatures to the contract. */
-  async recordRelease(siteId: string, packageId: string, content: unknown): Promise<RelayView | null> {
+  /** Relay a released validation package's three release statements to the contract. */
+  async recordRelease(siteId: string, lot: ReleaseLot): Promise<RelayView | null> {
     if (!this.chain) return null;
+    const sigs = await this.releaseSigs(lot.packageId);
+    return this.relay(siteId, "release", lot.packageId, { lot, sigs: sigs.map(jsonSafe) }, () => this.chain!.recordRelease(lot, sigs));
+  }
+
+  /** The package's three current release statements, [performed, reviewed, approved], as the contracts take them. */
+  async releaseSigs(packageId: string): Promise<[ReleaseSigArg, ReleaseSigArg, ReleaseSigArg]> {
     const rows = await this.db.query<{ meaning: string; typed_data: string; signature: string }>(
       "SELECT ps.meaning, s.typed_data, s.signature FROM package_signatures ps JOIN signatures s ON s.id = ps.signature_id WHERE ps.package_id = $1 AND ps.cleared_at IS NULL",
       [packageId],
@@ -452,11 +481,11 @@ export class Trust {
     const by = (m: string) => {
       const r = rows.rows.find((x) => x.meaning === m);
       if (!r) throw new HttpError(409, `Missing the ${m} signature`);
-      return sigArg(JSON.parse(r.typed_data) as TypedSignature, r.signature);
+      const typed = JSON.parse(r.typed_data) as ReleaseTyped | TypedSignature;
+      if (typed.primaryType !== "OrdoRelease") throw new HttpError(409, `The ${m} signature predates release statements: return the package and sign it again`);
+      return releaseSigArg(typed, r.signature);
     };
-    const sigs: [ReturnType<typeof sigArg>, ReturnType<typeof sigArg>, ReturnType<typeof sigArg>] = [by("performed"), by("reviewed"), by("approved")];
-    const contentHash = `0x${hashOf(content).replace("sha256:", "")}` as Hex;
-    return this.relay(siteId, "release", packageId, { contentHash, sigs }, () => this.chain!.recordRelease(siteId, packageId, contentHash, sigs));
+    return [by("performed"), by("reviewed"), by("approved")];
   }
 
   // ---------------------------------------------------------------- slashing
@@ -535,7 +564,14 @@ export class Trust {
   async slashRequest(siteId: string, user: User, roles: Role[], id: string) {
     const p = await this.proposal(siteId, id);
     const cap = await this.capacityOf(siteId, user, roles, p);
-    return this.sigs.request(user, { action: "validator.slash", entity: this.slashEntity(p), meaning: `Slash ${p.validator_address} by ${p.amount} units (as ${cap === "plant_manager" ? "plant manager" : "validator"})`, comment: "", site: siteId, chainId: this.chain!.cfg.chainId });
+    return this.sigs.request(user, {
+      action: "validator.slash",
+      entity: this.slashEntity(p),
+      meaning: `Slash ${p.validator_address} by ${p.amount} units (as ${cap === "plant_manager" ? "plant manager" : "validator"})`,
+      comment: "",
+      site: siteId,
+      ...this.contractDomain(true),
+    });
   }
   async signSlash(siteId: string, user: User, roles: Role[], id: string, proof: { nonce: string; signature: Hex }) {
     const p = await this.proposal(siteId, id);

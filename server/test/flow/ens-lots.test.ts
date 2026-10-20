@@ -3,8 +3,11 @@ import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { foundry } from "viem/chains";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { dnsEncode } from "../../src/chain/ensv2.js";
-import { ORDO_ENS_ROLES_ABI, ORDO_ENS_ROLES_BYTECODE, ORDO_LOT_RESOLVER_ABI, ORDO_LOT_RESOLVER_BYTECODE } from "../../src/chain/ordo-ens-abi.js";
+import { ORDO_ENS_ROLES_ABI, ORDO_ENS_ROLES_BYTECODE, ORDO_LOT_RESOLVER_ABI, ORDO_LOT_RESOLVER_BYTECODE, ORDO_STAGE_VERIFIER_ABI, ORDO_STAGE_VERIFIER_BYTECODE } from "../../src/chain/ordo-ens-abi.js";
+import { PROOF_DOMAIN, READING_TYPES, RELEASE_TYPES } from "../../src/auth/auth.js";
 import { personLabel } from "../../src/core/names.js";
+import { edgeMessage } from "../../src/core/readings.js";
+import { readingCommitment } from "../../src/core/stage-proofs.js";
 import { ANVIL_KEYS, anvilPath, deployer, startAnvil } from "../fixtures/anvil.js";
 import { deployEnsV2 } from "../fixtures/ensv2.js";
 import { boot, wallet, type Client, type System } from "./helpers.js";
@@ -12,12 +15,15 @@ import { boot, wallet, type Client, type System } from "./helpers.js";
 /**
  * ENS as the access layer, end to end on the real ENSv2 contracts (anvil): people's member names are the role
  * credential OrdoEnsRoles reads, a released package is recorded on the lot's own ENS name only with signatures from
- * credentialed people, and the lot name resolves to its passport through Ordo's CCIP-Read gateway.
+ * credentialed people, and the lot name resolves to its passport through Ordo's CCIP-Read gateway. The machine's
+ * gateway holds the device role through its own member name and signs its stage's counts; the release carries the
+ * zero-knowledge proof that they meet the stage's criteria, which OrdoLotResolver verifies on-chain.
  */
 const run = anvilPath() || process.env.CI ? describe : describe.skip;
 
 const TEXT = parseAbi(["function text(bytes32 node, string key) view returns (string)"]);
-const ROLE = { OPERATOR: 1, SUPERVISOR: 2, VALIDATOR: 4, PLANT_MANAGER: 8, ADMIN: 16 };
+const ROLE = { OPERATOR: 1, SUPERVISOR: 2, VALIDATOR: 4, PLANT_MANAGER: 8, ADMIN: 16, DEVICE: 64 };
+const gateway = privateKeyToAccount(generatePrivateKey());
 
 run("ENS credentials and lot names", () => {
   let anvil: Awaited<ReturnType<typeof startAnvil>>;
@@ -36,6 +42,15 @@ run("ENS credentials and lot names", () => {
   const S = () => `/v1/sites/${site}`;
   const SITE = "pune-plant-1.ordo-test.eth";
   const LOT = `lot-so-7781.${SITE}`;
+  /** A request as the machine's gateway sends it: signed with its own key. */
+  const edge = async (method: "GET" | "POST", path: string, body?: unknown) => {
+    const raw = body === undefined ? "" : JSON.stringify(body);
+    const ts = Math.floor(Date.now() / 1000);
+    const nonce = `n${Math.random().toString(36).slice(2, 14)}`;
+    const sig = await gateway.signMessage({ message: edgeMessage(ts, nonce, method, path, raw) });
+    const res = await app.request(path, { method, body: raw || undefined, headers: { "content-type": "application/json", host: "localhost", "x-ordo-device": gateway.address, "x-ordo-ts": String(ts), "x-ordo-nonce": nonce, "x-ordo-sig": sig } });
+    return { status: res.status, json: (await res.json()) as any };
+  };
   const settle = async (n = 12) => {
     for (let i = 0; i < n; i++) {
       await sys.names.reconcile(10);
@@ -53,7 +68,8 @@ run("ENS credentials and lot names", () => {
     stack = await deployEnsV2(anvil.url);
     d = deployer(anvil.url);
     roles = await d.deploy({ abi: ORDO_ENS_ROLES_ABI, bytecode: ORDO_ENS_ROLES_BYTECODE }, [stack.parentRegistry, "ordo-test.eth"]);
-    lots = await d.deploy({ abi: ORDO_LOT_RESOLVER_ABI, bytecode: ORDO_LOT_RESOLVER_BYTECODE }, [roles, stack.resolver, d.account.address, ["https://ordo.example/v1/public/ens/{sender}/{data}.json"]]);
+    const verifier = await d.deploy({ abi: ORDO_STAGE_VERIFIER_ABI, bytecode: ORDO_STAGE_VERIFIER_BYTECODE }, []);
+    lots = await d.deploy({ abi: ORDO_LOT_RESOLVER_ABI, bytecode: ORDO_LOT_RESOLVER_BYTECODE }, [roles, verifier, stack.resolver, d.account.address, ["https://ordo.example/v1/public/ens/{sender}/{data}.json"]]);
     ({ sys, app } = await boot({
       ENS_PARENT_NAME: "ordo-test.eth",
       ENS_REGISTRY_ADDRESS: stack.parentRegistry,
@@ -99,7 +115,9 @@ run("ENS credentials and lot names", () => {
   }, 120_000);
 
   it("gives every lot a name that resolves to its passport through the gateway", async () => {
-    const asset = (await admin.call("POST", `${S()}/assets`, { name: "CNC-01", kind: "cnc", owningAgent: "scheduler", source: { type: "manual" }, limits: {}, idealCycleS: 30 })).json.id;
+    const asset = (await admin.call("POST", `${S()}/assets`, { name: "CNC-01", kind: "cnc", owningAgent: "scheduler", source: { type: "gateway", device: gateway.address }, limits: {}, idealCycleS: 30 })).json.id;
+    const observe = async (signal: string, value: number | null, text: string | null = null) =>
+      expect((await edge("POST", "/v1/edge/observations", { assetId: asset, observations: [{ signal, ts: new Date().toISOString(), value, text }] })).status).toBe(200);
     const spec = {
       stages: [
         { code: "01", column: 1, name: "Release order", agent: "planning", resourceKind: "system", mode: "auto", escalationRole: "supervisor", timeoutMin: 10, criteria: [] },
@@ -107,11 +125,12 @@ run("ENS credentials and lot names", () => {
       ],
       rework: null,
     };
-    await operator.call("POST", `${S()}/assets/${asset}/readings`, { signal: "execution", text: "ACTIVE" });
-    await operator.call("POST", `${S()}/assets/${asset}/readings`, { signal: "part_count", value: 100 });
+    await observe("execution", null, "ACTIVE");
+    await observe("part_count", 100);
+    await observe("scrap", 3);
     const versionId = (await admin.call("POST", `${S()}/templates`, { name: "Housing", category: "Discrete", description: "Test line", spec })).json.versionId;
     runId = (await admin.call("POST", `${S()}/runs`, { templateVersionId: versionId, orderRef: "SO-7781", quantity: 10 })).json.id;
-    await operator.call("POST", `${S()}/assets/${asset}/readings`, { signal: "part_count", value: 110 });
+    await observe("part_count", 110);
     await sys.advance(true);
     await settle(2);
 
@@ -157,6 +176,42 @@ run("ENS credentials and lot names", () => {
     expect((await app.request(`/v1/public/ens/${"0x" + "1".repeat(40)}/${callData}.json`)).status).toBe(404);
   }, 120_000);
 
+  it("the machine's gateway holds the device role and signs its stage's counts, which are proven against the criteria", async () => {
+    // only the gateway's own key is accepted for its machine
+    const forged = await app.request("/v1/edge/stages", { headers: { host: "localhost", "x-ordo-device": gateway.address, "x-ordo-ts": String(Math.floor(Date.now() / 1000)), "x-ordo-nonce": "forged-1234", "x-ordo-sig": `0x${"11".repeat(65)}` } });
+    expect(forged.status).toBe(401);
+    await settle();
+    expect(Number(await d.pub.readContract({ address: roles, abi: ORDO_ENS_ROLES_ABI as Abi, functionName: "roles", args: [sitekey(site), gateway.address] }))).toBe(ROLE.DEVICE);
+
+    const stages = (await edge("GET", "/v1/edge/stages")).json.stages as any[];
+    const st = stages.find((x) => x.runId === runId && x.stage === "02");
+    expect(st).toMatchObject({ signed: false, site });
+    expect(st.endedAt).toBeGreaterThanOrEqual(st.startedAt);
+    // the gateway counts from its own counters: 10 good, no new scrap
+    const counts = { good: 10, scrap: 0 };
+    const salt = 987654321n;
+    const commitment = await readingCommitment(BigInt(st.subject), { good: 10n, scrap: 0n, startedAt: BigInt(st.startedAt), endedAt: BigInt(st.endedAt) }, salt);
+    const signedAt = Math.floor(Date.now() / 1000);
+    const signature = await gateway.signTypedData({ domain: PROOF_DOMAIN, types: READING_TYPES, primaryType: "OrdoReading", message: { site, runId, stage: "02", asset: st.asset, commitment, anchor: st.anchor, signedAt: BigInt(signedAt) } });
+    const body = { runId, stage: "02", ...counts, salt: salt.toString(), commitment: commitment.toString(), anchor: st.anchor, signedAt, signature };
+    // a commitment to other counts than the ones sent is refused
+    expect((await edge("POST", "/v1/edge/readings", { ...body, good: 11 })).status).toBe(400);
+    const r = await edge("POST", "/v1/edge/readings", body);
+    expect(r.status).toBe(200);
+    expect(r.json).toMatchObject({ signer: gateway.address.toLowerCase(), matches: true });
+    // a stage's counts are signed once
+    expect((await edge("POST", "/v1/edge/readings", body)).status).toBe(409);
+
+    await sys.stageProofs.reconcile();
+    const proofs = (await admin.call("GET", `${S()}/runs/${runId}/proofs`)).json.stages;
+    expect(proofs).toEqual([expect.objectContaining({ stage: "02", status: "proven", verified: true, signerKind: "device", criteria: ["Yield"] })]);
+    // the public passport shows who signed and the proof, never the counts
+    const pub = (await (await app.request(`/v1/public/passports/${runId}`)).json()) as any;
+    const work = pub.passport.stages.find((x: any) => x.code === "02").work;
+    expect(work).toMatchObject({ status: "proven", verified: true, signerEns: `${personLabel(gateway.address)}.${SITE}` });
+    expect(JSON.stringify(work)).not.toMatch(/"good"|"scrap"|salt/);
+  }, 180_000);
+
   it("records a release on the lot's name only with signatures from credentialed people", async () => {
     const created = await admin.call("POST", `${S()}/validation`, { type: "stage_validation", title: "Housing machining stage", objective: "Prove stage 02", acceptance: "Yield ≥ 95%", runId, stageCode: "02" });
     expect(created.status).toBe(200);
@@ -169,12 +224,18 @@ run("ENS credentials and lot names", () => {
       form.set("slotId", slot.id);
       await admin.upload(`${S()}/validation/${id}/evidence`, form);
     }
+    let proofRoot = "";
     const act = async (c: Client) => {
       const t = await c.call("POST", `${S()}/validation/${id}/sign-request`, { action: "sign", comment: "" });
       expect(t.status).toBe(200);
+      // all three sign the same lot, content and proof root
+      expect(t.json.message).toMatchObject({ lot: "lot-so-7781", runId });
+      proofRoot ||= t.json.message.proofRoot;
+      expect(t.json.message.proofRoot).toBe(proofRoot);
       return c.call("POST", `${S()}/validation/${id}/act`, { action: "sign", comment: "", nonce: t.json.message.nonce, signature: await c.sign(t.json) });
     };
-    expect((await act(admin)).json.status).toBe("in_review");
+    const first = await act(admin);
+    expect(first.json, JSON.stringify(first.json)).toMatchObject({ status: "in_review" });
     expect((await act(qe)).json.step).toBe("approval");
     expect((await act(pm)).json.status).toBe("released");
     await settle(4);
@@ -183,6 +244,8 @@ run("ENS credentials and lot names", () => {
     expect(passport.ens.releases).toEqual([expect.objectContaining({ packageId: id, status: "done", error: null })]);
     expect(await onchainText(LOT, "com.ordo.release")).toMatch(/^0x[0-9a-f]{64}$/);
     expect(await onchainText(LOT, "com.ordo.release.package")).toBe(id);
+    expect(proofRoot).not.toBe(`0x${"00".repeat(32)}`);
+    expect(await onchainText(LOT, "com.ordo.release.proofs")).toBe(`1 stages proven, root ${proofRoot}`);
     expect(await onchainText(LOT, "com.ordo.release.signers")).toBe([admin, qe, pm].map((c) => `${personLabel(c.address)}.${SITE}`).join(","));
     const decisions = (await admin.call("GET", `${S()}/decisions?limit=100`)).json;
     expect(decisions.some((x: any) => x.kind === "ens.lot_released")).toBe(true);
@@ -190,16 +253,15 @@ run("ENS credentials and lot names", () => {
     // signatures from wallets without member names are refused by the contract itself
     const strangers = [0, 1, 2].map(() => privateKeyToAccount(generatePrivateKey()));
     const meanings = ["performed", "reviewed", "approved"];
+    const lot = { siteId: site, lotLabel: "lot-so-7781", packageId: "vp_x", runId, contentHash: `0x${"ab".repeat(32)}` as Hex, proofRoot: `0x${"00".repeat(32)}` as Hex };
     const sigs = await Promise.all(
       strangers.map(async (a, i) => {
-        const message = { action: "validation.sign", entity: `vp_x#${meanings[i]}`, meaning: "x", comment: "", site, nonce: `n-${i}-${Date.now()}`, issuedAt: new Date().toISOString() };
-        const signature = await a.signTypedData({ domain: { name: "Ordo", version: "1", chainId: 31337 }, types: { OrdoSignature: ["action", "entity", "meaning", "comment", "site", "nonce", "issuedAt"].map((name) => ({ name, type: "string" })) }, primaryType: "OrdoSignature", message });
+        const message = { site, packageId: "vp_x", runId, lot: lot.lotLabel, meaning: meanings[i]!, statement: "x", comment: "", contentHash: lot.contentHash, proofRoot: lot.proofRoot, nonce: `n-${i}-${Date.now()}`, deadline: 4_000_000_000n };
+        const signature = await a.signTypedData({ domain: PROOF_DOMAIN, types: RELEASE_TYPES, primaryType: "OrdoRelease", message });
         return { ...message, signature };
       }),
     );
-    await expect(
-      d.pub.simulateContract({ address: lots, abi: ORDO_LOT_RESOLVER_ABI as Abi, functionName: "recordRelease", args: [site, "lot-so-7781", "vp_x", `0x${"ab".repeat(32)}`, [31337n, 31337n, 31337n], sigs], account: d.account }),
-    ).rejects.toThrow(/NotCredentialed/);
+    await expect(d.pub.simulateContract({ address: lots, abi: ORDO_LOT_RESOLVER_ABI as Abi, functionName: "recordRelease", args: [lot, sigs, []], account: d.account })).rejects.toThrow(/NotCredentialed/);
   }, 180_000);
 
   it("revoking a member name revokes the role everywhere", async () => {
