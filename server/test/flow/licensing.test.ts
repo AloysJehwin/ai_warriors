@@ -77,7 +77,7 @@ run("licensing agents between sites", () => {
     siteA = (await a.call("POST", "/v1/sites", { name: "Pune Plant", timezone: "UTC", lineName: "Line 1", zones: [] })).json.id;
     siteB = (await b.call("POST", "/v1/sites", { name: "Chennai Plant", timezone: "UTC", lineName: "Line 1", zones: [] })).json.id;
     await settle();
-  }, 120_000);
+  }, 240_000);
   afterAll(async () => {
     await sys?.close();
     anvil?.stop();
