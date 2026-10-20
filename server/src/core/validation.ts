@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
 import type { Hex } from "viem";
+import { toLabel } from "../chain/ensv2.js";
+import type { ReleaseLot } from "../chain/trust.js";
+import { hashOf } from "../domain/canonical.js";
 import type { Signatures, User } from "../auth/auth.js";
 import type { Db } from "../db/db.js";
 import type { LedgerStore } from "../db/ledger-store.js";
@@ -13,6 +16,7 @@ import type { LotNames } from "./lot-names.js";
 import type { Replicas, ReplicaView } from "./replicas.js";
 import type { Trust } from "./trust.js";
 import type { Recorder } from "./recorder.js";
+import { ZERO_ROOT, type StageProofs } from "./stage-proofs.js";
 
 export const PACKAGE_LABEL: Record<PackageType, string> = {
   stage_validation: "Stage validation",
@@ -65,6 +69,16 @@ interface PkgRow {
 
 const sha256hex = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
 
+/** What the three release signatures bind: the lot, the package's content and the root of the lot's stage proofs. */
+interface ReleaseStatement {
+  runId: string;
+  lot: string;
+  contentHash: Hex;
+  proofRoot: Hex;
+  /** the stages folded into proofRoot, in order */
+  stages: string[];
+}
+
 export class Validation {
   constructor(
     private db: Db,
@@ -80,6 +94,29 @@ export class Validation {
   replicas: Replicas | null = null;
   /** Lot names on ENS: releases are recorded there against the signers' ENS credentials */
   lots: LotNames | null = null;
+  /** Zero-knowledge proofs of each stage's signed counts: their root is part of what a release signs */
+  stageProofs: StageProofs | null = null;
+
+  /** The release statement as it stands now. The content is the package's checks and evidence, which are locked once Performed by is signed. */
+  private async statementOf(siteId: string, p: PkgRow): Promise<ReleaseStatement> {
+    const full = await this.get(siteId, p.id);
+    const content = { packageId: p.id, type: p.type, title: p.title, checks: full.checks.map((c) => [c.criterion, c.target, c.status, c.actual]), evidence: full.evidence.filter((e) => e.sha256 && !e.removedAt).map((e) => e.sha256) };
+    const runId = p.run_id ?? "";
+    const proofs = runId && this.stageProofs ? await this.stageProofs.bundle(runId) : { root: ZERO_ROOT, stages: [] };
+    return { runId, lot: runId ? await this.lotLabel(siteId, runId) : "", contentHash: `0x${hashOf(content).replace("sha256:", "")}` as Hex, proofRoot: proofs.root, stages: proofs.stages.map((s) => s.stage) };
+  }
+  /** The lot's ENS label, which the release signatures name, so OrdoLotResolver records it under the same name. */
+  private async lotLabel(siteId: string, runId: string): Promise<string> {
+    const named = await this.lots?.labelFor(siteId, runId);
+    if (named) return named;
+    const r = await this.db.query<{ order_ref: string }>("SELECT order_ref FROM runs WHERE id = $1", [runId]);
+    return `lot-${toLabel(r.rows[0]?.order_ref ?? runId)}`;
+  }
+  private async signedStatement(id: string): Promise<ReleaseStatement> {
+    const r = await this.db.query<{ release_json: string | null }>("SELECT release_json FROM validation_packages WHERE id = $1", [id]);
+    if (!r.rows[0]?.release_json) throw new HttpError(409, "This package was submitted before release statements: return it so the owner signs it again");
+    return JSON.parse(r.rows[0].release_json) as ReleaseStatement;
+  }
 
   private async row(siteId: string, id: string): Promise<PkgRow> {
     const r = await this.db.query<PkgRow>("SELECT id, site_id, number, type, title, owner_id, status, step, objective, acceptance, sample_plan, run_id, stage_code, template_id, asset_id, outcome, precheck_json, returned_comment, created_at::text AS created_at, updated_at::text AS updated_at, window_start::text AS window_start, window_end::text AS window_end FROM validation_packages WHERE id = $1 AND site_id = $2", [id, siteId]);
@@ -259,7 +296,7 @@ export class Validation {
     return r.rows[0];
   }
 
-  private readiness(p: PkgRow, checks: { status: string }[], evidence: { required: boolean; sha256: string | null; removedAt: string | null }[]) {
+  private readiness(p: PkgRow, checks: { status: string }[], evidence: { required: boolean; sha256: string | null; removedAt: string | null }[], proofsPending: string[]) {
     const req = evidence.filter((e) => e.required && !e.removedAt);
     const items = [
       { label: "Agent pre-check run", ok: Boolean(p.precheck_json) },
@@ -267,6 +304,7 @@ export class Validation {
       { label: checks.some((c) => c.status === "fail") ? `${checks.filter((c) => c.status === "fail").length} failed check(s)` : "No failed checks", ok: !checks.some((c) => c.status === "fail") },
       { label: `Required evidence ${req.filter((e) => e.sha256).length}/${req.length}`, ok: req.every((e) => e.sha256) },
     ];
+    if (proofsPending.length) items.push({ label: `Stage proofs being generated (${proofsPending.join(", ")})`, ok: false });
     return { ready: items.every((i) => i.ok), items };
   }
 
@@ -279,12 +317,26 @@ export class Validation {
     const link = this.authorize(p, user, roles, action, comment);
     await this.segregation(id, user, action);
     await this.validatorGate(siteId, user, action, link.meaning);
-    // signatures in the chain are relayed to OrdoTrust on release, so they are made for its chain
-    const chainId = this.trust.chainIdFor(action === "sign", clientChainId ?? this.chainId);
+    if (action === "sign") {
+      // each link signs the same release statement: the owner's fixes it, and the others sign exactly that
+      const st = link.meaning === "performed" ? await this.statementOf(siteId, p) : await this.signedStatement(id);
+      return this.sigs.requestRelease(user, {
+        site: siteId,
+        packageId: id,
+        runId: st.runId,
+        lot: st.lot,
+        meaning: link.meaning,
+        statement: `${link.label} — VP-${p.number} ${p.title}`,
+        comment,
+        contentHash: st.contentHash,
+        proofRoot: st.proofRoot,
+      });
+    }
+    const chainId = clientChainId ?? this.chainId;
     return this.sigs.request(user, {
       action: `validation.${action}`,
       entity: `${id}#${link.meaning}`,
-      meaning: action === "sign" ? `${link.label} — VP-${p.number} ${p.title}` : `${action === "return" ? "Request changes" : "Reject"} — VP-${p.number} ${p.title}`,
+      meaning: `${action === "return" ? "Request changes" : "Reject"} — VP-${p.number} ${p.title}`,
       comment,
       site: siteId,
       chainId,
@@ -325,12 +377,25 @@ export class Validation {
       const full = await this.get(siteId, id);
       if (!full.readiness.ready) throw new HttpError(409, "Not ready to submit: " + full.readiness.items.filter((i) => !i.ok).map((i) => i.label).join(", "));
     }
+    // what this signature must state: for Performed by, the package as it is now; after that, what the owner signed
+    let expected: ReleaseStatement | null = null;
+    if (input.action === "sign") {
+      expected = link.meaning === "performed" ? await this.statementOf(siteId, p) : await this.signedStatement(id);
+      if (link.meaning !== "performed" && (await this.statementOf(siteId, p)).contentHash !== expected.contentHash) throw new HttpError(409, "The package changed after it was submitted: return it to the owner");
+    }
     const actor = `user:${user.address}`;
     const nextStep: Record<Step, Step> = { draft: "qe_review", qe_review: "approval", approval: "released", released: "released" };
     const sig = await this.db.tx(async (q) => {
-      const s = await this.sigs.consume(q, user, { action: `validation.${input.action}`, entity: `${id}#${link.meaning}` }, { nonce: input.nonce, signature: input.signature });
-      if (input.action === "sign") {
-        if (link.meaning === "performed") await q.query("UPDATE package_signatures SET cleared_at = now() WHERE package_id = $1 AND cleared_at IS NULL", [id]);
+      const proof = { nonce: input.nonce, signature: input.signature };
+      const s = expected ? await this.sigs.consumeRelease(q, user, { packageId: id, meaning: link.meaning }, proof) : await this.sigs.consume(q, user, { action: `validation.${input.action}`, entity: `${id}#${link.meaning}` }, proof);
+      if (expected) {
+        const m = (s as Awaited<ReturnType<Signatures["consumeRelease"]>>).typed.message;
+        if (m.site !== siteId || m.runId !== expected.runId || m.lot !== expected.lot || m.contentHash !== expected.contentHash || m.proofRoot !== expected.proofRoot)
+          throw new HttpError(409, "The package or its stage proofs changed since this signature was prepared: sign again");
+        if (link.meaning === "performed") {
+          await q.query("UPDATE package_signatures SET cleared_at = now() WHERE package_id = $1 AND cleared_at IS NULL", [id]);
+          await q.query("UPDATE validation_packages SET release_json = $1 WHERE id = $2", [JSON.stringify(expected), id]);
+        }
         await q.query("INSERT INTO package_signatures (id, package_id, meaning, role, user_id, address, signature_id, comment) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)", [newId("psg"), id, link.meaning, link.role, user.id, user.address, s.id, input.comment || null]);
         const step = nextStep[p.step];
         await q.query("UPDATE validation_packages SET step = $1, status = $2, returned_comment = NULL WHERE id = $3", [step, step === "released" ? "released" : "in_review", id]);
@@ -363,10 +428,12 @@ export class Validation {
     }
     await this.db.query("UPDATE validation_packages SET outcome = $1 WHERE id = $2", [outcome, p.id]);
     await this.audit(siteId, actor, p.id, "released", { outcome });
-    const full = await this.get(siteId, p.id);
-    const content = { packageId: p.id, type: p.type, title: p.title, checks: full.checks.map((c) => [c.criterion, c.target, c.status, c.actual]), evidence: full.evidence.filter((e) => e.sha256 && !e.removedAt).map((e) => e.sha256) };
-    const relay = await this.trust.recordRelease(siteId, p.id, content);
-    await this.lots?.release(siteId, p.id, p.run_id, content).catch((e: unknown) => console.error("[ordo] ens release", e));
+    const st = await this.signedStatement(p.id);
+    const lot: ReleaseLot = { siteId, lotLabel: st.lot, packageId: p.id, runId: st.runId, contentHash: st.contentHash, proofRoot: st.proofRoot };
+    const relay = await this.trust.recordRelease(siteId, lot);
+    // OrdoLotResolver re-checks every stage proof the root folds before it records the release
+    const proofs = st.stages.length && this.stageProofs ? (await this.stageProofs.bundle(st.runId, st.stages)).proofs : [];
+    if (st.runId) await this.lots?.release(siteId, lot, proofs).catch((e: unknown) => console.error("[ordo] ens release", e));
     if (relay) await this.audit(siteId, "system:relayer", p.id, relay.status === "done" ? "recorded_onchain" : "onchain_failed", { txHash: relay.txHash, error: relay.error });
   }
 
@@ -470,7 +537,7 @@ export class Validation {
       checks,
       evidence,
       chain,
-      readiness: this.readiness(p, checks, live),
+      readiness: this.readiness(p, checks, live, p.run_id && this.stageProofs && p.status !== "released" ? await this.stageProofs.pendingStages(p.run_id) : []),
       onchain: await this.trust.relayOf(siteId, id),
       audit,
       createdAt: new Date(p.created_at).toISOString(),

@@ -19,7 +19,7 @@ export interface NameRail {
   appUrl(name: string): string;
 }
 
-type Kind = "site" | "person" | "asset" | "agent";
+type Kind = "site" | "person" | "asset" | "agent" | "device";
 type Status = "pending" | "issued" | "revoked" | "failed";
 interface Want {
   owner: Address | null;
@@ -118,8 +118,20 @@ export class Names {
       out.push({ kind: "person", ref: p.user_id, label: personLabel(p.address), want: { owner: p.address as Address, addr: p.address as Address, texts } });
     }
 
-    const assets = await this.db.query<{ id: string; name: string; kind: string }>("SELECT id, name, kind FROM assets WHERE site_id = $1 AND archived_at IS NULL", [siteId]);
-    for (const a of assets.rows) out.push({ kind: "asset", ref: a.id, label: toLabel(a.name), want: { owner: ordo, addr: null, texts: { "com.ordo.type": "asset", "com.ordo.kind": a.kind, description: a.name, ...base } } });
+    const assets = await this.db.query<{ id: string; name: string; kind: string; source_json: string }>("SELECT id, name, kind, source_json FROM assets WHERE site_id = $1 AND archived_at IS NULL", [siteId]);
+    for (const a of assets.rows) {
+      const src = JSON.parse(a.source_json) as { type: string; device?: string };
+      const device = src.type === "gateway" && src.device ? (src.device.toLowerCase() as Address) : null;
+      out.push({ kind: "asset", ref: a.id, label: toLabel(a.name), want: { owner: ordo, addr: null, texts: { "com.ordo.type": "asset", "com.ordo.kind": a.kind, description: a.name, ...(device ? { "com.ordo.device": device } : {}), ...base } } });
+      // the machine's gateway holds the device role through its own member name, so contracts accept the counts it signs
+      if (device)
+        out.push({
+          kind: "device",
+          ref: a.id,
+          label: personLabel(device),
+          want: { owner: device, addr: device, texts: { "com.ordo.type": "device", "com.ordo.roles": "device", "com.ordo.asset": a.name, description: `Gateway of ${a.name}: signs the counts it reads from the machine`, ...base } },
+        });
+    }
 
     for (const k of AGENTS) {
       const addr = k === "maintenance" ? this.agentAddress() : null;
@@ -146,6 +158,19 @@ export class Names {
       seen.add(key);
       const r = rows.get(key);
       const want = JSON.stringify(w.want);
+      if (r && r.label !== w.label && r.status !== "revoked" && (w.kind === "person" || w.kind === "device")) {
+        // the label scheme changed (member names now carry the whole address): revoke the old name, issue the new one
+        const old = JSON.parse(r.want_json) as Want;
+        await this.db.query("UPDATE ens_names SET id = $1, ref = $2, want_json = $3, status = 'pending', attempts = 0, error = NULL, next_try_at = $4, updated_at = now() WHERE id = $5", [
+          `${r.id}:was:${r.label}`,
+          `${r.ref}#was:${r.label}`,
+          JSON.stringify({ ...old, revoke: true }),
+          this.iso(),
+          r.id,
+        ]);
+        await this.insert(siteId, w.kind, w.ref, w.label, siteName!, w.want);
+        continue;
+      }
       if (!r) {
         const name = await this.insert(siteId, w.kind, w.ref, w.label, w.kind === "site" ? this.rail!.cfg.parentName : siteName!, w.want);
         if (w.kind === "site") siteName = name;
@@ -283,7 +308,7 @@ export class Names {
     } else {
       await this.done(r, "issued", sent, last);
       if (r.stage === "issue")
-        await this.rec.decide(r.site_id, { agent: "system:ens", kind: "ens.issued", summary: `Issued ${r.name}${r.kind === "person" ? ` to ${sent.owner}` : ""}`, data: { name: r.name, kind: r.kind, owner: sent.owner, tx: last } });
+        await this.rec.decide(r.site_id, { agent: "system:ens", kind: "ens.issued", summary: `Issued ${r.name}${r.kind === "person" || r.kind === "device" ? ` to ${sent.owner}` : ""}`, data: { name: r.name, kind: r.kind, owner: sent.owner, tx: last } });
     }
   }
 
@@ -322,9 +347,9 @@ export class Names {
     return (await this.rows(siteId)).map((r) => this.view(r));
   }
 
-  /** Issued names of people at a site, by wallet address, for showing names wherever an address appears. */
+  /** Issued names of people and gateways at a site, by wallet address, for showing names wherever an address appears. */
   async ofPeople(siteId: string): Promise<Map<string, string>> {
-    const r = await this.db.query<{ name: string; want_json: string }>("SELECT name, want_json FROM ens_names WHERE site_id = $1 AND kind = 'person' AND status = 'issued'", [siteId]);
+    const r = await this.db.query<{ name: string; want_json: string }>("SELECT name, want_json FROM ens_names WHERE site_id = $1 AND kind IN ('person', 'device') AND status = 'issued'", [siteId]);
     return new Map(r.rows.map((x) => [(JSON.parse(x.want_json) as Want).owner!.toLowerCase(), x.name]));
   }
 
@@ -333,7 +358,10 @@ export class Names {
   }
 }
 
-/** A person's label: `member-` and the first six hex digits of their wallet, which their name's addr record shows anyway */
-export const personLabel = (address: string) => `member-${address.slice(2, 8).toLowerCase()}`;
+/**
+ * A member's label (a person's or a gateway's): `member-` and their whole wallet address, which their name's addr
+ * record shows anyway. OrdoEnsRoles.memberLabel derives the same label, so no one can take another member's name.
+ */
+export const personLabel = (address: string) => `member-${address.slice(2).toLowerCase()}`;
 
 const COLS = "id, site_id, kind, ref, label, name, registry, want_json, have_json, status, stage, sent_json, pending_txs, sent_at::text AS sent_at, tx_hash, error, attempts";

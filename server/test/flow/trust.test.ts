@@ -31,7 +31,7 @@ beforeAll(async () => {
   transport = custom(provider as never);
   pub = createPublicClient({ chain: foundry, transport });
   const deployer = createWalletClient({ chain: foundry, transport, account: privateKeyToAccount(funder) });
-  const hash = await deployer.deployContract({ abi: ORDO_TRUST_ABI, bytecode: ORDO_TRUST_BYTECODE, args: [parseEther("10"), 7n * 24n * 3600n] } as never);
+  const hash = await deployer.deployContract({ abi: ORDO_TRUST_ABI, bytecode: ORDO_TRUST_BYTECODE, args: [parseEther("10"), 7n * 24n * 3600n, privateKeyToAccount(relayer).address] } as never);
   contract = (await pub.waitForTransactionReceipt({ hash })).contractAddress!;
   ({ sys, app } = await boot({ TRUST_CONTRACT_ADDRESS: contract, TRUST_RELAYER_KEY: relayer, TRUST_CHAIN_ID: "31337", TRUST_DECIMALS: "18", TRUST_SYMBOL: "ETH" }, { trustTransport: transport }));
   for (const k of Object.keys(keys) as (keyof typeof keys)[]) people[k] = await wallet(app, keys[k]);
@@ -103,16 +103,20 @@ describe("on-chain trust", () => {
     const act = async (c: Client) => {
       const t = await c.call("POST", `${S()}/validation/${pkg.id}/sign-request`, { action: "sign", comment: "" });
       if (t.status !== 200) return t;
-      expect(t.json.domain.chainId).toBe(31337);
+      // a release statement names the lot, not a chain: the same signature is checked by OrdoTrust and OrdoLotResolver
+      expect(t.json.primaryType).toBe("OrdoRelease");
+      expect(t.json.domain.chainId).toBeUndefined();
       return c.call("POST", `${S()}/validation/${pkg.id}/act`, { action: "sign", comment: "", nonce: t.json.message.nonce, signature: await c.sign(t.json) });
     };
     expect((await act(people.pe)).json.step).toBe("qe_review");
     expect((await act(people.qe)).json.step).toBe("approval");
     const done = await act(people.admin);
     expect(done.json.status).toBe("released");
-    expect(done.json.onchain.status).toBe("done");
+    expect(done.json.onchain, JSON.stringify(done.json.onchain)).toMatchObject({ status: "done" });
     const rel = await read<readonly unknown[]>("releases", [await read("siteKey", [site]), await read("siteKey", [pkg.id])]);
-    expect((rel[2] as string).toLowerCase()).toBe(people.qe.address);
+    // (contentHash, proofRoot, performedBy, reviewedBy, approvedBy, releasedAt): a package with no lot has no stage proofs
+    expect(rel[1]).toBe(`0x${"00".repeat(32)}`);
+    expect((rel[3] as string).toLowerCase()).toBe(people.qe.address);
   });
 
   it("two validators and a plant manager slash a validator; the accused cannot sign", async () => {

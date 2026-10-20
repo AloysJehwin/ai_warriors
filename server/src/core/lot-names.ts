@@ -1,15 +1,15 @@
 import { decodeFunctionData, encodeAbiParameters, encodeFunctionResult, hexToBytes, parseAbi, type Address, type Hex } from "viem";
-import type { TypedSignature } from "../auth/auth.js";
+import type { ReleaseTyped } from "../auth/auth.js";
 import { chainErrorMessage } from "../chain/errors.js";
 import { toLabel, type TxState } from "../chain/ensv2.js";
-import { sigArg, type SigArg } from "../chain/trust.js";
-import { hashOf } from "../domain/canonical.js";
+import { releaseSigArg, type ReleaseLot, type ReleaseSigArg } from "../chain/trust.js";
 import type { Db } from "../db/db.js";
 import { HttpError } from "../engine/errors.js";
 import type { RunEngine } from "../pipelines/engine.js";
 import { personLabel } from "./names.js";
 import type { Passports } from "./passports.js";
 import type { Recorder } from "./recorder.js";
+import type { StageProofArg } from "./stage-proofs.js";
 
 /** What LotNames needs from ENSv2 and Ordo's two ENS contracts (EnsV2 in production). */
 export interface LotRail {
@@ -20,7 +20,7 @@ export interface LotRail {
   resolverOf(registry: Address, label: string): Promise<Address>;
   sendUseLotResolver(label: string): Promise<Hex>;
   rolesOf(siteId: string, label: string, account: Address): Promise<number>;
-  sendRecordRelease(i: { siteId: string; lotLabel: string; packageId: string; contentHash: Hex; chainIds: number[]; sigs: unknown[] }): Promise<Hex>;
+  sendRecordRelease(i: { lot: ReleaseLot; sigs: ReleaseSigArg[]; proofs: StageProofArg[] }): Promise<Hex>;
   signAnswer(request: Hex, result: Hex, expires: bigint): Promise<Hex>;
   check(hashes: Hex[]): Promise<TxState>;
   txUrl(hash: string): string | null;
@@ -45,12 +45,15 @@ interface Row {
   attempts: number;
 }
 interface ReleasePayload {
-  runId: string;
-  contentHash: Hex;
-  chainIds: number[];
-  sigs: SigArg[];
+  lot: ReleaseLot;
+  sigs: ReleaseSigArg[];
+  proofs: StageProofArg[];
   signers: { meaning: string; address: Address }[];
 }
+// payloads carry uint64/uint256 values: keep them exact through JSON
+const BIG = "\u0000n:";
+const toJson = (v: unknown) => JSON.stringify(v, (_, x: unknown) => (typeof x === "bigint" ? `${BIG}${x}` : x));
+const fromJson = <T>(s: string): T => JSON.parse(s, (_, x: unknown) => (typeof x === "string" && x.startsWith(BIG) ? BigInt(x.slice(BIG.length)) : x)) as T;
 export interface LotNameView {
   name: string;
   url: string;
@@ -77,8 +80,9 @@ const RECORD_ABI = parseAbi([
  * ENS as Ordo's access layer, on top of the names Names issues:
  *  - each site name is linked in OrdoEnsRoles, so contracts read people's roles from their member names, and points
  *    at OrdoLotResolver, which answers `lot-<order>.<site>.<parent>` for every lot with no registration;
- *  - a released validation package is recorded in OrdoLotResolver with its three original signatures, which the
- *    contract accepts only from people whose ENS names carry the right roles;
+ *  - a released validation package is recorded in OrdoLotResolver with its three release statements, which the
+ *    contract accepts only from people whose ENS names carry the right roles, and with each stage's signed reading
+ *    and zero-knowledge proof, which it verifies and folds into the proof root those three signed;
  *  - the lot names' other records come from this gateway (CCIP-Read), signed with the ENS owner key.
  */
 export class LotNames {
@@ -117,9 +121,22 @@ export class LotNames {
     }
   }
 
-  /** Queue a released package to be recorded against the signers' ENS credentials. */
-  async release(siteId: string, packageId: string, runId: string | null, content: unknown) {
-    if (!this.rail || !runId) return;
+  /** The lot's ENS label, naming it now when the site's name exists, so release signatures can state it. */
+  async labelFor(siteId: string, runId: string): Promise<string | null> {
+    const have = await this.row("lot", runId);
+    if (have) return have.label;
+    if (!this.rail) return null;
+    const site = (await this.db.query<{ name: string }>("SELECT name FROM ens_names WHERE kind = 'site' AND site_id = $1 AND have_json IS NOT NULL", [siteId])).rows[0];
+    const run = (await this.db.query<{ order_ref: string }>("SELECT order_ref FROM runs WHERE id = $1", [runId])).rows[0];
+    if (!site || !run) return null;
+    await this.insertLot(siteId, runId, `lot-${toLabel(run.order_ref)}`, site.name);
+    return (await this.row("lot", runId))?.label ?? null;
+  }
+
+  /** Queue a released package to be recorded against the signers' ENS credentials, with its stage proofs. */
+  async release(siteId: string, lot: ReleaseLot, proofs: StageProofArg[]) {
+    if (!this.rail || !lot.runId) return;
+    const packageId = lot.packageId;
     const rows = await this.db.query<{ meaning: string; address: string; typed_data: string; signature: string }>(
       "SELECT ps.meaning, ps.address, s.typed_data, s.signature FROM package_signatures ps JOIN signatures s ON s.id = ps.signature_id WHERE ps.package_id = $1 AND ps.cleared_at IS NULL",
       [packageId],
@@ -131,18 +148,17 @@ export class LotNames {
     };
     const ordered = ["performed", "reviewed", "approved"].map(by);
     const payload: ReleasePayload = {
-      runId,
-      contentHash: `0x${hashOf(content).replace("sha256:", "")}` as Hex,
-      chainIds: ordered.map((r) => (JSON.parse(r.typed_data) as TypedSignature).domain.chainId),
-      sigs: ordered.map((r) => sigArg(JSON.parse(r.typed_data) as TypedSignature, r.signature)),
+      lot,
+      sigs: ordered.map((r) => releaseSigArg(JSON.parse(r.typed_data) as ReleaseTyped, r.signature)),
+      proofs,
       signers: ordered.map((r) => ({ meaning: r.meaning, address: r.address as Address })),
     };
     await this.db.query("INSERT INTO ens_lots (id, site_id, kind, ref, run_id, label, name, status, payload_json, next_try_at) VALUES ($1,$2,'release',$3,$4,'','','pending',$5,$6) ON CONFLICT DO NOTHING", [
       `enslot:release:${packageId}`,
       siteId,
       packageId,
-      runId,
-      JSON.stringify(payload),
+      lot.runId,
+      toJson(payload),
       this.iso(),
     ]);
   }
@@ -180,9 +196,9 @@ export class LotNames {
 
   private async recordRelease(r: Row) {
     const rail = this.rail!;
-    const p = JSON.parse(r.payload_json!) as ReleasePayload;
+    const p = fromJson<ReleasePayload>(r.payload_json!);
     const site = await this.row("site", r.site_id);
-    const lot = await this.row("lot", p.runId);
+    const lot = await this.row("lot", p.lot.runId);
     // wait for the site's link and the lot's name without counting it as a failure
     if (site?.status !== "done" || !lot) return;
     // say who lacks which credential, instead of a bare revert
@@ -191,7 +207,8 @@ export class LotNames {
       const bits = await rail.rolesOf(r.site_id, personLabel(s.address), s.address);
       if (need.bits === 0 ? bits === 0 : (bits & need.bits) !== need.bits) throw new Error(`${s.address} (${s.meaning}) does not hold ${need.label} through an ENS member name at this site yet`);
     }
-    const hash = await rail.sendRecordRelease({ siteId: r.site_id, lotLabel: lot.label, packageId: r.ref, contentHash: p.contentHash, chainIds: p.chainIds, sigs: p.sigs });
+    if (lot.label !== p.lot.lotLabel) throw new Error(`The release was signed for ${p.lot.lotLabel}, but the lot's ENS name is ${lot.name}`);
+    const hash = await rail.sendRecordRelease({ lot: p.lot, sigs: p.sigs, proofs: p.proofs });
     await this.db.query("UPDATE ens_lots SET label = $1, name = $2 WHERE id = $3", [lot.label, lot.name, r.id]);
     await this.sent(r, [hash]);
   }
@@ -213,9 +230,10 @@ export class LotNames {
     if (r.kind === "site")
       await this.rec.decide(r.site_id, { agent: "system:ens", kind: "ens.site_linked", summary: `${r.name} now carries the site's credentials and its lot names`, data: { name: r.name, tx: last } });
     else {
-      const p = JSON.parse(r.payload_json!) as ReleasePayload;
-      const lot = await this.row("lot", p.runId);
-      await this.rec.decide(r.site_id, { agent: "system:ens", kind: "ens.lot_released", runId: p.runId, summary: `Recorded the release on ${lot?.name ?? "the lot's ENS name"}, checked against the signers' ENS credentials`, data: { name: lot?.name ?? null, packageId: r.ref, tx: last } });
+      const p = fromJson<ReleasePayload>(r.payload_json!);
+      const lot = await this.row("lot", p.lot.runId);
+      const proven = p.proofs.length ? ` and ${p.proofs.length} stage proof${p.proofs.length === 1 ? "" : "s"} verified on-chain` : "";
+      await this.rec.decide(r.site_id, { agent: "system:ens", kind: "ens.lot_released", runId: p.lot.runId, summary: `Recorded the release on ${lot?.name ?? "the lot's ENS name"}, checked against the signers' ENS credentials${proven}`, data: { name: lot?.name ?? null, packageId: r.ref, proofRoot: p.lot.proofRoot, stagesProven: p.proofs.length, tx: last } });
     }
   }
 

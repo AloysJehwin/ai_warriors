@@ -251,8 +251,8 @@ contract OrdoTrust is ReentrancyGuard {
 
     /// Record a released validation package. sigs = [performed, reviewed, approved], each an `OrdoRelease` that names
     /// this site, package, run and lot, this content hash and proof root, and its own meaning. Three different people:
-    /// the performer holds a role at the site, the reviewer and approver are active validators and the approver a
-    /// plant manager. A package is released once; its record cannot be overwritten.
+    /// the reviewer and approver are active validators and the approver a plant manager (Ordo checks the performer is
+    /// the package owner: process engineers hold no OrdoTrust role). A package is released once; it is never overwritten.
     function recordRelease(OrdoProofs.ReleaseLot calldata lot, OrdoProofs.ReleaseSig[3] calldata sigs) external {
         bytes32 k = siteKey(lot.siteId);
         if (!sites[k].exists) revert UnknownSite();
@@ -264,7 +264,6 @@ contract OrdoTrust is ReentrancyGuard {
         who[2] = _consumeRelease(sigs[2], lot, "approved");
         if (who[0] == who[1] || who[0] == who[2]) revert DuplicateSigner(who[0]);
         if (who[1] == who[2]) revert DuplicateSigner(who[1]);
-        if (roles[k][who[0]] == 0) revert NotAuthorized(who[0]);
         if (!_active(k, who[1])) revert NotAuthorized(who[1]);
         if (!_active(k, who[2]) || roles[k][who[2]] & PLANT_MANAGER == 0) revert NotAuthorized(who[2]);
         releases[k][pk] = Release(lot.contentHash, lot.proofRoot, who[0], who[1], who[2], uint64(block.timestamp));

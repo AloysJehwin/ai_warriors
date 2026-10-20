@@ -284,4 +284,20 @@ CREATE INDEX agent_licenses_licensee ON agent_licenses (licensee_site, agent, st
 CREATE INDEX agent_licenses_due ON agent_licenses (status, next_try_at);
 `,
   },
+  {
+    version: 16,
+    name: "proof of work: signed stage readings, stage proofs, bound releases",
+    sql: `
+CREATE TABLE stage_readings (run_id TEXT NOT NULL REFERENCES runs(id), stage_code TEXT NOT NULL, site_id TEXT NOT NULL REFERENCES sites(id),
+  asset_id TEXT, signer TEXT NOT NULL, signer_kind TEXT NOT NULL, good INTEGER NOT NULL, scrap INTEGER NOT NULL,
+  started_at_s BIGINT NOT NULL, ended_at_s BIGINT NOT NULL, salt TEXT NOT NULL, subject TEXT NOT NULL, commitment TEXT NOT NULL,
+  anchor TEXT NOT NULL, signed_at_s BIGINT NOT NULL, signature TEXT NOT NULL, matches BOOLEAN NOT NULL, ledger_seq INTEGER,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY (run_id, stage_code));
+CREATE TABLE stage_proofs (run_id TEXT NOT NULL REFERENCES runs(id), stage_code TEXT NOT NULL, status TEXT NOT NULL,
+  criteria_json TEXT NOT NULL, proof_json TEXT, error TEXT, attempts INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(), proven_at TIMESTAMPTZ, PRIMARY KEY (run_id, stage_code));
+CREATE INDEX stage_proofs_due ON stage_proofs (status, created_at);
+ALTER TABLE validation_packages ADD COLUMN release_json TEXT;
+`,
+  },
 ];

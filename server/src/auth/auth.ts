@@ -166,13 +166,70 @@ export interface SignatureRequest {
   comment: string;
   site: string;
   chainId: number;
+  /** the contract that will verify it (OrdoTrust): the domain then names that deployment (version 2) */
+  verifyingContract?: Hex;
 }
 export interface TypedSignature {
-  domain: { name: "Ordo"; version: "1"; chainId: number };
+  domain: { name: "Ordo"; version: "1" | "2"; chainId: number; verifyingContract?: Hex };
   types: typeof SIGNATURE_TYPES;
   primaryType: "OrdoSignature";
   message: { action: string; entity: string; meaning: string; comment: string; site: string; nonce: string; issuedAt: string };
 }
+
+/**
+ * What the three people who release a package sign: exactly what is released (contracts/src/OrdoProofs.sol). The
+ * domain has no chain: the same statement is checked by OrdoTrust (Hedera) and OrdoLotResolver (Sepolia).
+ */
+export const RELEASE_TYPES = {
+  OrdoRelease: [
+    { name: "site", type: "string" },
+    { name: "packageId", type: "string" },
+    { name: "runId", type: "string" },
+    { name: "lot", type: "string" },
+    { name: "meaning", type: "string" },
+    { name: "statement", type: "string" },
+    { name: "comment", type: "string" },
+    { name: "contentHash", type: "bytes32" },
+    { name: "proofRoot", type: "bytes32" },
+    { name: "nonce", type: "string" },
+    { name: "deadline", type: "uint64" },
+  ],
+} as const;
+/** What a machine's gateway, or an operator, signs for a stage: a commitment to the counts, not the counts. */
+export const READING_TYPES = {
+  OrdoReading: [
+    { name: "site", type: "string" },
+    { name: "runId", type: "string" },
+    { name: "stage", type: "string" },
+    { name: "asset", type: "string" },
+    { name: "commitment", type: "uint256" },
+    { name: "anchor", type: "bytes32" },
+    { name: "signedAt", type: "uint64" },
+  ],
+} as const;
+export const PROOF_DOMAIN = { name: "Ordo", version: "2" } as const;
+export interface ReleaseMessage {
+  site: string;
+  packageId: string;
+  runId: string;
+  lot: string;
+  meaning: "performed" | "reviewed" | "approved";
+  statement: string;
+  comment: string;
+  contentHash: Hex;
+  proofRoot: Hex;
+  nonce: string;
+  /** unix seconds, as a decimal string so it survives JSON */
+  deadline: string;
+}
+export interface ReleaseTyped {
+  domain: typeof PROOF_DOMAIN;
+  types: typeof RELEASE_TYPES;
+  primaryType: "OrdoRelease";
+  message: ReleaseMessage;
+}
+/** How long the three release signatures stay valid for the contracts */
+const RELEASE_TTL_S = 30 * 86_400;
 
 /**
  * Electronic signatures. The server issues the exact typed data to sign (with a single-use nonce),
@@ -188,33 +245,78 @@ export class Signatures {
   async request(user: User, r: SignatureRequest): Promise<TypedSignature> {
     const nonce = randomBytes(12).toString("hex");
     const message = { action: r.action, entity: r.entity, meaning: r.meaning, comment: r.comment.slice(0, 500), site: r.site, nonce, issuedAt: new Date().toISOString() };
-    const typed: TypedSignature = { domain: { name: "Ordo", version: "1", chainId: r.chainId }, types: SIGNATURE_TYPES, primaryType: "OrdoSignature", message };
-    await this.db.query(
-      "INSERT INTO signature_nonces (nonce, user_id, entity, typed_json, expires_at) VALUES ($1, $2, $3, $4, $5)",
-      [nonce, user.id, r.entity, JSON.stringify(typed), new Date(Date.now() + 10 * 60_000)],
-    );
+    const domain: TypedSignature["domain"] = r.verifyingContract
+      ? { name: "Ordo", version: "2", chainId: r.chainId, verifyingContract: r.verifyingContract }
+      : { name: "Ordo", version: "1", chainId: r.chainId };
+    const typed: TypedSignature = { domain, types: SIGNATURE_TYPES, primaryType: "OrdoSignature", message };
+    await this.store(user, nonce, r.entity, typed);
     return typed;
+  }
+
+  /** A release statement for one link of a package's signature chain (entity `<packageId>#<meaning>`). */
+  async requestRelease(user: User, r: Omit<ReleaseMessage, "nonce" | "deadline">): Promise<ReleaseTyped> {
+    const nonce = randomBytes(12).toString("hex");
+    const message: ReleaseMessage = { ...r, comment: r.comment.slice(0, 500), nonce, deadline: String(Math.floor(Date.now() / 1000) + RELEASE_TTL_S) };
+    const typed: ReleaseTyped = { domain: PROOF_DOMAIN, types: RELEASE_TYPES, primaryType: "OrdoRelease", message };
+    await this.store(user, nonce, `${r.packageId}#${r.meaning}`, typed);
+    return typed;
+  }
+
+  private async store(user: User, nonce: string, entity: string, typed: TypedSignature | ReleaseTyped) {
+    await this.db.query("INSERT INTO signature_nonces (nonce, user_id, entity, typed_json, expires_at) VALUES ($1, $2, $3, $4, $5)", [
+      nonce,
+      user.id,
+      entity,
+      JSON.stringify(typed),
+      new Date(Date.now() + 10 * 60_000),
+    ]);
   }
 
   /** Verify and consume a signature for exactly this action and entity. Returns the stored signature id. */
   async consume(q: Queryable, user: User, expect: { action: string; entity: string }, proof: { nonce: string; signature: Hex }): Promise<{ id: string; typed: TypedSignature }> {
+    const typed = await this.take<TypedSignature>(q, user, proof.nonce);
+    if (typed.primaryType !== "OrdoSignature" || typed.message.action !== expect.action || typed.message.entity !== expect.entity) throw new HttpError(400, "This signature was for a different action");
+    const id = await this.verify(q, user, typed, proof.signature, { action: typed.message.action, entity: typed.message.entity, meaning: typed.message.meaning, comment: typed.message.comment });
+    return { id, typed };
+  }
+
+  /** Verify and consume a release statement for exactly this package link. */
+  async consumeRelease(q: Queryable, user: User, expect: { packageId: string; meaning: string }, proof: { nonce: string; signature: Hex }): Promise<{ id: string; typed: ReleaseTyped }> {
+    const typed = await this.take<ReleaseTyped>(q, user, proof.nonce);
+    if (typed.primaryType !== "OrdoRelease" || typed.message.packageId !== expect.packageId || typed.message.meaning !== expect.meaning) throw new HttpError(400, "This signature was for a different action");
+    const m = typed.message;
+    const id = await this.verify(q, user, typed, proof.signature, { action: "validation.sign", entity: `${m.packageId}#${m.meaning}`, meaning: m.statement, comment: m.comment });
+    return { id, typed };
+  }
+
+  private async take<T>(q: Queryable, user: User, nonce: string): Promise<T> {
     const r = await q.query<{ typed_json: string }>(
       "UPDATE signature_nonces SET used_at = now() WHERE nonce = $1 AND user_id = $2 AND used_at IS NULL AND expires_at > now() RETURNING typed_json",
-      [proof.nonce, user.id],
+      [nonce, user.id],
     );
     const row = r.rows[0];
     if (!row) throw new HttpError(401, "Signature request is unknown, used or expired. Sign again.");
-    const typed = JSON.parse(row.typed_json) as TypedSignature;
-    if (typed.message.action !== expect.action || typed.message.entity !== expect.entity) throw new HttpError(400, "This signature was for a different action");
-    const params = { address: user.address as Hex, domain: typed.domain, types: typed.types, primaryType: typed.primaryType, message: typed.message, signature: proof.signature };
+    return JSON.parse(row.typed_json) as T;
+  }
+
+  private async verify(q: Queryable, user: User, typed: TypedSignature | ReleaseTyped, signature: Hex, row: { action: string; entity: string; meaning: string; comment: string }) {
+    const message = typed.primaryType === "OrdoRelease" ? { ...typed.message, deadline: BigInt(typed.message.deadline) } : typed.message;
+    const params = { address: user.address as Hex, domain: typed.domain, types: typed.types, primaryType: typed.primaryType, message, signature } as Parameters<typeof verifyTypedData>[0];
     let ok = await verifyTypedData(params).catch(() => false);
-    if (!ok && this.rpcUrl) ok = await createPublicClient({ transport: http(this.rpcUrl) }).verifyTypedData(params).catch(() => false);
+    if (!ok && this.rpcUrl) ok = await createPublicClient({ transport: http(this.rpcUrl) }).verifyTypedData(params as never).catch(() => false);
     if (!ok) throw new HttpError(401, "Signature does not match your wallet");
     const id = newId("sig");
-    await q.query(
-      "INSERT INTO signatures (id, user_id, address, action, entity, meaning, comment, typed_data, signature) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
-      [id, user.id, user.address, typed.message.action, typed.message.entity, typed.message.meaning, typed.message.comment, JSON.stringify(typed), proof.signature],
-    );
-    return { id, typed };
+    await q.query("INSERT INTO signatures (id, user_id, address, action, entity, meaning, comment, typed_data, signature) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)", [
+      id,
+      user.id,
+      user.address,
+      row.action,
+      row.entity,
+      row.meaning,
+      row.comment,
+      JSON.stringify(typed),
+      signature,
+    ]);
+    return id;
   }
 }

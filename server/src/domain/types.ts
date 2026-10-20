@@ -55,6 +55,8 @@ export const DataSource = z.discriminatedUnion("type", [
   z.object({ type: z.literal("mtconnect"), agentUrl: z.string().url(), device: z.string().min(1), pollSeconds: z.number().int().min(2).max(300).default(10) }),
   z.object({ type: z.literal("replay"), seriesId: z.string().optional() }),
   z.object({ type: z.literal("manual") }),
+  // a gateway at the machine pushes its observations, signed with the gateway's own key, and signs each stage's counts
+  z.object({ type: z.literal("gateway"), device: z.string().regex(/^0x[0-9a-fA-F]{40}$/).transform((a) => a.toLowerCase()) }),
 ]);
 export type DataSource = z.infer<typeof DataSource>;
 
@@ -156,6 +158,8 @@ export interface StageRunView extends StageSpec {
   /** why the stage waits on a person (no counter, manual mode, no asset registered) */
   waitingReason: string | null;
   reworkUnits: number;
+  /** when the stage's work finished (the end of the window its signed reading covers) */
+  workDoneAt: string | null;
 }
 
 export interface RunView {

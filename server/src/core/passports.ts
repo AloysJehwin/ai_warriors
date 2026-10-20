@@ -12,6 +12,7 @@ import type { Recorder } from "./recorder.js";
 import type { LotNames, LotNameView } from "./lot-names.js";
 import type { Names } from "./names.js";
 import type { SpecProofs } from "./spec-proofs.js";
+import type { StageProofs } from "./stage-proofs.js";
 import type { Trust } from "./trust.js";
 
 export type PassportStatus = "in_production" | "held" | "completed" | "aborted" | "shipped";
@@ -79,6 +80,8 @@ export class Passports {
   lots: LotNames | null = null;
   /** zero-knowledge proofs that the lot met its criteria, shown on the public page in place of the measurements */
   specs: SpecProofs | null = null;
+  /** proof of work: each stage's counts signed at the source, and a zero-knowledge proof that they meet its criteria */
+  stages: StageProofs | null = null;
 
   /** The public page for a lot; relative when the deployment does not know its own URL. */
   pageUrl(runId: string) {
@@ -218,6 +221,7 @@ export class Passports {
     const agents = decisions.filter((d) => !d.agent.startsWith("user:")).length;
     const releases = await this.releases(p.site_id, runId, ens);
     const zk = (await this.specs?.forRun(runId)) ?? new Map();
+    const work = (await this.stages?.forRun(runId)) ?? new Map();
     const lastSeq = Math.max(0, ...decisions.map((d) => d.ledgerSeq ?? 0), ...[...zk.values()].map((z) => z.ledgerSeq ?? 0));
     const view = { ...this.view(p), ens: (await this.lots?.ofLot(runId)) ?? null };
     const name = `Lot ${run.orderRef}`;
@@ -248,6 +252,8 @@ export class Passports {
           endedAt: s.endedAt,
           criteria: s.criteriaResults.map((c) => ({ label: c.label, target: c.target, ok: c.ok, zk: zk.get(`${s.code}|${c.label}`) ?? null })),
           deviation: s.deviation,
+          // who signed the stage's counts where they were made, and the proof they meet its criteria; never the counts
+          work: work.has(s.code) ? { ...work.get(s.code)!, signerEns: ens.get(work.get(s.code)!.signer.toLowerCase()) ?? null } : null,
         })),
         signed,
         agentDecisions: agents,
@@ -259,8 +265,8 @@ export class Passports {
 
   /** Validation packages that released this lot: who signed, whether it is on-chain, and the signers' stake now. */
   private async releases(siteId: string, runId: string, ens: Map<string, string>) {
-    const pkgs = await this.db.query<{ id: string; number: number; type: string; title: string; updated_at: string }>(
-      "SELECT id, number, type, title, updated_at::text AS updated_at FROM validation_packages WHERE site_id = $1 AND run_id = $2 AND status = 'released' ORDER BY number",
+    const pkgs = await this.db.query<{ id: string; number: number; type: string; title: string; updated_at: string; release_json: string | null }>(
+      "SELECT id, number, type, title, updated_at::text AS updated_at, release_json FROM validation_packages WHERE site_id = $1 AND run_id = $2 AND status = 'released' ORDER BY number",
       [siteId, runId],
     );
     const chain = this.trust.chain;
@@ -284,7 +290,10 @@ export class Passports {
           })),
         );
         const relay = await this.trust.relayOf(siteId, v.id);
-        return { id: v.id, number: v.number, type: v.type, title: v.title, releasedAt: new Date(v.updated_at).toISOString(), signers, onchain: relay?.status === "done" ? { txUrl: relay.txUrl, contract: chain?.cfg.address ?? null } : null };
+        // what the three signed: the lot, the content hash and the root of its stage proofs
+        const st = v.release_json ? (JSON.parse(v.release_json) as { lot: string; contentHash: string; proofRoot: string; stages: string[] }) : null;
+        const statement = st ? { lot: st.lot, contentHash: st.contentHash, proofRoot: st.proofRoot, stagesProven: st.stages } : null;
+        return { id: v.id, number: v.number, type: v.type, title: v.title, releasedAt: new Date(v.updated_at).toISOString(), signers, statement, onchain: relay?.status === "done" ? { txUrl: relay.txUrl, contract: chain?.cfg.address ?? null } : null };
       }),
     );
   }

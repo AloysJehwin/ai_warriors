@@ -188,11 +188,10 @@ describe("OrdoTrust: releases need staked validators", () => {
     await reverts(t.write(4, "recordRelease", [lot, late]), "Expired");
   });
 
-  it("rejects a performer with no role, an unstaked reviewer, a reviewer who is unstaking, a non-manager approver and one person signing twice", async () => {
+  it("rejects an unstaked reviewer, a reviewer who is unstaking, a non-manager approver and one person signing twice", async () => {
     const t = await staffed();
     const l = (p: string) => lotOf(p);
-    await reverts(t.write(4, "recordRelease", [l("vp_1"), await releaseSigs(t, l("vp_1"), [3, 1, 0])]), "NotAuthorized"); // 3 holds no role yet
-    await t.grant(3, "OPERATOR");
+    // the performer is the package owner, whom Ordo checks; process engineers hold no OrdoTrust role
     await t.grant(5, "VALIDATOR"); // credential but no stake
     await reverts(t.write(4, "recordRelease", [l("vp_2"), await releaseSigs(t, l("vp_2"), [3, 5, 0])]), "NotAuthorized");
     await reverts(t.write(4, "recordRelease", [l("vp_3"), await releaseSigs(t, l("vp_3"), [3, 1, 2])]), "NotAuthorized");

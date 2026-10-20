@@ -16,6 +16,8 @@ import { LotNames } from "./core/lot-names.js";
 import { Names } from "./core/names.js";
 import { Openings } from "./core/openings.js";
 import { Passports } from "./core/passports.js";
+import { Readings } from "./core/readings.js";
+import { StageProofs } from "./core/stage-proofs.js";
 import { SpecProofs } from "./core/spec-proofs.js";
 import { Proof } from "./core/proof.js";
 import { Recorder } from "./core/recorder.js";
@@ -68,6 +70,8 @@ export interface System {
   jobs: Jobs;
   names: Names;
   lotNames: LotNames;
+  readings: Readings;
+  stageProofs: StageProofs;
   agentNfts: AgentNfts;
   agentLicenses: AgentLicenses;
   /** x402: the paid assessment route's middleware and terms, when Ordo sells assessments */
@@ -251,6 +255,11 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
 
   const passports = new Passports(db, rec, sigs, engine, trust, proof, passportRail, publicBase(cfg), cfg.SIGNATURE_CHAIN_ID, now);
   passports.specs = new SpecProofs(db, rec, now);
+  const stageProofs = new StageProofs(db, engine, now);
+  const readings = new Readings(db, engine, plant, rec, now);
+  validation.stageProofs = stageProofs;
+  passports.stages = stageProofs;
+  if (!stageProofs.enabled) warnings.push("The stage-check circuit (server/zk) is missing: signed stage readings are kept but not proven");
   if (!passports.specs.enabled) warnings.push("The spec-check circuit (server/zk) is missing: public passports show criteria without zero-knowledge proofs");
 
   // ---- ENSv2 names on Sepolia for the site, its people, assets and agents ----
@@ -309,6 +318,7 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
     await schedules?.reconcile().catch((e) => console.error("[ordo] schedules", e));
     await workOrders.refundExpired().catch((e) => console.error("[ordo] refunds", e));
     await passports.reconcile().catch((e) => console.error("[ordo] passports", e));
+    await stageProofs.reconcile().catch((e) => console.error("[ordo] stage proofs", e));
     await jobs.run().catch((e) => console.error("[ordo] jobs", e));
     await names.reconcile().catch((e) => console.error("[ordo] ens", e));
     await lotNames.reconcile().catch((e) => console.error("[ordo] ens lots", e));
@@ -376,6 +386,8 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
     jobs,
     names,
     lotNames,
+    readings,
+    stageProofs,
     agentNfts,
     agentLicenses,
     x402,

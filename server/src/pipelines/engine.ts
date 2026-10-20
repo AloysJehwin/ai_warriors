@@ -23,6 +23,8 @@ interface StageData {
   waitingReason?: string | null;
   criteria?: StageRunView["criteriaResults"];
   confirmedBy?: string;
+  /** when the work finished: the end of the window a signed reading covers */
+  workDoneAt?: string;
 }
 interface StageRow {
   run_id: string;
@@ -213,21 +215,28 @@ export class RunEngine {
       const data = JSON.parse(row.data_json) as StageData;
       const asset = row.asset_id ? ctx.assets.get(row.asset_id) ?? null : null;
       let good = Number(row.units_good);
+      let scrap = Number(row.units_scrap);
       if (spec.resourceKind !== "system" && spec.mode !== "manual" && asset?.latest.part_count?.value != null) {
-        const base = JSON.parse(row.baseline_json) as { part_count: number | null; carried?: number };
+        const base = JSON.parse(row.baseline_json) as { part_count: number | null; carried?: number; scrap?: number | null };
+        const rejects = asset.latest.scrap?.value ?? null;
         if (base.part_count === null) {
-          await this.db.query("UPDATE stage_runs SET baseline_json = $1 WHERE run_id = $2 AND code = $3", [JSON.stringify({ ...base, part_count: asset.latest.part_count.value }), runId, row.code]);
+          await this.db.query("UPDATE stage_runs SET baseline_json = $1 WHERE run_id = $2 AND code = $3", [JSON.stringify({ ...base, part_count: asset.latest.part_count.value, scrap: rejects }), runId, row.code]);
         } else {
           let delta = asset.latest.part_count.value - base.part_count;
           if (delta < 0) delta = asset.latest.part_count.value; // counter reset on the controller
           good = Math.min(ctx.run.quantity, (base.carried ?? 0) + Math.round(delta));
           if (good !== Number(row.units_good)) await this.db.query("UPDATE stage_runs SET units_good = $1 WHERE run_id = $2 AND code = $3", [good, runId, row.code]);
+          // a machine that counts its rejects owns the scrap count too, as its gateway signs both
+          if (rejects !== null && base.scrap != null) {
+            scrap = Math.max(0, Math.round(rejects - base.scrap));
+            if (scrap !== Number(row.units_scrap)) await this.db.query("UPDATE stage_runs SET units_scrap = $1 WHERE run_id = $2 AND code = $3", [scrap, runId, row.code]);
+          }
         }
       }
-      const total = good + Number(row.units_scrap);
+      const total = good + scrap;
       const workDone = data.workDone || (spec.mode !== "manual" && spec.resourceKind !== "system" && total >= ctx.run.quantity && total > 0);
       if (workDone) {
-        await this.finishWork(ctx, { ...row, units_good: good }, spec);
+        await this.finishWork(ctx, { ...row, units_good: good, units_scrap: scrap }, spec);
         continue;
       }
       const startedAt = row.started_at ? Date.parse(row.started_at) : now;
@@ -319,7 +328,7 @@ export class RunEngine {
           : `${pick.name} has no part counter: an operator records units and completes the stage`;
       await this.db.query("UPDATE stage_runs SET state = 'running', started_at = now(), asset_id = $1, baseline_json = $2 WHERE run_id = $3 AND code = $4", [
         pick?.id ?? null,
-        JSON.stringify({ part_count: baseline }),
+        JSON.stringify({ part_count: baseline, scrap: pick?.latest.scrap?.value ?? null }),
         ctx.run.id,
         row.code,
       ]);
@@ -355,7 +364,7 @@ export class RunEngine {
     const yieldTxt = total ? `${((good / total) * 100).toFixed(1)}% yield` : "no units counted";
     const outcome = `${good} good · ${scrap} scrap · ${yieldTxt} in ${Math.round(durationMin)} min${asset ? ` on ${asset.name}` : ""}`;
     await this.db.query("UPDATE stage_runs SET outcome = $1 WHERE run_id = $2 AND code = $3", [outcome, runId, row.code]);
-    await this.patchData(runId, row.code, { workDone: true, criteria });
+    await this.patchData(runId, row.code, { workDone: true, criteria, workDoneAt: new Date(this.now()).toISOString() });
     const rework = ctx.tpl.spec.rework;
     if (rework && rework.from === row.code && scrap > 0) {
       await this.patchData(runId, rework.to, { reworkUnits: scrap });
@@ -471,6 +480,7 @@ export class RunEngine {
         gateItemId: data.gateItemId ?? null,
         waitingReason: data.waitingReason ?? null,
         reworkUnits: data.reworkUnits ?? 0,
+        workDoneAt: data.workDoneAt ?? null,
       } as StageRunView;
     });
     const completed = stages.filter((s) => DONE.includes(s.state)).length;

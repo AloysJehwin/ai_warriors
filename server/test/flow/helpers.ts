@@ -44,7 +44,15 @@ export async function wallet(app: ReturnType<typeof createApp>, key: `0x${string
     const res = await app.request(path, { method: "POST", body: form, headers: { host: "localhost", origin: "http://localhost", cookie } });
     return { status: res.status, json: await res.json() };
   };
-  return { account, address: account.address.toLowerCase(), call, upload, sign: (typed) => account.signTypedData(typed) };
+  return { account, address: account.address.toLowerCase(), call, upload, sign: (typed) => account.signTypedData(asTyped(typed)) };
+}
+
+/** Typed data as the server sends it (JSON): uint fields arrive as decimal strings, as the console converts them. */
+export function asTyped(typed: any) {
+  const fields: { name: string; type: string }[] = typed.types[typed.primaryType] ?? [];
+  const message = { ...typed.message };
+  for (const f of fields) if (/^uint/.test(f.type) && typeof message[f.name] === "string") message[f.name] = BigInt(message[f.name]);
+  return { ...typed, message };
 }
 
 export type { System };
