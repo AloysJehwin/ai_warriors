@@ -301,11 +301,12 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
   const advance = async (force = false) => {
     // throttle: one cycle per 4 s across all instances (the lease is left to expire, not released)
     if (!force && !(await plant.tryLease("advance", 4_000))) return;
-    await plant.ingest();
+    // one failing site or service must not stop the cycle for everyone else
+    await plant.ingest().catch((e) => console.error("[ordo] ingest", e));
     await engine.tick();
     const sites = await db.query<{ id: string }>("SELECT id FROM sites");
-    for (const s of sites.rows) await monitor.scan(s.id);
-    await schedules?.reconcile();
+    for (const s of sites.rows) await monitor.scan(s.id).catch((e) => console.error(`[ordo] monitor ${s.id}`, e));
+    await schedules?.reconcile().catch((e) => console.error("[ordo] schedules", e));
     await workOrders.refundExpired().catch((e) => console.error("[ordo] refunds", e));
     await passports.reconcile().catch((e) => console.error("[ordo] passports", e));
     await jobs.run().catch((e) => console.error("[ordo] jobs", e));

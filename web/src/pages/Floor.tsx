@@ -729,7 +729,7 @@ function AssetForm({ asset, onClose }: { asset: AssetView | null; onClose: () =>
   const [device, setDevice] = useState<string | null>(src0?.type === "mtconnect" ? src0.device : null);
   const [devices, setDevices] = useState<{ name: string; model: string | null }[]>(src0?.type === "mtconnect" ? [{ name: src0.device, model: null }] : []);
   const [poll, setPoll] = useState(String(src0?.type === "mtconnect" ? src0.pollSeconds : 10));
-  const [cycle, setCycle] = useState(asset ? "" : "");
+  const [cycle, setCycle] = useState(asset?.idealCycleS?.toString() ?? "");
   const [limits, setLimits] = useState<LimitRow[]>(
     asset ? Object.entries(asset.limits).map(([signal, l]) => ({ signal, warn: l.warn?.toString() ?? "", alarm: l.alarm?.toString() ?? "", unit: l.unit })) : [{ signal: "temperature", warn: "", alarm: "", unit: "°C" }],
   );
@@ -754,7 +754,7 @@ function AssetForm({ asset, onClose }: { asset: AssetView | null; onClose: () =>
       if (!l.signal.trim() || (l.warn === "" && l.alarm === "")) continue;
       lim[l.signal.trim()] = { ...(l.warn !== "" ? { warn: Number(l.warn) } : {}), ...(l.alarm !== "" ? { alarm: Number(l.alarm) } : {}), unit: l.unit };
     }
-    const source: DataSource = type === "mtconnect" ? { type, agentUrl: url.trim(), device: device!, pollSeconds: Number(poll) } : type === "replay" ? { type } : { type: "manual" };
+    const source: DataSource = type === "mtconnect" ? { type, agentUrl: url.trim(), device: device!, pollSeconds: Number(poll) } : type === "replay" ? (src0?.type === "replay" && src0.seriesId ? { type, seriesId: src0.seriesId } : { type }) : { type: "manual" };
     const body = { name: name.trim(), kind, zoneId: zone, owningAgent: agent, source, limits: lim, idealCycleS: cycle ? Number(cycle) : null, description: null };
     if (asset) await api.put(path(`/assets/${asset.id}`), body);
     else await api.post(path("/assets"), body);

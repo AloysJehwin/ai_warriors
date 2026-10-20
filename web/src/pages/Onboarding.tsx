@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { useSign } from "../lib/sign";
 import { ago, shortAddr } from "../lib/format";
@@ -42,6 +42,8 @@ export function ApplyForm({
   const [role, setRole] = useState<string>(initialRole ?? (kind === "validator" ? "quality" : kind === "vendor" ? "vendor" : "operator"));
   const [form, setForm] = useState<Record<string, string>>({ ...context, fullName: "" });
   const [files, setFiles] = useState<File[]>([]);
+  // the request is created before its files upload: a retry after a failed upload attaches to it instead of re-applying
+  const sent = useRef<{ r: OnboardingView; uploaded: Set<File> } | null>(null);
   const [worldId, setWorldId] = useState<unknown>(null);
   const needsWorldId = useWorldIdEnabled() === true && kind === "validator";
   const toast = useToast();
@@ -111,12 +113,18 @@ export function ApplyForm({
           className="btn accent"
           disabled={!valid}
           onClick={async () => {
-            let r = await api.post<OnboardingView>("/v1/onboarding", { siteId, kind, role, form, ...(needsWorldId ? { worldId } : {}) });
+            const big = files.find((f) => f.size > 4 * 1024 * 1024);
+            if (big) throw new Error(`${big.name} is over 4 MB`);
+            sent.current ??= { r: await api.post<OnboardingView>("/v1/onboarding", { siteId, kind, role, form, ...(needsWorldId ? { worldId } : {}) }), uploaded: new Set() };
+            let r = sent.current.r;
             for (const f of files) {
+              if (sent.current.uploaded.has(f)) continue;
               const fd = new FormData();
               fd.set("file", f);
               r = await api.upload<OnboardingView>(`/v1/onboarding/${siteId}/requests/${r.id}/files`, fd);
+              sent.current = { r, uploaded: sent.current.uploaded.add(f) };
             }
+            sent.current = null;
             toast("Application sent to the site administrator", "ok");
             onDone(r);
           }}

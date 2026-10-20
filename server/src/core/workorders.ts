@@ -85,7 +85,11 @@ export class WorkOrders {
     readonly payer: AgentPayer | null,
     private now: () => number,
   ) {
-    trust.onRetry("workorder.release", (siteId, ref, p) => this.chain().releaseWorkOrder(siteId, ref, p.sig));
+    trust.onRetry("workorder.release", async (siteId, ref, p) => {
+      const tx = await this.chain().releaseWorkOrder(siteId, ref, p.sig);
+      await this.db.query("UPDATE work_orders SET status = 'released', error = NULL, updated_at = now() WHERE id = $1 AND site_id = $2", [ref, siteId]);
+      return tx;
+    });
     trust.onRetry("agent.caps", (siteId, _ref, p) => this.chain().setAgent(siteId, p.agent, BigInt(p.perOrder), BigInt(p.perDay), p.sig));
     trust.onRetry("agent.pause", (siteId, _ref, p) => this.chain().setPaused(siteId, p.stop, p.sig));
   }
@@ -275,6 +279,8 @@ export class WorkOrders {
     if (!canApproveAny(roles, "maintenance_lead")) throw new HttpError(403, "A maintenance lead, plant manager or admin confirms the work and pays");
     const w = await this.row(siteId, id);
     if (w.status !== "escrowed") throw new HttpError(409, `Work order is ${w.status.replace("_", " ")}`);
+    // past expiry the escrow is refundable by anyone (and Hedera's schedule refunds it): a release would revert
+    if (w.expires_at && Date.parse(w.expires_at) <= this.now()) throw new HttpError(409, "The escrow has expired and returns to the site's fund");
     if (w.vendor_address === user.address.toLowerCase()) throw new HttpError(403, "The vendor cannot release its own payment");
     return w;
   }
@@ -301,6 +307,9 @@ export class WorkOrders {
     if (relay.status === "done") {
       await this.db.query("UPDATE work_orders SET status = 'released', updated_at = now() WHERE id = $1", [id]);
       await this.rec.decide(siteId, { agent: `user:${user.address}`, kind: "work_order.released", summary: `Paid ${w.company ?? w.vendor_address} ${this.units(w.amount!)} for ${id}`, data: { workOrderId: id, txHash: relay.txHash, signatureId: sig.id } });
+    } else if (relay.status === "failed") {
+      // back to escrowed, so the refund timer and refundExpired still cover it and someone can sign again
+      await this.db.query("UPDATE work_orders SET status = 'escrowed', released_by = NULL, error = $1, updated_at = now() WHERE id = $2", [relay.error, id]);
     }
     return this.get(siteId, id);
   }

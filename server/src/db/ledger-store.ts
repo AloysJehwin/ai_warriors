@@ -67,6 +67,24 @@ export class LedgerStore {
     return r.rows.map(toEntry);
   }
 
+  /**
+   * The ledger is one hash chain for every site; a site's view is the entries that belong to it: its decisions, entries
+   * about its runs, assets, incidents, validation packages and work orders, and events that name it in their payload.
+   */
+  async latestForSite(siteId: string, limit: number, subject?: string): Promise<LedgerEntry[]> {
+    const r = await this.db.query<Row>(
+      `SELECT * FROM ledger l WHERE ($3::text IS NULL OR l.subject = $3 OR l.subject LIKE $3 || '/%') AND (
+         l.seq IN (SELECT ledger_seq FROM decisions WHERE site_id = $1 AND ledger_seq IS NOT NULL)
+         OR split_part(COALESCE(l.subject, ''), '/', 1) IN (
+           SELECT id FROM runs WHERE site_id = $1 UNION ALL SELECT id FROM assets WHERE site_id = $1 UNION ALL SELECT id FROM incidents WHERE site_id = $1
+           UNION ALL SELECT id FROM validation_packages WHERE site_id = $1 UNION ALL SELECT id FROM work_orders WHERE site_id = $1)
+         OR l.payload_json::jsonb ->> 'site' = $1 OR l.payload_json::jsonb ->> 'siteId' = $1)
+       ORDER BY l.seq DESC LIMIT $2`,
+      [siteId, limit, subject ?? null],
+    );
+    return r.rows.map(toEntry);
+  }
+
   async after(seq: number, limit = 200): Promise<LedgerEntry[]> {
     const r = await this.db.query<Row>("SELECT * FROM ledger WHERE seq > $1 ORDER BY seq DESC LIMIT $2", [seq, limit]);
     return r.rows.map(toEntry);

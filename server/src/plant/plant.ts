@@ -455,6 +455,7 @@ export class PlantService {
         lastDataAt: lastDataAt ? new Date(lastDataAt).toISOString() : null,
         sourceError: st.lastError,
         limits: a.limits,
+        idealCycleS: a.idealCycleS,
       });
     }
     return out;

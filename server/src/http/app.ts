@@ -56,8 +56,14 @@ export function createApp(sys: System, opts: AppOptions = {}) {
   app.use("/v1/*", async (c, next) => {
     if (!["GET", "HEAD", "OPTIONS"].includes(c.req.method)) {
       const origin = c.req.header("origin");
-      if (origin) {
-        const o = new URL(origin).host;
+      // x402 and public ENS routes are meant to be called from anywhere
+      if (origin && !c.req.path.startsWith("/v1/x402/") && !c.req.path.startsWith("/v1/public/")) {
+        let o: string | null = null;
+        try {
+          o = new URL(origin).host;
+        } catch {
+          // "null" (sandboxed frames, privacy redirects) or garbage: not this origin
+        }
         if (o !== host(c) && !(opts.corsOrigins ?? []).includes(origin)) throw new HttpError(403, "Cross-site request blocked");
       }
     }
@@ -298,6 +304,8 @@ export function createApp(sys: System, opts: AppOptions = {}) {
   site.post("/names/:kind/:ref/retry", async (c) => {
     need(c, "admin");
     await sys.names.retry(sid(c), c.req.param("kind"), c.req.param("ref"));
+    // lot names and their release records live in their own queue
+    await sys.lotNames.retry(sid(c), c.req.param("kind"), c.req.param("ref"));
     return c.json({ ok: true });
   });
   site.post("/team/invites", async (c) => {
@@ -639,15 +647,20 @@ export function createApp(sys: System, opts: AppOptions = {}) {
   // ---- Ledger & proof ----
   site.get("/ledger", async (c) => {
     const subject = c.req.query("subject") || undefined;
-    return c.json({ entries: await sys.ledger.latest(Math.min(500, Number(c.req.query("limit") ?? 100)), subject), anchors: await sys.proof.anchors(20), anchorKind: sys.proof.kind });
+    return c.json({ entries: await sys.ledger.latestForSite(sid(c), Math.min(500, Number(c.req.query("limit") ?? 100)), subject), anchors: await sys.proof.anchors(20), anchorKind: sys.proof.kind });
   });
-  site.get("/verify", async (c) => c.json(await sys.proof.verify(c.req.query("subject") || undefined)));
+  site.get("/verify", async (c) => {
+    const subject = c.req.query("subject") || undefined;
+    // the chain check covers every site; the subject's entries are listed only for a subject of this site
+    if (subject && !(await sys.ledger.latestForSite(sid(c), 1, subject)).length) throw new HttpError(404, "Nothing on the ledger for that subject at this site");
+    return c.json(await sys.proof.verify(subject));
+  });
   site.post("/anchors", async (c) => {
     need(c, "supervisor");
     return c.json(await sys.proof.anchorHead(sid(c), c.req.query("subject") || null));
   });
   site.post("/summaries/shift", async (c) => {
-    const entries = (await sys.ledger.latest(120)).reverse();
+    const entries = (await sys.ledger.latestForSite(sid(c), 120)).reverse();
     const r = await sys.agents.summarize({ entries: entries.map((e) => ({ seq: e.seq, type: e.type, actor: e.actor, subject: e.subject, brief: String((e.payload as { summary?: string })?.summary ?? e.type) })) });
     return c.json({ ...r.value, modelId: r.modelId, fallback: r.fallback });
   });
@@ -694,5 +707,6 @@ export function createApp(sys: System, opts: AppOptions = {}) {
   } else {
     app.get("/", (c) => c.text("Ordo API is running."));
   }
+  app.notFound((c) => c.json({ error: "Not found" }, 404));
   return app;
 }

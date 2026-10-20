@@ -48,6 +48,8 @@ export async function openDb(opts: { url?: string; dataDir?: string }): Promise<
   };
 }
 
+const MIGRATION_LOCK = 4241;
+
 /** Apply pending migrations in order. Databases created by the v1 demo are detected and upgraded. */
 export async function migrate(db: Db): Promise<number> {
   await db.query("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())");
@@ -63,12 +65,16 @@ export async function migrate(db: Db): Promise<number> {
   let applied = 0;
   for (const m of MIGRATIONS) {
     if (done.has(m.version)) continue;
-    await db.tx(async (q) => {
+    const ran = await db.tx(async (q) => {
+      // two cold starts can migrate at once: the second waits here, then skips what the first applied
+      if (db.kind === "postgres") await q.query("SELECT pg_advisory_xact_lock($1)", [MIGRATION_LOCK]);
+      if ((await q.query("SELECT 1 FROM schema_migrations WHERE version = $1", [m.version])).rows.length) return false;
       const sql = m.sql.split("\n").filter((l) => !l.trim().startsWith("--")).join("\n");
       for (const stmt of sql.split(";").map((x) => x.trim()).filter(Boolean)) await q.query(stmt);
       await q.query("INSERT INTO schema_migrations (version, name) VALUES ($1, $2)", [m.version, m.name]);
+      return true;
     });
-    applied += 1;
+    if (ran) applied += 1;
   }
   return applied;
 }

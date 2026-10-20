@@ -245,7 +245,9 @@ export class Names {
       });
       return this.sent(r, "issue", want, hashes);
     }
-    const changed = Object.fromEntries(Object.entries(want.texts).filter(([k, v]) => have.texts[k] !== v));
+    const changed: Record<string, string> = Object.fromEntries(Object.entries(want.texts).filter(([k, v]) => have.texts[k] !== v));
+    // a record that is no longer wanted (a revoked validator's scope) is cleared, or contracts reading ENS keep honouring it
+    for (const k of Object.keys(have.texts)) if (!(k in want.texts) && have.texts[k] !== "") changed[k] = "";
     const addr = want.addr && want.addr !== have.addr ? want.addr : undefined;
     if (!Object.keys(changed).length && !addr) return this.done(r, "issued", want, null);
     return this.sent(r, "records", want, [await rail.sendRecords(r.name, changed, addr)]);

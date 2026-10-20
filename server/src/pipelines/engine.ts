@@ -9,6 +9,8 @@ import type { Schedules } from "../core/schedules.js";
 import { evaluateCriteria } from "./criteria.js";
 import { predecessors } from "./graph.js";
 
+const RUN_ID_LOCK = 4243;
+
 const DONE: StageState[] = ["completed", "done_deviation", "skipped"];
 const ACTIVE: StageState[] = ["running", "awaiting_approval", "held"];
 
@@ -75,9 +77,11 @@ export class RunEngine {
   async start(siteId: string, actor: string, input: { templateVersionId: string; orderRef: string; quantity: number; dueAt?: string | null; lineId?: string | null }): Promise<string> {
     const tpl = await this.templates.version(input.templateVersionId);
     const line = await this.line(siteId, input.lineId ?? null);
-    const n = Number((await this.db.query<{ n: string }>("SELECT COUNT(*)::text n FROM runs WHERE site_id = $1", [siteId])).rows[0]!.n);
-    const id = `R-${1001 + n}`;
-    await this.db.tx(async (q) => {
+    // run ids are unique across every site (runs.id is the key, and passports and public pages use it), so number globally
+    const id = await this.db.tx(async (q) => {
+      if (this.db.kind === "postgres") await q.query("SELECT pg_advisory_xact_lock($1)", [RUN_ID_LOCK]);
+      const max = Number((await q.query<{ n: string }>("SELECT COALESCE(MAX(CAST(substring(id FROM 3) AS INTEGER)), 1000)::text n FROM runs WHERE id ~ '^R-[0-9]+$'")).rows[0]!.n);
+      const id = `R-${max + 1}`;
       await q.query("INSERT INTO runs (id, site_id, line_id, template_version_id, order_ref, quantity, status, started_by, due_at) VALUES ($1,$2,$3,$4,$5,$6,'running',$7,$8)", [
         id,
         siteId,
@@ -89,6 +93,7 @@ export class RunEngine {
         input.dueAt ?? null,
       ]);
       for (const s of tpl.spec.stages) await q.query("INSERT INTO stage_runs (run_id, code, state, data_json) VALUES ($1,$2,'queued',$3)", [id, s.code, JSON.stringify({ name: s.name })]);
+      return id;
     });
     await this.rec.decide(siteId, { agent: actor, kind: "run.started", runId: id, summary: `Started ${tpl.name} v${tpl.version} for ${input.orderRef} · ${input.quantity} units`, data: { templateVersionId: tpl.versionId, line: line.name, autonomy: line.autonomy } });
     await this.tickRun(siteId, id);
@@ -106,7 +111,7 @@ export class RunEngine {
   /** Advance every running run of every site (called once per request cycle, under a lease). */
   async tick(): Promise<void> {
     const runs = await this.db.query<{ id: string; site_id: string }>("SELECT id, site_id FROM runs WHERE status = 'running' ORDER BY started_at");
-    for (const r of runs.rows) await this.tickRun(r.site_id, r.id);
+    for (const r of runs.rows) await this.tickRun(r.site_id, r.id).catch((e) => console.error(`[ordo] run ${r.id}`, e));
   }
 
   /** Step run: start every stage whose upstream is complete, even at L1. A pending gate is returned instead. */

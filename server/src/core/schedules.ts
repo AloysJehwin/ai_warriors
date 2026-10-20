@@ -171,7 +171,7 @@ export class Schedules {
       await this.create(w.site_id, "workorder.refund", w.id, at, () => this.rail.contractCall({ contract: c.cfg.workOrders!, data, gas: REFUND_GAS, at, memo: `ordo refund ${w.id}` }), `Refund of ${w.id} if it is not released`);
     }
     const done = await this.db.query<Row>(
-      "SELECT h.id, h.site_id, h.kind, h.ref, h.execute_at::text, h.schedule_id, h.status FROM hedera_schedules h JOIN work_orders w ON w.id = h.ref WHERE h.kind = 'workorder.refund' AND h.status = 'scheduled' AND w.status IN ('releasing', 'released')",
+      "SELECT h.id, h.site_id, h.kind, h.ref, h.execute_at::text, h.schedule_id, h.status FROM hedera_schedules h JOIN work_orders w ON w.id = h.ref WHERE h.kind = 'workorder.refund' AND h.status = 'scheduled' AND w.status = 'released'",
     );
     for (const r of done.rows) await this.cancel(r, `${r.ref} was released`);
   }
