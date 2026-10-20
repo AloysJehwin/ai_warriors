@@ -17,7 +17,8 @@ const RUN = "run_7781";
 const subjectOf = (site: string, run: string, stage: string) => BigInt(`0x${createHash("sha256").update(`ordo:stage:${site}:${run}:${stage}`).digest("hex")}`) % FIELD;
 type Counts = { good: bigint; scrap: bigint; startedAt: bigint; endedAt: bigint };
 // yield ≥ 98 %, scrap ≤ 2 %, cycle time ≤ 45 s, one unused slot
-const CRITERIA = { kind: [1n, 2n, 4n, 0n], op: [0n, 1n, 1n, 0n], target: [980_000n, 20_000n, 450_000n, 0n] };
+type Slots = [bigint, bigint, bigint, bigint];
+const CRITERIA: { kind: Slots; op: Slots; target: Slots } = { kind: [1n, 2n, 4n, 0n], op: [0n, 1n, 1n, 0n], target: [980_000n, 20_000n, 450_000n, 0n] };
 
 async function prove(stage: string, c: Counts, criteria = CRITERIA) {
   const poseidon = await buildPoseidon();
