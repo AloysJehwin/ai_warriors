@@ -81,7 +81,7 @@ describe("stage-check circuit and OrdoStageVerifier", () => {
     await expect(prove("02", { ...good, endedAt: good.startedAt + 50n * 990n })).rejects.toThrow(); // 50 s a part
     await expect(prove("02", { good: 0n, scrap: 0n, startedAt: 1n, endedAt: 2n }, { kind: [1n, 0n, 0n, 0n], op: [1n, 0n, 0n, 0n], target: [1_000_000n, 0n, 0n, 0n] })).rejects.toThrow(); // no units
     // defects in ppm and cycle time in minutes
-    const ppm = { kind: [3n, 5n, 0n, 0n], op: [1n, 1n, 0n, 0n], target: [15_000n * 10_000n, 7_000n, 0n, 0n] };
+    const ppm: typeof CRITERIA = { kind: [3n, 5n, 0n, 0n], op: [1n, 1n, 0n, 0n], target: [15_000n * 10_000n, 7_000n, 0n, 0n] };
     await expect(prove("02", good, ppm)).resolves.toBeTruthy(); // 10 000 ppm ≤ 15 000; 0.667 min ≤ 0.7
     await expect(prove("02", good, { ...ppm, target: [9_000n * 10_000n, 7_000n, 0n, 0n] })).rejects.toThrow();
   });
