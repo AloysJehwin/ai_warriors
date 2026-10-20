@@ -1,6 +1,6 @@
 # Environments, configuration and live testing
 
-One place holds every setting for every environment: **Vercel project environment variables**. Local work pulls from it, preview deployments read it per branch, production reads it on promote. Nothing secret lives in the repo.
+One place holds every setting for every environment: **Vercel project environment variables**. Local work pulls from it, preview deployments read it per branch, production reads it on promote. Nothing secret lives in the repo. Branches under `claude/` get no preview deployment (`git.deploymentEnabled` in `vercel.json`): the Hobby plan limits how many branches can deploy, and CI already builds and tests the Vercel output on every PR.
 
 ## The three environments
 
