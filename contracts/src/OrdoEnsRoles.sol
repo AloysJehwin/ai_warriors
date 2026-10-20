@@ -62,7 +62,7 @@ library OrdoEnsName {
 ///         expire and the role is gone in every contract that asks.
 ///
 /// Each Ordo site is `<site>.<parent>` (e.g. `chennai-1.ordo-mfg.eth`) with its own ENSv2 registry, and each person
-/// is `member-<first 6 hex of their wallet>.<site>.<parent>`, minted to their wallet with no roles on the token so
+/// is `member-<their wallet's 40 hex digits>.<site>.<parent>`, minted to their wallet with no roles on the token so
 /// they cannot transfer it. A wallet holds a role at a site when:
 ///  - it owns its member name in the site's registry right now (not expired, not unregistered), and
 ///  - the name's `com.ordo.roles` text record lists the role (Ordo's role names, comma-separated), or, for
@@ -77,6 +77,8 @@ contract OrdoEnsRoles is IOrdoTrust {
     uint8 public constant VALIDATOR = 4;
     uint8 public constant PLANT_MANAGER = 8;
     uint8 public constant ADMIN = 16;
+    /// a machine's gateway, which signs stage readings; its member name is minted to the gateway's key
+    uint8 public constant DEVICE = 64;
 
     IEnsV2Registry public immutable parent;
     string public parentName;
@@ -121,7 +123,7 @@ contract OrdoEnsRoles is IOrdoTrust {
         return rolesOf(keccak256(bytes(siteId)), memberLabel(account), account) & role != 0;
     }
 
-    /// Roles `account` holds through the member name `label` at `site` (labels can carry a -2 suffix on a clash).
+    /// Roles `account` holds through the member name `label` at `site`.
     function rolesOf(bytes32 site, string memory label, address account) public view returns (uint8 bits) {
         string memory sl = siteLabel[site];
         if (bytes(sl).length == 0 || account == address(0)) return 0;
@@ -135,21 +137,22 @@ contract OrdoEnsRoles is IOrdoTrust {
         if (bytes(_text(resolver, labels, "com.ordo.validator")).length != 0) bits |= VALIDATOR;
     }
 
-    /// `member-` and the first six hex digits of the wallet, as Ordo labels people.
+    /// `member-` and the wallet's 40 hex digits, as Ordo labels people and gateways: one label per wallet, so no two
+    /// wallets can clash (a shorter label could be ground to collide and push the real holder to a name with no roles).
     function memberLabel(address account) public pure returns (string memory) {
-        bytes memory out = new bytes(13);
+        bytes memory out = new bytes(47);
         bytes memory prefix = "member-";
         for (uint256 i = 0; i < 7; i++) out[i] = prefix[i];
         bytes16 digits = "0123456789abcdef";
-        uint256 v = uint160(account) >> 136; // top 24 bits
-        for (uint256 i = 12; i > 6; i--) {
+        uint256 v = uint160(account);
+        for (uint256 i = 46; i > 6; i--) {
             out[i] = digits[v & 0xf];
             v >>= 4;
         }
         return string(out);
     }
 
-    /// The member's full name, e.g. member-70997a.chennai-1.ordo-mfg.eth ("" for an unlinked site).
+    /// The member's full name, e.g. member-70997970c51812dc3a010c7d01b50e0d17dc79c8.chennai-1.ordo-mfg.eth ("" for an unlinked site).
     function memberName(bytes32 site, address account) external view returns (string memory) {
         string memory sl = siteLabel[site];
         if (bytes(sl).length == 0) return "";
@@ -173,7 +176,7 @@ contract OrdoEnsRoles is IOrdoTrust {
         }
     }
 
-    /// "admin,operator,plant_manager" → role bits. Process and quality engineers hold no on-chain role.
+    /// "admin,operator,plant_manager" → role bits ("device" for a gateway). Process and quality engineers hold no on-chain role.
     function _parseRoles(string memory list) internal pure returns (uint8 bits) {
         bytes memory b = bytes(list);
         uint256 start;
@@ -192,6 +195,7 @@ contract OrdoEnsRoles is IOrdoTrust {
         if (h == keccak256("plant_manager")) return PLANT_MANAGER;
         if (h == keccak256("admin")) return ADMIN;
         if (h == keccak256("validator")) return VALIDATOR;
+        if (h == keccak256("device")) return DEVICE;
         return 0;
     }
 

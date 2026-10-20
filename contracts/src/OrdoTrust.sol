@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {OrdoProofs} from "./OrdoProofs.sol";
 
 /// @title OrdoTrust
 /// @notice Who may decide what at an Ordo site, enforced on-chain.
@@ -10,9 +11,11 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 ///    signature can release a validation package.
 ///  - A validator's stake can be slashed only by two other active validators and a plant manager,
 ///    and the slashed amount goes to the site's quality fund, never to the people who signed.
-/// Every authorisation is an Ordo EIP-712 signature (`OrdoSignature`, domain {name:"Ordo",version:"1",chainId})
-/// — the same typed data the Ordo console asks people to sign — so anyone may relay it; the contract
-/// checks who signed, not who sent the transaction.
+/// Every authorisation is an Ordo EIP-712 signature (`OrdoSignature`, domain {name:"Ordo",version:"2",chainId,
+/// verifyingContract}) — the same typed data the Ordo console asks people to sign — so anyone may relay it; the
+/// contract checks who signed, not who sent the transaction. The domain names this deployment, so a signature made
+/// for it cannot be replayed on a redeployed contract (where its nonce would be fresh). Releases are `OrdoRelease`
+/// statements (OrdoProofs) that cover exactly what is released.
 contract OrdoTrust is ReentrancyGuard {
     uint8 public constant OPERATOR = 1;
     uint8 public constant SUPERVISOR = 2;
@@ -20,8 +23,10 @@ contract OrdoTrust is ReentrancyGuard {
     uint8 public constant PLANT_MANAGER = 8;
     uint8 public constant ADMIN = 16;
     uint8 public constant VENDOR = 32;
+    /// a machine's gateway: it signs stage readings (OrdoProofs.OrdoReading)
+    uint8 public constant DEVICE = 64;
 
-    bytes32 private constant DOMAIN_TYPEHASH = keccak256("EIP712Domain(string name,string version,uint256 chainId)");
+    bytes32 private constant DOMAIN_TYPEHASH = keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
     bytes32 private constant SIG_TYPEHASH =
         keccak256("OrdoSignature(string action,string entity,string meaning,string comment,string site,string nonce,string issuedAt)");
 
@@ -46,6 +51,7 @@ contract OrdoTrust is ReentrancyGuard {
     }
     struct Release {
         bytes32 contentHash;
+        bytes32 proofRoot;
         address performedBy;
         address reviewedBy;
         address approvedBy;
@@ -54,6 +60,8 @@ contract OrdoTrust is ReentrancyGuard {
 
     uint256 public immutable minStake;
     uint64 public immutable unstakeCooldown;
+    /// Ordo's relayer: only it may register a site, so nobody can claim a site id first (ids are public in HCS anchors)
+    address public immutable registrar;
 
     mapping(bytes32 => Site) public sites;
     mapping(bytes32 => mapping(address => uint8)) public roles;
@@ -67,7 +75,7 @@ contract OrdoTrust is ReentrancyGuard {
     event Staked(bytes32 indexed site, address indexed validator, uint256 amount, uint256 total);
     event UnstakeRequested(bytes32 indexed site, address indexed validator, uint64 unlockAt);
     event Withdrawn(bytes32 indexed site, address indexed validator, uint256 amount);
-    event Released(bytes32 indexed site, string packageId, bytes32 contentHash, address performedBy, address reviewedBy, address approvedBy);
+    event Released(bytes32 indexed site, string packageId, string runId, string lot, bytes32 contentHash, bytes32 proofRoot, address performedBy, address reviewedBy, address approvedBy);
     event Slashed(bytes32 indexed site, address indexed validator, uint256 amount, string proposalId, address treasury);
 
     error UnknownSite();
@@ -86,10 +94,13 @@ contract OrdoTrust is ReentrancyGuard {
     error AmountTooHigh();
     error TransferFailed();
     error BadSignature();
+    error NotRegistrar();
+    error AlreadyReleased();
 
-    constructor(uint256 _minStake, uint64 _unstakeCooldown) {
+    constructor(uint256 _minStake, uint64 _unstakeCooldown, address _registrar) {
         minStake = _minStake;
         unstakeCooldown = _unstakeCooldown;
+        registrar = _registrar;
     }
 
     // ------------------------------------------------------------------ signatures
@@ -99,7 +110,7 @@ contract OrdoTrust is ReentrancyGuard {
     }
 
     function digest(OrdoSig calldata s) public view returns (bytes32) {
-        bytes32 domain = keccak256(abi.encode(DOMAIN_TYPEHASH, keccak256("Ordo"), keccak256("1"), block.chainid));
+        bytes32 domain = keccak256(abi.encode(DOMAIN_TYPEHASH, keccak256("Ordo"), keccak256("2"), block.chainid, address(this)));
         bytes32 structHash = keccak256(
             abi.encode(
                 SIG_TYPEHASH,
@@ -133,6 +144,7 @@ contract OrdoTrust is ReentrancyGuard {
         if (role == PLANT_MANAGER) return "PLANT_MANAGER";
         if (role == ADMIN) return "ADMIN";
         if (role == VENDOR) return "VENDOR";
+        if (role == DEVICE) return "DEVICE";
         revert BadRole();
     }
 
@@ -142,12 +154,14 @@ contract OrdoTrust is ReentrancyGuard {
 
     // ------------------------------------------------------------------ sites and roles
 
-    /// The site's first admin registers it with signature action "site.register", entity = siteId.
-    /// The admin receives ADMIN and PLANT_MANAGER; `treasury` is the site's quality fund.
+    /// The site's first admin registers it with signature action "site.register", entity "<siteId>#<0xtreasury>", and
+    /// Ordo's registrar sends it, so only the site Ordo knows can be registered, by the admin Ordo knows.
+    /// The admin receives ADMIN and PLANT_MANAGER; `treasury` is the site's quality fund (0 = the admin).
     function registerSite(string calldata siteId, address treasury, OrdoSig calldata sig) external {
+        if (msg.sender != registrar) revert NotRegistrar();
         bytes32 k = siteKey(siteId);
         if (sites[k].exists) revert SiteExists();
-        address admin = _consume(sig, "site.register", siteId, siteId);
+        address admin = _consume(sig, "site.register", siteId, string.concat(siteId, "#", _hex(treasury)));
         sites[k] = Site(true, treasury == address(0) ? admin : treasury);
         roles[k][admin] = ADMIN | PLANT_MANAGER;
         emit SiteRegistered(k, siteId, admin, sites[k].treasury);
@@ -235,21 +249,33 @@ contract OrdoTrust is ReentrancyGuard {
 
     // ------------------------------------------------------------------ releases
 
-    /// Record a released validation package. sigs = [performed, reviewed, approved], each action
-    /// "validation.sign" with entity "<packageId>#performed|reviewed|approved". Three different people;
-    /// the reviewer and approver must be active validators and the approver a plant manager.
-    function recordRelease(string calldata siteId, string calldata packageId, bytes32 contentHash, OrdoSig[3] calldata sigs) external {
-        bytes32 k = siteKey(siteId);
+    /// Record a released validation package. sigs = [performed, reviewed, approved], each an `OrdoRelease` that names
+    /// this site, package, run and lot, this content hash and proof root, and its own meaning. Three different people:
+    /// the performer holds a role at the site, the reviewer and approver are active validators and the approver a
+    /// plant manager. A package is released once; its record cannot be overwritten.
+    function recordRelease(OrdoProofs.ReleaseLot calldata lot, OrdoProofs.ReleaseSig[3] calldata sigs) external {
+        bytes32 k = siteKey(lot.siteId);
         if (!sites[k].exists) revert UnknownSite();
-        address performed = _consume(sigs[0], "validation.sign", siteId, string.concat(packageId, "#performed"));
-        address reviewed = _consume(sigs[1], "validation.sign", siteId, string.concat(packageId, "#reviewed"));
-        address approved = _consume(sigs[2], "validation.sign", siteId, string.concat(packageId, "#approved"));
-        if (performed == reviewed || performed == approved) revert DuplicateSigner(performed);
-        if (reviewed == approved) revert DuplicateSigner(reviewed);
-        if (!_active(k, reviewed)) revert NotAuthorized(reviewed);
-        if (!_active(k, approved) || roles[k][approved] & PLANT_MANAGER == 0) revert NotAuthorized(approved);
-        releases[k][keccak256(bytes(packageId))] = Release(contentHash, performed, reviewed, approved, uint64(block.timestamp));
-        emit Released(k, packageId, contentHash, performed, reviewed, approved);
+        bytes32 pk = keccak256(bytes(lot.packageId));
+        if (releases[k][pk].releasedAt != 0) revert AlreadyReleased();
+        address[3] memory who;
+        who[0] = _consumeRelease(sigs[0], lot, "performed");
+        who[1] = _consumeRelease(sigs[1], lot, "reviewed");
+        who[2] = _consumeRelease(sigs[2], lot, "approved");
+        if (who[0] == who[1] || who[0] == who[2]) revert DuplicateSigner(who[0]);
+        if (who[1] == who[2]) revert DuplicateSigner(who[1]);
+        if (roles[k][who[0]] == 0) revert NotAuthorized(who[0]);
+        if (!_active(k, who[1])) revert NotAuthorized(who[1]);
+        if (!_active(k, who[2]) || roles[k][who[2]] & PLANT_MANAGER == 0) revert NotAuthorized(who[2]);
+        releases[k][pk] = Release(lot.contentHash, lot.proofRoot, who[0], who[1], who[2], uint64(block.timestamp));
+        emit Released(k, lot.packageId, lot.runId, lot.lotLabel, lot.contentHash, lot.proofRoot, who[0], who[1], who[2]);
+    }
+
+    function _consumeRelease(OrdoProofs.ReleaseSig calldata s, OrdoProofs.ReleaseLot calldata lot, string memory meaning) internal returns (address) {
+        bytes32 n = OrdoProofs.releaseNonce(s);
+        if (usedNonces[n]) revert NonceUsed();
+        usedNonces[n] = true;
+        return OrdoProofs.releaseSigner(s, lot, meaning);
     }
 
     // ------------------------------------------------------------------ slashing
