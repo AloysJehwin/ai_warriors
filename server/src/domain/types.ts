@@ -90,6 +90,7 @@ export interface AssetView {
   lastDataAt: string | null;
   sourceError: string | null;
   limits: Record<string, SignalLimit>;
+  idealCycleS: number | null;
 }
 
 // ---------- Templates ----------

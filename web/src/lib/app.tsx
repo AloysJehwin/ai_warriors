@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api, ApiError } from "../api";
 import type { DecisionView, InboxItemView, Me, Meta, Role, RunView, Site, Status, Team, TypedSignature } from "../types";
 import type { AssetView } from "../types";
@@ -73,28 +73,19 @@ export function AppProvider(props: { me: Me; setMe: (m: Me) => void; siteId: str
     return () => clearInterval(t);
   }, [reloadSite, refresh]);
 
-  if (!site) return <div className="boot">{error ?? "Loading site…"}</div>;
-  const names = new Map<string, string>((team?.members ?? []).map((m) => [m.address, m.name ?? m.ens ?? `${m.address.slice(0, 6)}…${m.address.slice(-4)}`]));
-  const roles = site.myRoles;
+  // stable across the 5 s live poll, so pages that load on [path] don't refetch and reset their state
+  const path = useCallback((p: string) => `${base}${p}`, [base]);
+  const names = useMemo(() => new Map<string, string>((team?.members ?? []).map((m) => [m.address, m.name ?? m.ens ?? `${m.address.slice(0, 6)}…${m.address.slice(-4)}`])), [team]);
+  const roles = site?.myRoles;
+  const can = useCallback((r: Role) => canAct(roles ?? [], r), [roles]);
+  const value = useMemo(
+    () => (site && roles ? { me: props.me, setMe: props.setMe, site, siteId: props.siteId, meta: props.meta, status: props.status, live, team, names, roles, can, refresh, reloadSite, path } : null),
+    [props.me, props.setMe, site, props.siteId, props.meta, props.status, live, team, names, roles, can, refresh, reloadSite, path],
+  );
+
+  if (!value) return <div className="boot">{error ?? "Loading site…"}</div>;
   return (
-    <AppCtx.Provider
-      value={{
-        me: props.me,
-        setMe: props.setMe,
-        site,
-        siteId: props.siteId,
-        meta: props.meta,
-        status: props.status,
-        live,
-        team,
-        names,
-        roles,
-        can: (r) => canAct(roles, r),
-        refresh,
-        reloadSite,
-        path: (p) => `${base}${p}`,
-      }}
-    >
+    <AppCtx.Provider value={value}>
       {props.children}
     </AppCtx.Provider>
   );

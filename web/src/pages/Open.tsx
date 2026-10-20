@@ -68,11 +68,9 @@ const Head = ({ account, children }: { account: Account; children?: React.ReactN
             <span className="op-me-name">{nameOf(u)}</span>
           </a>
         ) : (
-          account.me && (
-            <button type="button" className="btn sm accent" onClick={account.signIn}>
-              Sign in
-            </button>
-          )
+          <button type="button" className="btn sm accent" onClick={account.signIn}>
+            Sign in
+          </button>
         )}
         <a className="btn sm" href="#/">
           Console
@@ -181,7 +179,7 @@ export function Open({ route, me, onSignedIn }: { route: Route; me: Me | null; o
       .catch(() => setApps([]));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId, n]);
-  if (signingIn && me && !me.user) return <SignIn onSignedIn={(m) => (onSignedIn(m), setSigningIn(false))} />;
+  if (signingIn && !me?.user) return <SignIn onSignedIn={(m) => (onSignedIn(m), setSigningIn(false))} />;
   const account: Account = { me, apps, signIn: () => setSigningIn(true), reload: () => setN((x) => x + 1) };
   if (route.id && route.sub) return <PipelinePage siteId={route.id} runId={route.sub} account={account} onSignedIn={onSignedIn} />;
   return <PipelineList account={account} />;
@@ -285,7 +283,7 @@ function PipelinePage({ siteId, runId, account, onSignedIn }: { siteId: string; 
     );
   if (!p) return <div className="boot">Loading pipeline…</div>;
   // applying needs a wallet: sign in here and come straight back to the form
-  if (applying && me && !me.user) return <SignIn onSignedIn={onSignedIn} />;
+  if (applying && !me?.user) return <SignIn onSignedIn={onSignedIn} />;
 
   const roles = me?.memberships.find((m) => m.siteId === siteId)?.roles ?? [];
   const holds = (r: OpenRole) => (roles as string[]).includes(r.kind === "validator" ? VALIDATOR_ROLE[r.role] ?? r.role : r.role) && (r.kind === "member" || account.apps?.some((a) => a.siteId === siteId && a.kind === "validator" && a.role === r.role && a.status === "approved"));

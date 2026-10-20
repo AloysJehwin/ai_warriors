@@ -62,10 +62,19 @@ function Root() {
   if (route.page === "passport" && route.id) return <Passport runId={route.id} />;
   // running pipelines are public too: a newcomer browses them and applies for a role
   if (route.page === "open") return <Open route={route} me={me} onSignedIn={setMe} />;
-  if (error) return <div className="boot">Could not reach the Ordo API: {error}</div>;
+  if (error)
+    return (
+      <div className="boot">
+        <p>Could not reach the Ordo API: {error}</p>
+        <button type="button" className="btn" onClick={() => window.location.reload()}>
+          Try again
+        </button>
+      </div>
+    );
   if (!me || !meta || !status) return <div className="boot">Loading…</div>;
   if (!me.user) return <SignIn onSignedIn={setMe} />;
-  if (!me.memberships.length || !siteId)
+  // a join link (#/join?site=…) opens the application form for members of other sites too
+  if (!me.memberships.length || !siteId || route.page === "join")
     return (
       <Setup
         me={me}

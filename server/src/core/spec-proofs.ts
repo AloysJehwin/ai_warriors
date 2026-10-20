@@ -60,18 +60,21 @@ export function scaled(x: number): bigint | null {
   return s < MAX ? s : null;
 }
 
-let snarkjsReady: Promise<typeof import("snarkjs")> | null = null;
+const MAX_PROVE_RETRIES = 3;
+
+let snarkjsReady: Promise<{ m: typeof import("snarkjs"); curve: unknown }> | null = null;
 /**
  * snarkjs, on one thread: its worker threads cannot start from a bundled build (Vercel). Verification builds the
- * shared multi-threaded curve, so a single-threaded one is put in its place first.
+ * shared multi-threaded curve, so a single-threaded one is put in its place first. circomlibjs bundles its own
+ * ffjavascript, which clears that shared global when it loads, so it loads first and the curve is put back on every call.
  */
-function snark() {
-  snarkjsReady ??= import("snarkjs").then(async (m) => {
-    const g = globalThis as { curve_bn128?: unknown };
-    g.curve_bn128 ??= await m.curves.getCurveFromName("bn128", { singleThread: true });
-    return m;
-  });
-  return snarkjsReady;
+async function snark() {
+  snarkjsReady ??= import("circomlibjs")
+    .then(() => import("snarkjs"))
+    .then(async (m) => ({ m, curve: await m.curves.getCurveFromName("bn128", { singleThread: true }) }));
+  const { m, curve } = await snarkjsReady;
+  (globalThis as { curve_bn128?: unknown }).curve_bn128 = curve;
+  return m;
 }
 
 interface Artifacts {
@@ -101,6 +104,7 @@ export class SpecProofs {
   private artifacts: Artifacts | null | undefined;
   private poseidon: Promise<import("circomlibjs").Poseidon> | null = null;
   private checked = new Map<string, { at: number; ok: boolean; detail: string }>();
+  private retries = new Map<string, number>();
 
   constructor(
     private db: Db,
@@ -137,6 +141,16 @@ export class SpecProofs {
     for (const s of stages.rows) await this.commit(s.run_id, s.code, (JSON.parse(s.data_json) as { criteria?: CriterionResult[] }).criteria ?? []);
     const due = await this.db.query<Row>("SELECT * FROM spec_proofs WHERE status = 'committed' ORDER BY created_at LIMIT $1", [limit]);
     for (const r of due.rows) await this.prove(r);
+    // a proof that failed (a timeout, a cold instance) is tried again a few times by this instance before it stays failed
+    const failed = await this.db.query<Row>("SELECT * FROM spec_proofs WHERE status = 'failed' AND subject IS NOT NULL ORDER BY created_at LIMIT 5");
+    for (const r of failed.rows) {
+      const key = `${r.run_id}|${r.stage_code}|${r.label}`;
+      const n = this.retries.get(key) ?? 0;
+      if (n >= MAX_PROVE_RETRIES || due.rows.length) continue;
+      this.retries.set(key, n + 1);
+      await this.prove(r);
+      break;
+    }
   }
 
   private async commit(runId: string, stageCode: string, criteria: CriterionResult[]) {

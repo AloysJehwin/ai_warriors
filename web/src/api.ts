@@ -15,7 +15,13 @@ async function request<T>(method: string, path: string, body?: unknown, raw?: Bo
   if (body !== undefined) h["content-type"] = "application/json";
   const res = await fetch(`${API_BASE}${path}`, { method, headers: h, credentials: "include", body: raw ?? (body === undefined ? undefined : JSON.stringify(body)) });
   const text = await res.text();
-  const json = text ? (JSON.parse(text) as unknown) : null;
+  let json: unknown = null;
+  try {
+    json = text ? (JSON.parse(text) as unknown) : null;
+  } catch {
+    // the host answered with a plain-text or HTML page (a crashed function, a proxy error), not the API
+    throw new ApiError(res.status, res.ok ? `Unexpected response from ${path}` : `${res.status} ${res.statusText || "Server error"}`);
+  }
   if (!res.ok) throw new ApiError(res.status, (json as { error?: string } | null)?.error ?? `${res.status} ${res.statusText}`);
   return json as T;
 }

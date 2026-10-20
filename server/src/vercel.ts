@@ -38,6 +38,15 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
     ready = null; // retry on the next request, e.g. after the database wakes up
     throw e;
   });
-  const listener = await ready;
+  let listener: Listener;
+  try {
+    listener = await ready;
+  } catch (e) {
+    // answer in JSON, not with the platform's plain-text error page, so the console can show what is wrong
+    console.error("[ordo] startup failed", e);
+    res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });
+    res.end(JSON.stringify({ error: `Ordo API failed to start: ${e instanceof Error ? e.message : String(e)}` }));
+    return;
+  }
   await listener(req, res);
 }
