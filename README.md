@@ -94,6 +94,17 @@ mockups/     design mockups (PNG) · *.dc.html: original clickable prototype
 
 **Docker**: `docker build -t ordo . && docker run -p 8080:8080 ordo`. Use this on a plant network to reach MTConnect agents with private addresses, which the cloud deployment refuses.
 
+## On-chain proof
+
+Settled on Hedera testnet, each paid by an agent with no one approving:
+
+| What | Who paid | Settled transaction |
+|---|---|---|
+| `assess_vibration` on Ordo's metered MCP server (x402, 0.1 HBAR) | buyer agent [0.0.11118723](https://hashscan.io/testnet/account/0.0.11118723) | [0.0.9185802@1792617008.223711953](https://hashscan.io/testnet/transaction/0.0.9185802-1792617008-223711953) |
+| `forecast_failure` on Ordo's metered MCP server (x402, 0.1 HBAR) | buyer agent [0.0.11118723](https://hashscan.io/testnet/account/0.0.11118723) | [0.0.9185802@1792617008.694161567](https://hashscan.io/testnet/transaction/0.0.9185802-1792617008-694161567) |
+
+Reproduce it with the **x402 demo** workflow (Actions tab): it opens a fresh buyer account and pays `https://aiwarriors.vercel.app/v1/x402/mcp` per tool call. Every sale is also listed at `GET /v1/x402`.
+
 ## What is real
 
 - Everything in the console comes from what you connect or record. There is no simulator and no sample data.
