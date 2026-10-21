@@ -1,0 +1,68 @@
+name: x402 demo
+
+# An outside agent pays Ordo's production deployment per call, on Hedera testnet, with no one approving:
+# it opens a fresh buyer account funded by the operator, connects to the metered MCP server (/v1/x402/mcp) and calls
+# its paid tools. The summary lists each settled transaction with its HashScan link. The buyer's key never leaves the job.
+# Run it from the Actions tab (optionally with a lot to verify), or list `mcp` in .github/deploy/x402-demo.request and push.
+on:
+  push:
+    paths: [".github/deploy/x402-demo.request"]
+  workflow_dispatch:
+    inputs:
+      lot:
+        description: "A lot passport id (run id) to verify as well"
+        required: false
+      url:
+        description: "Deployment to buy from (default: the production domain)"
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  buy:
+    runs-on: ubuntu-latest
+    environment: hedera-testnet
+    env:
+      HEDERA_OPERATOR_ID: ${{ secrets.HEDERA_OPERATOR_ID }}
+      HEDERA_OPERATOR_KEY: ${{ secrets.HEDERA_OPERATOR_KEY }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_PROJECT_ID: prj_ua7E01jdI0VpLBJvZyqqulOlBzGP
+      VERCEL_ORG_ID: team_8ghjcEpH2t9p2BktkDNQ9ZXm
+    steps:
+      - uses: actions/checkout@v4
+      - name: What to do
+        id: what
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then echo "any=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          tasks=" $(sed 's/#.*//' .github/deploy/x402-demo.request | tr -s ' \n\t' ' ' | xargs) "
+          if [ -z "$(echo $tasks)" ]; then echo "any=false" >> "$GITHUB_OUTPUT"; echo "Nothing requested."; exit 0; fi
+          echo "any=true" >> "$GITHUB_OUTPUT"
+      - uses: pnpm/action-setup@v4
+        if: steps.what.outputs.any == 'true'
+      - uses: actions/setup-node@v4
+        if: steps.what.outputs.any == 'true'
+        with:
+          node-version: 22
+          cache: pnpm
+      - if: steps.what.outputs.any == 'true'
+        run: pnpm install --frozen-lockfile
+      - name: Deployment
+        if: steps.what.outputs.any == 'true'
+        env:
+          INPUT_URL: ${{ inputs.url }}
+        run: |
+          url="$INPUT_URL"
+          if [ -z "$url" ]; then
+            domain=$(curl -sf -H "Authorization: Bearer $VERCEL_TOKEN" "https://api.vercel.com/v9/projects/$VERCEL_PROJECT_ID/domains?teamId=$VERCEL_ORG_ID&production=true" \
+              | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const d=JSON.parse(s).domains??[];const p=d.find(x=>!x.redirect&&!x.name.endsWith(".vercel.app"))??d.find(x=>!x.redirect);console.log(p?.name??"")})')
+            url="https://$domain"
+          fi
+          echo "Buying from $url"
+          curl -sf "$url/v1/x402" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const o=JSON.parse(s);if(!o.mcp){console.error("This deployment sells no MCP tools");process.exit(1)}console.log(`MCP at ${o.mcp.path}, paying ${o.mcp.payTo}`)})'
+          echo "ORDO_URL=$url" >> "$GITHUB_ENV"
+      - name: Pay per call
+        if: steps.what.outputs.any == 'true'
+        env:
+          ORDO_LOT: ${{ inputs.lot }}
+        run: pnpm --filter @ordo/server mcp:buyer

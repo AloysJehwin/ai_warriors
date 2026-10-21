@@ -34,13 +34,23 @@ import type { Hex, Transport } from "viem";
 import { migrate, openDb, type Db } from "./db/db.js";
 import { LedgerStore } from "./db/ledger-store.js";
 import { loadPolicy } from "./domain/policy.js";
+import { HttpError } from "./engine/errors.js";
 import { RunEngine } from "./pipelines/engine.js";
-import { PlantService } from "./plant/plant.js";
+import { PlantService, newId } from "./plant/plant.js";
 
 export interface RailStatus {
   rail: string;
   mode: string;
   live: boolean;
+}
+
+export interface McpSaleView {
+  tool: string;
+  amount: string;
+  payer: string | null;
+  transaction: string;
+  url: string;
+  at: string;
 }
 
 export interface System {
@@ -78,6 +88,8 @@ export interface System {
   machines: Machines;
   /** x402: the paid assessment route's middleware and terms, when Ordo sells assessments */
   x402: { middleware: import("hono").MiddlewareHandler; terms: { network: string; payTo: string; price: string; asset: string } } | null;
+  /** The metered MCP server: tools other agents pay for per call over x402 */
+  mcp: (ReturnType<typeof import("./chain/mcp.js").meteredMcp> & { sales(limit?: number): Promise<McpSaleView[]> }) | null;
   ensNames: { lookup(addresses: string[]): Promise<Record<string, string | null>> } | null;
   /** One engine cycle: pull data, advance runs, watch for anomalies, refund expired escrows, anchor. Throttled and lease-guarded. */
   advance(force?: boolean): Promise<void>;
@@ -342,6 +354,34 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
   passports.names = names;
   const openings = new Openings(db, engine);
 
+  // ---- The metered MCP server: assessments, forecasts and lot verdicts sold per tool call to any agent, over x402 ----
+  let mcp: System["mcp"] = null;
+  if (x402Net && payTo) {
+    const { meteredMcp } = await import("./chain/mcp.js");
+    const { hashscanTx } = await import("./chain/x402.js");
+    const server = meteredMcp({
+      network: x402Net,
+      payTo,
+      price: cfg.X402_PRICE_TINYBARS,
+      facilitatorUrl: cfg.X402_FACILITATOR_URL,
+      facilitator: opts.x402Facilitator,
+      passport: (runId) => passports.publicView(runId).catch((e) => (e instanceof HttpError && e.status === 404 ? null : Promise.reject(e))),
+      onSale: async (s) => {
+        await db.query("INSERT INTO mcp_sales (id, tool, amount, payer, tx_id, network) VALUES ($1, $2, $3, $4, $5, $6)", [newId("sale"), s.tool, s.amount, s.payer, s.transaction, s.network]);
+      },
+    });
+    const sales = async (limit = 20): Promise<McpSaleView[]> =>
+      (await db.query<{ tool: string; amount: string; payer: string | null; tx_id: string; created_at: string }>("SELECT tool, amount, payer, tx_id, created_at::text AS created_at FROM mcp_sales ORDER BY created_at DESC LIMIT $1", [limit])).rows.map((r) => ({
+        tool: r.tool,
+        amount: r.amount,
+        payer: r.payer,
+        transaction: r.tx_id,
+        url: hashscanTx(x402Net, r.tx_id),
+        at: new Date(r.created_at).toISOString(),
+      }));
+    mcp = { ...server, sales };
+  }
+
   const advance = async (force = false) => {
     // throttle: one cycle per 4 s across all instances (the lease is left to expire, not released)
     if (!force && !(await plant.tryLease("advance", 4_000))) return;
@@ -383,6 +423,7 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
     { rail: "agent iNFTs", mode: inftRail ? `ERC-7857 OrdoAgentNFT ${cfg.ZG_INFT_ADDRESS} · 0G (${cfg.ZG_CHAIN_ID})` : "off", live: Boolean(inftRail) },
     { rail: "lot passports", mode: passportRail ? `HTS NFT ${passportRail.tokenId}` : "in-app passports, no NFT", live: Boolean(passportRail) },
     { rail: "machine wallets", mode: machines.live ? "each machine can hold its own Hedera account and pay over x402" : "off", live: machines.live },
+    { rail: "metered mcp", mode: mcp ? `${mcp.tools.length - 1} tools at ${Number(cfg.X402_PRICE_TINYBARS) / 1e8} HBAR a call, paid over x402` : "off", live: Boolean(mcp) },
     {
       rail: "x402 assessments",
       mode: [x402 ? `sells at ${Number(cfg.X402_PRICE_TINYBARS) / 1e8} HBAR to ${x402.terms.payTo}` : null, workOrders.assessments ? "agent buys one per work order" : null].filter(Boolean).join(" · ") || "off",
@@ -428,6 +469,7 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
     agentNfts,
     agentLicenses,
     x402,
+    mcp,
     machines,
     ensNames,
     advance,

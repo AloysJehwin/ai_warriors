@@ -6,6 +6,7 @@ import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { cors } from "hono/cors";
 import { z } from "zod";
 import { SESSION_COOKIE, type Principal } from "../auth/auth.js";
+import { MCP_PATH } from "../chain/mcp.js";
 import { ASSESSMENT_PATH, assessVibration } from "../chain/x402.js";
 import { CATEGORIES } from "../core/templates.js";
 import { REJECT } from "../core/inbox.js";
@@ -279,7 +280,7 @@ export function createApp(sys: System, opts: AppOptions = {}) {
     samples: z.array(z.object({ t: z.number().finite(), v: z.number().finite().min(0).max(1000) })).min(3).max(5000),
   });
   const x402Cors = cors({ origin: "*", allowHeaders: ["content-type", "payment-signature", "x-payment"], exposeHeaders: ["payment-required", "payment-response"] });
-  app.get("/v1/x402", (c) => {
+  app.get("/v1/x402", async (c) => {
     c.header("access-control-allow-origin", "*");
     return c.json(
       sys.x402
@@ -288,9 +289,17 @@ export function createApp(sys: System, opts: AppOptions = {}) {
               { method: "POST", path: ASSESSMENT_PATH, ...sys.x402.terms, unit: "tinybar" },
               { method: "POST", path: "/v1/x402/vendors/{vendorId}/callout", network: sys.x402.terms.network, payTo: "the vendor's Hedera account", price: "a tenth of the vendor's hourly rate, at least 0.1 HBAR", asset: sys.x402.terms.asset },
             ],
+            mcp: sys.mcp ? { path: MCP_PATH, transport: "streamable-http", ...sys.mcp.priceList(), recentSales: await sys.mcp.sales(10) } : null,
           }
-        : { offers: [] },
+        : { offers: [], mcp: null },
     );
+  });
+
+  // The metered MCP server: any agent's MCP client connects here and pays per tool call (x402 in the call's _meta)
+  app.use(MCP_PATH, cors({ origin: "*", allowMethods: ["POST", "GET", "DELETE", "OPTIONS"], allowHeaders: ["content-type", "accept", "mcp-session-id", "mcp-protocol-version", "last-event-id"], exposeHeaders: ["mcp-session-id"] }));
+  app.all(MCP_PATH, async (c) => {
+    if (!sys.mcp) throw new HttpError(404, "This deployment sells no MCP tools");
+    return sys.mcp.handle(c.req.raw);
   });
   app.use(ASSESSMENT_PATH, x402Cors);
   app.use(ASSESSMENT_PATH, async (c, next) => {

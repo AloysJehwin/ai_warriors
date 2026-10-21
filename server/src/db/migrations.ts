@@ -317,4 +317,13 @@ CREATE TABLE vendor_callouts (id TEXT PRIMARY KEY, site_id TEXT NOT NULL REFEREN
 CREATE INDEX vendor_callouts_vendor ON vendor_callouts (vendor_id, created_at DESC);
 `,
   },
+  {
+    version: 18,
+    name: "mcp sales",
+    sql: `
+CREATE TABLE mcp_sales (id TEXT PRIMARY KEY, tool TEXT NOT NULL, amount TEXT NOT NULL, payer TEXT, tx_id TEXT NOT NULL, network TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE INDEX mcp_sales_recent ON mcp_sales (created_at DESC);
+`,
+  },
 ];
