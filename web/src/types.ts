@@ -183,6 +183,17 @@ export interface AgentRow {
     data: { dataDescription: string; dataHash: string }[];
     authorizedUsers: string[];
   } | null;
+  /** What it has learned, as encrypted versions on 0G Storage, sealed for this site and its licensees and named on its iNFT */
+  memory: {
+    version: number;
+    cases: number;
+    root: string;
+    txUrl: string | null;
+    dataHash: string;
+    sealedFor: { siteId: string; name: string }[];
+    onchain: boolean;
+    at: string;
+  } | null;
   /** How often people accepted what it recommended; proven agents can be licensed to other sites */
   record: TrackRecord;
   /** Agents of the same kind this site licenses from other sites (their playbooks feed this agent) */

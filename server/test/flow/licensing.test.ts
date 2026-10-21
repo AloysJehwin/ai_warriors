@@ -144,6 +144,16 @@ run("licensing agents between sites", () => {
     expect((await chain.datas(m.inft.tokenId)).at(-1)!.dataDescription).toBe(`license:${siteA}/maintenance#${pb!.tokenId}`);
   }, 60_000);
 
+  it("the agent's memory goes to 0G encrypted, sealed for the licensee, and its iNFT names it on-chain", async () => {
+    expect(await sys.agentMemory.reconcile()).toBeGreaterThan(0);
+    await settle();
+    const mine = (await a.call("GET", `/v1/sites/${siteA}/agents`)).json.find((x: any) => x.key === "maintenance");
+    expect(mine.memory).toMatchObject({ version: 1, cases: 3, onchain: true, sealedFor: expect.arrayContaining([expect.objectContaining({ siteId: siteB })]) });
+    expect((await chain.datas(mine.inft.tokenId)).find((d) => d.dataDescription === "memory:v1")?.dataHash).toBe(mine.memory.dataHash);
+    const [pb] = await sys.agentLicenses.playbooksFor(siteB, "maintenance");
+    expect(pb!.memory).toMatchObject({ version: 1, onchain: true });
+  }, 120_000);
+
   it("only the token's authorized users can license it, whoever relays", async () => {
     const tokenId = (await sys.agentLicenses.get(lic)).tokenId!;
     const stranger = privateKeyToAccount(generatePrivateKey());

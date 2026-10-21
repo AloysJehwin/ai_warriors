@@ -343,4 +343,17 @@ CREATE INDEX finance_orders_site ON finance_orders (site_id, created_at DESC);
 CREATE INDEX finance_orders_open ON finance_orders (status, updated_at);
 `,
   },
+  {
+    version: 20,
+    name: "agent memory",
+    sql: `
+CREATE TABLE memory_vaults (site_id TEXT PRIMARY KEY REFERENCES sites(id), public_key TEXT NOT NULL, private_enc TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE TABLE agent_memories (id TEXT PRIMARY KEY, site_id TEXT NOT NULL REFERENCES sites(id), agent TEXT NOT NULL, version INTEGER NOT NULL,
+  root TEXT NOT NULL, tx TEXT, data_hash TEXT NOT NULL, content_sha TEXT NOT NULL, cases INTEGER NOT NULL, record_json TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(), UNIQUE (site_id, agent, version));
+CREATE TABLE agent_memory_keys (memory_id TEXT NOT NULL REFERENCES agent_memories(id), site_id TEXT NOT NULL REFERENCES sites(id),
+  sealed_key TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY (memory_id, site_id));
+`,
+  },
 ];
