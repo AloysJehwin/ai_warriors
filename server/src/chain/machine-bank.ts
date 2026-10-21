@@ -54,3 +54,27 @@ export function hederaMachineBank(client: Client, network: string, mirrorUrl: st
     accountUrl: (id) => `${hashscan}/account/${id}`,
   };
 }
+
+/** Opens the accounts of pay-on-proof parties (the plant, its customers, financiers) */
+export interface PartyBank {
+  open(memo: string): Promise<{ accountId: string | null; evmAddress: string; key: string; tx: string | null }>;
+  accountUrl(accountId: string): string | null;
+}
+
+/** Hedera accounts with an EVM alias, a little HBAR for gas and unlimited automatic token associations, so they can hold Ordo USD at once */
+export function hederaParties(client: Client, network: string, gas: bigint): PartyBank {
+  return {
+    async open(memo) {
+      const key = PrivateKey.generateECDSA();
+      const tx = await new AccountCreateTransaction()
+        .setECDSAKeyWithAlias(key)
+        .setInitialBalance(Hbar.fromTinybars(gas.toString()))
+        .setMaxAutomaticTokenAssociations(-1)
+        .setAccountMemo(memo.slice(0, 100))
+        .execute(client);
+      const receipt = await tx.getReceipt(client);
+      return { accountId: receipt.accountId!.toString(), evmAddress: `0x${key.publicKey.toEvmAddress()}`, key: `0x${key.toStringRaw()}`, tx: tx.transactionId.toString() };
+    },
+    accountUrl: (id) => `https://hashscan.io/${network}/account/${id}`,
+  };
+}

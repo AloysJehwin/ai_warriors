@@ -6,6 +6,8 @@
  *   … setup:hedera agent        SECRET_OUT=<file> receives HEDERA_AGENT_KEY; the key is never printed
  *   … setup:hedera contracts    TRUST_CONTRACT_ADDRESS=0x… (OrdoTrust) is required
  *   … setup:hedera passport     the HTS NFT collection for lot passports
+ *   … setup:hedera payonproof   OrdoPayOnProof: needs STABLECOIN_ADDRESS and STABLECOIN_TOKEN_ADDRESS (Ordo USD, made with
+ *                               Stablecoin Studio by tools/stablecoin/create.cjs) and TRUST_CONTRACT_ADDRESS
  *
  * Prints only public values: the variables to set in Vercel.
  */
@@ -69,6 +71,24 @@ HEDERA_AGENT_ID=${id}
 TRUST_WORKORDERS_ADDRESS=${deployed.OrdoWorkOrders}
 TRUST_POLICIES_ADDRESS=${deployed.OrdoPolicies}
 `);
+} else if (task === "payonproof") {
+  const [coin, token, trust] = [need("STABLECOIN_ADDRESS"), need("STABLECOIN_TOKEN_ADDRESS"), need("TRUST_CONTRACT_ADDRESS")] as Hex[];
+  const rpc = process.env.TRUST_RPC_URL ?? "https://testnet.hashio.io/api";
+  const chainId = Number(process.env.TRUST_CHAIN_ID ?? 296);
+  const chain = defineChain({ id: chainId, name: `chain-${chainId}`, nativeCurrency: { name: "HBAR", symbol: "HBAR", decimals: 18 }, rpcUrls: { default: { http: [rpc] } } });
+  const account = privateKeyToAccount(`0x${operatorKey.toStringRaw()}`);
+  const pub = createPublicClient({ chain, transport: http(rpc) });
+  const wallet = createWalletClient({ chain, transport: http(rpc), account });
+  const { abi, bytecode } = JSON.parse(readFileSync(new URL("../artifacts/OrdoPayOnProof.json", import.meta.url), "utf8")) as { abi: Abi; bytecode: Hex };
+  const hash = await wallet.deployContract({ abi, bytecode, args: [coin, token, trust], gas: 3_000_000n } as never);
+  const r = await pub.waitForTransactionReceipt({ hash });
+  if (r.status !== "success" || !r.contractAddress) throw new Error(`OrdoPayOnProof deploy failed: ${hash}`);
+  console.log(`OrdoPayOnProof deployed at ${r.contractAddress} (tx ${hash}): https://hashscan.io/testnet/contract/${r.contractAddress}
+It holds Ordo USD (${coin}) for a lot until OrdoTrust (${trust}) records its release.
+
+# ---- set in Vercel (Production and Preview) ----
+PAY_ON_PROOF_ADDRESS=${r.contractAddress}
+`);
 } else if (task === "passport") {
   const client = Client.forTestnet().setOperator(operatorId, operatorKey);
   // The operator is treasury, mints (supply key) and updates metadata as the lot moves on (metadata key, HIP-657).
@@ -92,6 +112,6 @@ HEDERA_PASSPORT_TOKEN_ID=${id}
 PUBLIC_URL=<the deployment's public URL, e.g. https://aiwarriors.vercel.app>
 `);
 } else {
-  console.error("usage: hedera-setup.ts topic | agent | contracts | passport");
+  console.error("usage: hedera-setup.ts topic | agent | contracts | passport | payonproof");
   process.exit(1);
 }

@@ -422,6 +422,34 @@ export function createApp(sys: System, opts: AppOptions = {}) {
     await sys.advance(true);
     return c.json({ id });
   });
+  // ---- Pay on proof: customers pay for a lot in Ordo USD, released only when the lot's quality is proven on-chain ----
+  const Units = z.string().trim().regex(/^\d+(\.\d+)?$/, "an amount like 250 or 99.5");
+  site.get("/finance", async (c) => c.json(await sys.payOnProof.view(sid(c))));
+  site.post("/finance/parties", async (c) => {
+    const b = await body(c, z.object({ kind: z.enum(["customer", "financier"]), name: z.string().trim().min(2).max(80) }));
+    return c.json({ id: await sys.payOnProof.addParty(sid(c), me(c).user, c.get("roles"), b) });
+  });
+  site.post("/finance/parties/:partyId/cash-in", async (c) => {
+    await sys.payOnProof.cashIn(sid(c), me(c).user, c.get("roles"), c.req.param("partyId"), (await body(c, z.object({ amount: Units }))).amount);
+    return c.json({ queued: true });
+  });
+  site.post("/finance/orders", async (c) => {
+    const b = await body(c, z.object({ packageId: z.string().min(1).max(64), customerId: z.string().min(1).max(64), amount: Units, days: z.number().int().min(1).max(365).default(30) }));
+    return c.json(await sys.payOnProof.createOrder(sid(c), me(c).user, c.get("roles"), b));
+  });
+  site.post("/finance/orders/:orderId/offer", async (c) => {
+    await sys.payOnProof.offer(sid(c), me(c).user, c.get("roles"), c.req.param("orderId"), (await body(c, z.object({ ask: Units }))).ask);
+    return c.json({ queued: true });
+  });
+  site.post("/finance/orders/:orderId/take", async (c) => {
+    await sys.payOnProof.take(sid(c), me(c).user, c.get("roles"), c.req.param("orderId"), (await body(c, z.object({ financierId: z.string().min(1).max(64) }))).financierId);
+    return c.json({ queued: true });
+  });
+  site.post("/finance/orders/:orderId/waive", async (c) => {
+    await sys.payOnProof.waive(sid(c), me(c).user, c.get("roles"), c.req.param("orderId"));
+    return c.json({ queued: true });
+  });
+
   // ---- Machine wallets: a machine's own Hedera account, which pays over x402 when the machine drifts ----
   const Budget = z.object({ dailyBudget: z.string().regex(/^\d+$/), perCall: z.string().regex(/^\d+$/) });
   site.get("/assets/:assetId/wallet", async (c) => c.json({ live: sys.machines.live, wallet: await sys.machines.get(sid(c), c.req.param("assetId")) }));

@@ -7,6 +7,10 @@ name: Hedera setup
 #   passport   the HTS NFT collection for lot passports             → HEDERA_PASSPORT_TOKEN_ID
 #   agent      the maintenance agent's own Hedera account           → HEDERA_AGENT_ID; its key goes straight to Vercel
 #              (needs VERCEL_TOKEN as a repository secret, and is never printed)
+#   stablecoin Ordo USD, made with Stablecoin Studio's SDK and factory  → STABLECOIN_ADDRESS, STABLECOIN_TOKEN_ADDRESS
+#   payonproof OrdoPayOnProof, bound to Ordo USD and OrdoTrust         → PAY_ON_PROOF_ADDRESS
+#              (stablecoin and payonproof write their values to Vercel; payonproof uses the stablecoin from the
+#              same run, or the STABLECOIN_ADDRESS / STABLECOIN_TOKEN_ADDRESS repository variables)
 # The log and summary show only public values.
 on:
   push:
@@ -66,6 +70,36 @@ jobs:
           SECRET_OUT="$RUNNER_TEMP/agent.env" pnpm --filter @ordo/contracts setup:hedera agent | tee -a setup.log
           node scripts/vercel-env.mjs push "$RUNNER_TEMP/agent.env" production,preview
           rm -f "$RUNNER_TEMP/agent.env"
+      - name: Ordo USD (Stablecoin Studio)
+        if: contains(steps.what.outputs.tasks, ' stablecoin ')
+        env:
+          STABLECOIN_FACTORY_ID: ${{ vars.STABLECOIN_FACTORY_ID }}
+        run: |
+          npm install --prefix tools/stablecoin --no-audit --no-fund --loglevel=error
+          node tools/stablecoin/create.cjs | tee stablecoin.log | tee -a setup.log
+          grep -E '^STABLECOIN_(ADDRESS|TOKEN_ADDRESS)=' stablecoin.log >> "$GITHUB_ENV"
+      - name: OrdoPayOnProof
+        if: contains(steps.what.outputs.tasks, ' payonproof ')
+        env:
+          TRUST_CONTRACT_ADDRESS: ${{ vars.TRUST_CONTRACT_ADDRESS || '0x608cba52976e34fa160fe64ff0499a8a5a4eb9e1' }}
+          TRUST_RPC_URL: https://testnet.hashio.io/api
+          TRUST_CHAIN_ID: "296"
+          VAR_STABLECOIN_ADDRESS: ${{ vars.STABLECOIN_ADDRESS }}
+          VAR_STABLECOIN_TOKEN_ADDRESS: ${{ vars.STABLECOIN_TOKEN_ADDRESS }}
+        run: |
+          export STABLECOIN_ADDRESS="${STABLECOIN_ADDRESS:-$VAR_STABLECOIN_ADDRESS}" STABLECOIN_TOKEN_ADDRESS="${STABLECOIN_TOKEN_ADDRESS:-$VAR_STABLECOIN_TOKEN_ADDRESS}"
+          pnpm --filter @ordo/contracts setup:hedera payonproof | tee -a setup.log
+      - name: Set the values in Vercel
+        if: contains(steps.what.outputs.tasks, ' stablecoin ') || contains(steps.what.outputs.tasks, ' payonproof ')
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_PROJECT_ID: prj_ua7E01jdI0VpLBJvZyqqulOlBzGP
+          VERCEL_ORG_ID: team_8ghjcEpH2t9p2BktkDNQ9ZXm
+        run: |
+          if [ -z "$VERCEL_TOKEN" ]; then echo "::warning::No VERCEL_TOKEN: set the values above in Vercel by hand"; exit 0; fi
+          grep -E '^(STABLECOIN_ADDRESS|STABLECOIN_TOKEN_ADDRESS|PAY_ON_PROOF_ADDRESS)=' setup.log > "$RUNNER_TEMP/pop.env" || true
+          [ -s "$RUNNER_TEMP/pop.env" ] && node scripts/vercel-env.mjs push "$RUNNER_TEMP/pop.env" production,preview
+          rm -f "$RUNNER_TEMP/pop.env"
       - name: Summary
         if: always()
         run: |

@@ -1,4 +1,3 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import type { User } from "../auth/auth.js";
 import type { MachineBank } from "../chain/machine-bank.js";
 import type { Assessment } from "../chain/x402.js";
@@ -10,6 +9,7 @@ import type { PlantService } from "../plant/plant.js";
 import { newId } from "../plant/plant.js";
 import type { AssessmentBuyer } from "./assessments.js";
 import type { Jobs } from "./jobs.js";
+import { KeyBox } from "./keybox.js";
 import type { Recorder } from "./recorder.js";
 
 const OPEN_JOB = "machine.open";
@@ -68,7 +68,7 @@ export interface MachineWalletView {
  * directly to reserve an urgent call-out. Every purchase is in Ordo's ledger and on the HCS topic.
  */
 export class Machines {
-  private cipherKey: Buffer;
+  private keys: KeyBox;
   constructor(
     private db: Db,
     private rec: Recorder,
@@ -80,7 +80,7 @@ export class Machines {
     secret: string,
     private now: () => number,
   ) {
-    this.cipherKey = createHash("sha256").update(`ordo:machine-wallets:${secret}`).digest();
+    this.keys = new KeyBox("machine-wallets", secret);
     jobs.register(OPEN_JOB, (_p, job) => this.open(job.ref));
     jobs.register(BUY_JOB, (p: { assetId: string; incidentId: string }, job) => this.buy(job.siteId!, p.assetId, p.incidentId));
   }
@@ -91,16 +91,10 @@ export class Machines {
 
   // ---------------------------------------------------------------- keys at rest
   private seal(plain: string): string {
-    const iv = randomBytes(12);
-    const c = createCipheriv("aes-256-gcm", this.cipherKey, iv);
-    const body = Buffer.concat([c.update(plain, "utf8"), c.final()]);
-    return [iv, c.getAuthTag(), body].map((b) => b.toString("base64")).join(".");
+    return this.keys.seal(plain);
   }
   private unseal(sealed: string): string {
-    const [iv, tag, body] = sealed.split(".").map((p) => Buffer.from(p, "base64"));
-    const d = createDecipheriv("aes-256-gcm", this.cipherKey, iv!);
-    d.setAuthTag(tag!);
-    return Buffer.concat([d.update(body!), d.final()]).toString("utf8");
+    return this.keys.unseal(sealed);
   }
 
   // ---------------------------------------------------------------- people set it up

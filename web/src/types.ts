@@ -525,3 +525,42 @@ export interface MachineWallet {
   error: string | null;
   purchases: MachinePurchase[];
 }
+
+// ---------------- Pay on proof ----------------
+export type PartyKind = "plant" | "customer" | "financier";
+export interface FinanceParty {
+  id: string;
+  kind: PartyKind;
+  name: string;
+  status: "opening" | "active" | "failed";
+  accountId: string | null;
+  accountUrl: string | null;
+  address: string | null;
+  balance: string | null;
+  error: string | null;
+}
+export interface FinanceOrder {
+  id: string;
+  packageId: string;
+  packageTitle: string;
+  packageStatus: string;
+  runId: string | null;
+  customer: { id: string; name: string };
+  payee: { id: string; name: string; kind: PartyKind };
+  amount: string;
+  ask: string | null;
+  expiresAt: string;
+  status: "funding" | "open" | "paid" | "refunded" | "failed";
+  holdId: string | null;
+  key: string | null;
+  txs: { kind: string; hash: string; url: string | null; at: string }[];
+  note: string | null;
+  error: string | null;
+  createdAt: string;
+}
+export interface FinanceResponse {
+  live: boolean;
+  coin: { symbol: string; decimals: number; address: string; token: string; contract: string; studio: string } | null;
+  parties: FinanceParty[];
+  orders: FinanceOrder[];
+}

@@ -100,6 +100,16 @@ const Env = z.object({
   X402_ASSESSMENT_URL: z.string().url().optional(),
   X402_MAX_TINYBARS: z.coerce.bigint().default(50_000_000n),
 
+  /** Pay on proof: Ordo USD, a Stablecoin Studio stablecoin (its proxy and its HTS token's EVM address), and OrdoPayOnProof,
+   *  on the same chain as OrdoTrust (TRUST_RPC_URL, TRUST_RELAYER_KEY: the stablecoin's cash-in role). From Hedera setup. */
+  STABLECOIN_ADDRESS: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
+  STABLECOIN_TOKEN_ADDRESS: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
+  STABLECOIN_SYMBOL: z.string().default("OUSD"),
+  STABLECOIN_DECIMALS: z.coerce.number().int().min(0).max(18).default(6),
+  PAY_ON_PROOF_ADDRESS: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
+  /** HBAR each pay-on-proof party's account is opened with, for its own gas */
+  PAY_ON_PROOF_PARTY_TINYBARS: z.coerce.bigint().default(500_000_000n),
+
   /** Primary-name lookups for signed-in wallets (Ethereum mainnet) when IDENTITY=ens */
   ENS_RPC_URL: z.string().optional(),
   /** ENSv2 names on Sepolia: the parent name and its registry and resolver come from the ENS setup workflow */
