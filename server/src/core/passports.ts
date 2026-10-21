@@ -34,6 +34,16 @@ interface Row {
   created_at: string;
 }
 
+/** The ledger re-walked for a lot, and the anchor that covers its last entry */
+export interface LotProof {
+  chainIntact: boolean;
+  headSeq: number | null;
+  entries: number;
+  lastSeq: number;
+  anchor: { kind: string; ref: string; url: string | null; toSeq: number; at: string; matchesChain: boolean | null; external: unknown } | null;
+  checkedAt: string;
+}
+
 export interface PassportView {
   runId: string;
   status: PassportStatus;
@@ -60,7 +70,7 @@ const PROOF_TTL_MS = 60_000;
  * start, its metadata updated when the lot is held, completed or shipped, and airdropped to the customer.
  */
 export class Passports {
-  private proofCache = new Map<string, { at: number; value: unknown }>();
+  private proofCache = new Map<string, { at: number; value: LotProof }>();
 
   constructor(
     private db: Db,
@@ -299,7 +309,7 @@ export class Passports {
   }
 
   /** The ledger re-walked and the anchor that covers this lot's last entry, cached briefly (it re-reads the chain). */
-  private async proofFor(runId: string, lastSeq: number) {
+  private async proofFor(runId: string, lastSeq: number): Promise<LotProof> {
     const hit = this.proofCache.get(runId);
     if (hit && this.now() - hit.at < PROOF_TTL_MS) return hit.value;
     const v = await this.proof.verify(runId);

@@ -7,6 +7,7 @@ import { Field, Icon, Menu, Modal, useToast } from "./ui/kit";
 import { ThemeToggle } from "./ui/ThemeToggle";
 import { Approvals } from "./pages/Approvals";
 import { Builder } from "./pages/Builder";
+import { Finance } from "./pages/Finance";
 import { Floor } from "./pages/Floor";
 import { History } from "./pages/History";
 import { Pipelines } from "./pages/Pipelines";
@@ -26,6 +27,7 @@ const NAV: { page: string; label: string; icon: string; count?: Count }[] = [
   { page: "floor", label: "Floor & fleet", icon: "floor" },
   { page: "approvals", label: "Approvals", icon: "approvals", count: "approvals" },
   { page: "work-orders", label: "Work orders", icon: "workorders", count: "workOrders" },
+  { page: "finance", label: "Pay on proof", icon: "finance" },
   { page: "builder", label: "Builder", icon: "builder" },
 ];
 const ADMIN_NAV: { page: string; label: string; icon: string; count?: Count }[] = [
@@ -84,6 +86,9 @@ export function Shell({ onSignOut, onSwitchSite }: { onSignOut: () => void; onSw
       break;
     case "work-orders":
       page = <WorkOrders />;
+      break;
+    case "finance":
+      page = <Finance />;
       break;
     default:
       page = <Pipelines />;

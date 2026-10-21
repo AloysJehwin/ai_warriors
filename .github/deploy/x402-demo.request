@@ -1,0 +1,2 @@
+# What the "x402 demo" workflow does on its next run: mcp (an outside agent pays the production MCP server per call).
+# Kept empty so merges do not run it again; the Actions tab runs it on demand too.

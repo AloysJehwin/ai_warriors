@@ -317,4 +317,30 @@ CREATE TABLE vendor_callouts (id TEXT PRIMARY KEY, site_id TEXT NOT NULL REFEREN
 CREATE INDEX vendor_callouts_vendor ON vendor_callouts (vendor_id, created_at DESC);
 `,
   },
+  {
+    version: 18,
+    name: "mcp sales",
+    sql: `
+CREATE TABLE mcp_sales (id TEXT PRIMARY KEY, tool TEXT NOT NULL, amount TEXT NOT NULL, payer TEXT, tx_id TEXT NOT NULL, network TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE INDEX mcp_sales_recent ON mcp_sales (created_at DESC);
+`,
+  },
+  {
+    version: 19,
+    name: "pay on proof",
+    sql: `
+CREATE TABLE finance_parties (id TEXT PRIMARY KEY, site_id TEXT NOT NULL REFERENCES sites(id), kind TEXT NOT NULL, name TEXT NOT NULL,
+  account_id TEXT, evm_address TEXT, key_enc TEXT, status TEXT NOT NULL, open_tx TEXT, error TEXT, created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE INDEX finance_parties_site ON finance_parties (site_id, kind);
+CREATE TABLE finance_orders (id TEXT PRIMARY KEY, site_id TEXT NOT NULL REFERENCES sites(id), package_id TEXT NOT NULL REFERENCES validation_packages(id),
+  run_id TEXT, customer_id TEXT NOT NULL REFERENCES finance_parties(id), amount TEXT NOT NULL, expires_at TIMESTAMPTZ NOT NULL,
+  hold_id TEXT, chain_key TEXT, payee_id TEXT NOT NULL REFERENCES finance_parties(id), ask TEXT NOT NULL DEFAULT '0', status TEXT NOT NULL,
+  txs_json TEXT NOT NULL DEFAULT '[]', note TEXT, error TEXT, created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE INDEX finance_orders_site ON finance_orders (site_id, created_at DESC);
+CREATE INDEX finance_orders_open ON finance_orders (status, updated_at);
+`,
+  },
 ];
