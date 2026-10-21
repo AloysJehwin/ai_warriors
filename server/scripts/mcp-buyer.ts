@@ -28,6 +28,14 @@ if (!accountId || !key) {
   key = k.toStringRaw();
   client.close();
   console.log(`Opened buyer account ${accountId}: https://hashscan.io/${network.split(":")[1]}/account/${accountId}`);
+  // the facilitator checks a payment's signature against the payer's key on the mirror node: wait until it has the account
+  const mirror = process.env.HEDERA_MIRROR_URL ?? `https://${network.split(":")[1]}.mirrornode.hedera.com`;
+  for (let i = 0; ; i++) {
+    const r = await fetch(`${mirror}/api/v1/accounts/${accountId}`).catch(() => null);
+    if (r?.ok && ((await r.json()) as { key?: unknown }).key) break;
+    if (i >= 30) throw new Error(`The mirror node does not know ${accountId} yet`);
+    await new Promise((res) => setTimeout(res, 2000));
+  }
 }
 
 const mcp = await connectPaidMcp({ url: `${base}/v1/x402/mcp`, network, accountId, key, maxPerCall });
