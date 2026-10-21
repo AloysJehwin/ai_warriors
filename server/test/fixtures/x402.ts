@@ -6,6 +6,8 @@ export const FEE_PAYER = "0.0.9001";
 /** A facilitator in the test process: checks the agent's signed transfer the way a real one does, then "submits" it. */
 export function fakeFacilitator(payer: string) {
   const settled: string[] = [];
+  /** Each settled payment's HBAR movements: [account, tinybars] (negative for the payer) */
+  const transfersOf: (readonly (readonly [string, string])[])[] = [];
   const transfers = (b64: string) => {
     const tx = Transaction.fromBytes(Buffer.from(b64, "base64"));
     if (!(tx instanceof TransferTransaction)) throw new Error("not a transfer");
@@ -21,10 +23,11 @@ export function fakeFacilitator(payer: string) {
       return { isValid: ok, invalidReason: ok ? undefined : "bad_transfer", payer };
     },
     async settle(p) {
-      const { tx } = transfers((p.payload as { transaction: string }).transaction);
+      const { tx, hbar } = transfers((p.payload as { transaction: string }).transaction);
       settled.push(tx.transactionId!.toString());
+      transfersOf.push(hbar);
       return { success: true, transaction: tx.transactionId!.toString(), network: "hedera:testnet", payer };
     },
   };
-  return { f, settled };
+  return { f, settled, transfers: transfersOf };
 }

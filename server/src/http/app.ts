@@ -281,7 +281,16 @@ export function createApp(sys: System, opts: AppOptions = {}) {
   const x402Cors = cors({ origin: "*", allowHeaders: ["content-type", "payment-signature", "x-payment"], exposeHeaders: ["payment-required", "payment-response"] });
   app.get("/v1/x402", (c) => {
     c.header("access-control-allow-origin", "*");
-    return c.json(sys.x402 ? { offers: [{ method: "POST", path: ASSESSMENT_PATH, ...sys.x402.terms, unit: "tinybar" }] } : { offers: [] });
+    return c.json(
+      sys.x402
+        ? {
+            offers: [
+              { method: "POST", path: ASSESSMENT_PATH, ...sys.x402.terms, unit: "tinybar" },
+              { method: "POST", path: "/v1/x402/vendors/{vendorId}/callout", network: sys.x402.terms.network, payTo: "the vendor's Hedera account", price: "a tenth of the vendor's hourly rate, at least 0.1 HBAR", asset: sys.x402.terms.asset },
+            ],
+          }
+        : { offers: [] },
+    );
   });
   app.use(ASSESSMENT_PATH, x402Cors);
   app.use(ASSESSMENT_PATH, async (c, next) => {
@@ -289,6 +298,20 @@ export function createApp(sys: System, opts: AppOptions = {}) {
     return sys.x402.middleware(c, next);
   });
   app.post(ASSESSMENT_PATH, async (c) => c.json(assessVibration(await body(c, Assess))));
+
+  // A vendor's urgent call-out: machines (or anyone) reserve one by paying the vendor's deposit over x402
+  const VENDOR_CALLOUT = "/v1/x402/vendors/:vendorId/callout";
+  app.use(VENDOR_CALLOUT, x402Cors);
+  app.use(VENDOR_CALLOUT, async (c, next) => {
+    if (!sys.x402) throw new HttpError(404, "This deployment does not sell call-outs");
+    // check the vendor before asking for payment, so nobody pays for a slot that cannot be reserved
+    if (c.req.method === "POST" && !(await sys.machines.vendorAccount(c.req.param("vendorId")!))) throw new HttpError(404, "This vendor takes no call-outs: it has no Hedera account");
+    return sys.x402.middleware(c, next);
+  });
+  app.post(VENDOR_CALLOUT, async (c) => {
+    const b = await body(c, z.object({ assetId: z.string().max(64).optional(), reason: z.string().max(300).optional() }));
+    return c.json(await sys.machines.reserveCallout(c.req.param("vendorId"), b));
+  });
 
   // ---------------- Site scope ----------------
   const site = new Hono<Env>();
@@ -390,6 +413,11 @@ export function createApp(sys: System, opts: AppOptions = {}) {
     await sys.advance(true);
     return c.json({ id });
   });
+  // ---- Machine wallets: a machine's own Hedera account, which pays over x402 when the machine drifts ----
+  const Budget = z.object({ dailyBudget: z.string().regex(/^\d+$/), perCall: z.string().regex(/^\d+$/) });
+  site.get("/assets/:assetId/wallet", async (c) => c.json({ live: sys.machines.live, wallet: await sys.machines.get(sid(c), c.req.param("assetId")) }));
+  site.put("/assets/:assetId/wallet", async (c) => c.json(await sys.machines.enable(sid(c), me(c).user, c.get("roles"), c.req.param("assetId"), await body(c, Budget))));
+  site.post("/assets/:assetId/wallet/pause", async (c) => c.json(await sys.machines.pause(sid(c), me(c).user, c.get("roles"), c.req.param("assetId"), (await body(c, z.object({ stop: z.boolean() }))).stop)));
   site.get("/assets/:assetId", async (c) => {
     const id = c.req.param("assetId");
     const view = (await sys.plant.views(sid(c))).find((a) => a.id === id);

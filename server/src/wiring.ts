@@ -6,6 +6,7 @@ import { LocalSignedAnchor, type AnchorAdapter } from "./adapters/rails.js";
 import { Agents } from "./agents/agents.js";
 import { Auth, Signatures } from "./auth/auth.js";
 import { Assessments } from "./core/assessments.js";
+import { Machines } from "./core/machines.js";
 import { AgentLicenses } from "./core/agent-licenses.js";
 import { AgentNfts } from "./core/agent-nfts.js";
 import { Autonomy } from "./core/autonomy.js";
@@ -74,6 +75,7 @@ export interface System {
   stageProofs: StageProofs;
   agentNfts: AgentNfts;
   agentLicenses: AgentLicenses;
+  machines: Machines;
   /** x402: the paid assessment route's middleware and terms, when Ordo sells assessments */
   x402: { middleware: import("hono").MiddlewareHandler; terms: { network: string; payTo: string; price: string; asset: string } } | null;
   ensNames: { lookup(addresses: string[]): Promise<Record<string, string | null>> } | null;
@@ -82,7 +84,7 @@ export interface System {
   close(): Promise<void>;
 }
 
-export async function buildSystem(cfg: Config, opts: { now?: () => number; policyText?: string; llm?: LlmProvider; trustTransport?: Transport; x402Facilitator?: import("@x402/core/server").FacilitatorClient; x402Fetch?: typeof fetch; ensTransport?: Transport; blobStore?: import("./chain/zerog.js").BlobStore; inftTransport?: Transport; scheduler?: ScheduleRail; worldIdFetch?: typeof fetch } = {}): Promise<System> {
+export async function buildSystem(cfg: Config, opts: { now?: () => number; policyText?: string; llm?: LlmProvider; trustTransport?: Transport; x402Facilitator?: import("@x402/core/server").FacilitatorClient; x402Fetch?: typeof fetch; machineBank?: import("./chain/machine-bank.js").MachineBank; ensTransport?: Transport; blobStore?: import("./chain/zerog.js").BlobStore; inftTransport?: Transport; scheduler?: ScheduleRail; worldIdFetch?: typeof fetch } = {}): Promise<System> {
   const warnings: string[] = [];
   if (cfg.VERCEL && !cfg.DATABASE_URL) throw new Error("On Vercel, DATABASE_URL is required (add Neon from the Vercel Marketplace)");
   const now = opts.now ?? Date.now;
@@ -238,9 +240,18 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
   let x402: System["x402"] = null;
   const x402Net = (await import("./chain/x402.js")).x402Network(cfg.HEDERA_NETWORK);
   const payTo = cfg.X402_PAY_TO ?? cfg.HEDERA_OPERATOR_ID;
+  // bound below, once machines exist: vendors' call-outs are priced and paid to the vendor's own account
+  let machines: Machines | null = null;
   if (x402Net && payTo) {
     const { x402Seller } = await import("./chain/x402.js");
-    x402 = x402Seller({ network: x402Net, payTo, price: cfg.X402_PRICE_TINYBARS, facilitatorUrl: cfg.X402_FACILITATOR_URL, facilitator: opts.x402Facilitator });
+    x402 = x402Seller({
+      network: x402Net,
+      payTo,
+      price: cfg.X402_PRICE_TINYBARS,
+      facilitatorUrl: cfg.X402_FACILITATOR_URL,
+      facilitator: opts.x402Facilitator,
+      vendors: { payTo: (id) => machines!.vendorAccount(id), deposit: (id) => machines!.calloutDeposit(id) },
+    });
   }
   const assessUrl = cfg.X402_ASSESSMENT_URL ?? (x402 && publicBase(cfg) ? `${publicBase(cfg)}${(await import("./chain/x402.js")).ASSESSMENT_PATH}` : null);
   if (x402Net && cfg.HEDERA_AGENT_ID && cfg.HEDERA_AGENT_KEY && assessUrl) {
@@ -252,6 +263,30 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
       warnings.push(`x402 buyer unusable (${e instanceof Error ? e.message : e}); work orders open without an assessment`);
     }
   }
+  // ---- Machines that pay for themselves: each machine its own Hedera account, buying over x402 when it drifts ----
+  let machineBank = opts.machineBank ?? null;
+  if (!machineBank && x402Net && cfg.HEDERA_OPERATOR_ID && cfg.HEDERA_OPERATOR_KEY) {
+    try {
+      const client = (hedera ?? (await import("./chain/hedera.js")).hederaFromConfig(cfg)).client;
+      const mirror = (cfg.HEDERA_MIRROR_URL ?? `https://${cfg.HEDERA_NETWORK}.mirrornode.hedera.com`).replace(/\/$/, "");
+      machineBank = (await import("./chain/machine-bank.js")).hederaMachineBank(client, cfg.HEDERA_NETWORK, mirror, cfg.HEDERA_TOPIC_ID ?? null);
+    } catch (e) {
+      warnings.push(`Machine wallets unavailable (${e instanceof Error ? e.message : e})`);
+    }
+  }
+  const { X402Buyer: MachineBuyer } = await import("./chain/x402.js");
+  machines = new Machines(
+    db,
+    rec,
+    jobs,
+    plant,
+    x402Net ? machineBank : null,
+    (accountId, key, perCall) => new MachineBuyer({ network: x402Net!, agentId: accountId, agentKey: key, maxPerCall: perCall }, opts.x402Fetch),
+    { assess: x402 ? assessUrl : null, base: publicBase(cfg), assessPrice: cfg.X402_PRICE_TINYBARS },
+    cfg.HEDERA_OPERATOR_KEY ?? cfg.LEDGER_SIGNING_KEY ?? "ordo-local",
+    now,
+  );
+  monitor.machines = machines;
 
   const passports = new Passports(db, rec, sigs, engine, trust, proof, passportRail, publicBase(cfg), cfg.SIGNATURE_CHAIN_ID, now);
   passports.specs = new SpecProofs(db, rec, now);
@@ -320,6 +355,7 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
     await passports.reconcile().catch((e) => console.error("[ordo] passports", e));
     await stageProofs.reconcile().catch((e) => console.error("[ordo] stage proofs", e));
     await jobs.run().catch((e) => console.error("[ordo] jobs", e));
+    await machines!.topUps().catch((e) => console.error("[ordo] machine top-ups", e));
     await names.reconcile().catch((e) => console.error("[ordo] ens", e));
     await lotNames.reconcile().catch((e) => console.error("[ordo] ens lots", e));
     await agentLicenses.reconcile().catch((e) => console.error("[ordo] licences", e));
@@ -346,6 +382,7 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
     { rail: "evidence copies", mode: validation.replicas ? `${validation.replicas.store.kind}, encrypted · ${cfg.ZG_INDEXER_URL}` : "database only", live: Boolean(validation.replicas) },
     { rail: "agent iNFTs", mode: inftRail ? `ERC-7857 OrdoAgentNFT ${cfg.ZG_INFT_ADDRESS} · 0G (${cfg.ZG_CHAIN_ID})` : "off", live: Boolean(inftRail) },
     { rail: "lot passports", mode: passportRail ? `HTS NFT ${passportRail.tokenId}` : "in-app passports, no NFT", live: Boolean(passportRail) },
+    { rail: "machine wallets", mode: machines.live ? "each machine can hold its own Hedera account and pay over x402" : "off", live: machines.live },
     {
       rail: "x402 assessments",
       mode: [x402 ? `sells at ${Number(cfg.X402_PRICE_TINYBARS) / 1e8} HBAR to ${x402.terms.payTo}` : null, workOrders.assessments ? "agent buys one per work order" : null].filter(Boolean).join(" · ") || "off",
@@ -391,6 +428,7 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
     agentNfts,
     agentLicenses,
     x402,
+    machines,
     ensNames,
     advance,
     close: () => db.close(),

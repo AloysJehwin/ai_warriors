@@ -498,3 +498,30 @@ export interface ScheduleView {
   executedAt: string | null;
   error: string | null;
 }
+
+// ---------------- Machine wallets: machines that pay for themselves over x402 ----------------
+export interface MachinePurchase {
+  id: string;
+  kind: "assessment" | "callout";
+  seller: string;
+  amount: string | null;
+  txId: string | null;
+  txUrl: string | null;
+  auditTx: string | null;
+  incidentId: string | null;
+  result: Record<string, unknown> | null;
+  at: string;
+}
+export interface MachineWallet {
+  assetId: string;
+  status: "opening" | "active" | "paused" | "failed";
+  accountId: string | null;
+  accountUrl: string | null;
+  evmAddress: string | null;
+  dailyBudget: string;
+  perCall: string;
+  balance: string | null;
+  lastTopUpAt: string | null;
+  error: string | null;
+  purchases: MachinePurchase[];
+}

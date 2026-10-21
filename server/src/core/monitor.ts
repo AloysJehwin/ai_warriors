@@ -19,6 +19,8 @@ const CLEAR_AFTER_MIN = 10;
 export class Monitor {
   /** Playbooks this site licenses from other sites' proven agents (set by the wiring) */
   licenses: AgentLicenses | null = null;
+  /** Machines with their own wallet buy an assessment when an incident opens (set by the wiring) */
+  machines: import("./machines.js").Machines | null = null;
 
   constructor(
     private db: Db,
@@ -81,6 +83,7 @@ export class Monitor {
       : `${a.name}: ${anomaly.signal.replaceAll("_", " ")} ${anomaly.value} ${unit} ${anomaly.kind === "drift" ? "drifting" : `over ${anomaly.level} limit`}`;
     await this.db.query("INSERT INTO incidents (id, site_id, asset_id, status, title, severity, data_json) VALUES ($1,$2,$3,'open',$4,$5,$6)", [id, siteId, a.id, title, anomaly.level, JSON.stringify({ anomaly, lastSeenMin: this.now() / 60_000 })]);
     await this.rec.decide(siteId, { agent, kind: "incident.opened", incidentId: id, assetId: a.id, summary: title, data: { anomaly } });
+    await this.machines?.onIncident(siteId, a.id, id).catch((e) => console.error("[ordo] machine purchase", e));
 
     const alarm = a.limits[anomaly.signal]?.alarm;
     const fc = alarm !== undefined ? forecast(samples, a.id, anomaly.signal, alarm) : null;
