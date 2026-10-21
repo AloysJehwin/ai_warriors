@@ -300,4 +300,21 @@ CREATE INDEX stage_proofs_due ON stage_proofs (status, created_at);
 ALTER TABLE validation_packages ADD COLUMN release_json TEXT;
 `,
   },
+  {
+    version: 17,
+    name: "machine wallets",
+    sql: `
+CREATE TABLE machine_wallets (asset_id TEXT PRIMARY KEY REFERENCES assets(id), site_id TEXT NOT NULL REFERENCES sites(id),
+  account_id TEXT, evm_address TEXT, key_enc TEXT, daily_budget TEXT NOT NULL, per_call TEXT NOT NULL, status TEXT NOT NULL,
+  open_tx TEXT, last_topup_at TIMESTAMPTZ, error TEXT, enabled_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE TABLE machine_purchases (id TEXT PRIMARY KEY, site_id TEXT NOT NULL REFERENCES sites(id), asset_id TEXT NOT NULL, incident_id TEXT,
+  kind TEXT NOT NULL, seller TEXT NOT NULL, amount TEXT, tx_id TEXT, tx_url TEXT, audit_tx TEXT, result_json TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE INDEX machine_purchases_asset ON machine_purchases (asset_id, created_at DESC);
+CREATE TABLE vendor_callouts (id TEXT PRIMARY KEY, site_id TEXT NOT NULL REFERENCES sites(id), vendor_id TEXT NOT NULL, asset_id TEXT,
+  reason TEXT, deposit TEXT NOT NULL, payer TEXT, slot_by TIMESTAMPTZ NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE INDEX vendor_callouts_vendor ON vendor_callouts (vendor_id, created_at DESC);
+`,
+  },
 ];

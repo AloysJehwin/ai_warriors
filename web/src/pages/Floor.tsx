@@ -4,7 +4,7 @@ import { useApp } from "../lib/app";
 import { ago, AGENT_LABEL, dateTime, LEVEL_LABEL, pct, signalLabel, STATUS_LABEL } from "../lib/format";
 import { href, useRoute } from "../lib/router";
 import { useSign } from "../lib/sign";
-import type { AgentKey, AgentLicense, AgentRow, AssetKind, AssetView, DataSource, Incident, LicenseStatus, MarketAgent, SignalLimit, TrackRecord, TypedSignature } from "../types";
+import type { MachineWallet, AgentKey, AgentLicense, AgentRow, AssetKind, AssetView, DataSource, Incident, LicenseStatus, MarketAgent, SignalLimit, TrackRecord, TypedSignature } from "../types";
 import { Action, Drawer, Empty, Field, Loading, Menu, Modal, Segmented, Tabs, useToast } from "../ui/kit";
 import { Select } from "../ui/Select";
 import { Spark } from "../ui/Spark";
@@ -445,6 +445,116 @@ interface AssetDetail {
   replays: { id: string; name: string; rows: number; durationMs: number; speed: number; startedAt: string | null; createdAt: string }[];
 }
 
+const tinybars = (hbar: string) => String(Math.round(Number.parseFloat(hbar) * 1e8));
+const hbar = (tinybars: string | null) => (tinybars === null ? "—" : `${(Number(tinybars) / 1e8).toFixed(2).replace(/\.?0+$/, "")} HBAR`);
+
+/** The machine's own Hedera account: it pays over x402, with nobody approving, when the machine drifts. */
+function MachineWalletSection({ assetId, name }: { assetId: string; name: string }) {
+  const { path, live, can } = useApp();
+  const [w, setW] = useState<{ live: boolean; wallet: MachineWallet | null } | null>(null);
+  const [form, setForm] = useState<{ day: string; call: string } | null>(null);
+  const toast = useToast();
+  const load = () => api.get<{ live: boolean; wallet: MachineWallet | null }>(path(`/assets/${assetId}/wallet`)).then(setW);
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [assetId, live?.headSeq]);
+  if (!w?.live) return null;
+  const manage = can("maintenance_lead");
+  const x = w.wallet;
+  const save = async () => {
+    await api.put(path(`/assets/${assetId}/wallet`), { dailyBudget: tinybars(form!.day), perCall: tinybars(form!.call) });
+    setForm(null);
+    toast(x ? "Budget updated" : `Opening ${name}'s Hedera account`, "ok");
+    await load();
+  };
+  return (
+    <section className="dsec">
+      <h3>Machine wallet</h3>
+      {!x ? (
+        <p className="muted small">
+          Give {name} its own Hedera account. When it drifts out of limits it pays, from that account and with nobody approving, for a vibration assessment and, if the machine is in
+          zone C or D, a vendor's urgent call-out. The daily budget is all it can ever hold.
+        </p>
+      ) : (
+        <>
+          <div className="row-between small">
+            <span>
+              {x.accountId ? (
+                <a href={x.accountUrl ?? undefined} target="_blank" rel="noreferrer" className="mono">
+                  {x.accountId}
+                </a>
+              ) : (
+                <span className="faint">opening the account on Hedera…</span>
+              )}{" "}
+              <span className={`tag ${x.status === "active" ? "ok" : x.status === "paused" ? "warn" : x.status === "failed" ? "bad" : ""}`}>{x.status}</span>
+            </span>
+            <span>
+              balance <b>{hbar(x.balance)}</b> · {hbar(x.dailyBudget)} a day · at most {hbar(x.perCall)} a purchase
+            </span>
+          </div>
+          {x.error && <p className="field-e small">{x.error}</p>}
+          {x.purchases.length > 0 ? (
+            <ul className="pp-list small">
+              {x.purchases.map((p) => (
+                <li key={p.id}>
+                  {p.kind === "assessment" ? `Vibration assessment: zone ${String(p.result?.zone ?? "?")}` : `Urgent call-out reserved with ${p.seller}`} · {hbar(p.amount)} ·{" "}
+                  {p.txUrl ? (
+                    <a href={p.txUrl} target="_blank" rel="noreferrer">
+                      paid via x402
+                    </a>
+                  ) : (
+                    "paid"
+                  )}{" "}
+                  · <span className="faint">{ago(p.at)}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="faint small">No purchases yet. It buys when an incident opens on this machine.</p>
+          )}
+        </>
+      )}
+      {manage && !form && (
+        <div className="btns">
+          <button type="button" className="btn sm" onClick={() => setForm({ day: x ? String(Number(x.dailyBudget) / 1e8) : "2", call: x ? String(Number(x.perCall) / 1e8) : "0.5" })}>
+            {x ? "Change budget" : "Give it a wallet"}
+          </button>
+          {x && (x.status === "active" || x.status === "paused") && (
+            <Action
+              className="btn sm"
+              onClick={async () => {
+                await api.post(path(`/assets/${assetId}/wallet/pause`), { stop: x.status === "active" });
+                await load();
+              }}
+            >
+              {x.status === "active" ? "Stop spending" : "Let it spend"}
+            </Action>
+          )}
+        </div>
+      )}
+      {form && (
+        <div className="grid2">
+          <Field label="Daily budget (HBAR)">
+            <input value={form.day} onChange={(e) => setForm({ ...form, day: e.target.value })} inputMode="decimal" />
+          </Field>
+          <Field label="Most per purchase (HBAR)">
+            <input value={form.call} onChange={(e) => setForm({ ...form, call: e.target.value })} inputMode="decimal" />
+          </Field>
+          <div className="btns">
+            <Action className="btn accent sm" onClick={save}>
+              Save
+            </Action>
+            <button type="button" className="btn sm" onClick={() => setForm(null)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function AssetDrawer({ id, onClose, onEdit }: { id: string; onClose: () => void; onEdit: (a: AssetView) => void }) {
   const { path, live, can, refresh } = useApp();
   const [d, setD] = useState<AssetDetail | null>(null);
@@ -594,6 +704,7 @@ function AssetDrawer({ id, onClose, onEdit }: { id: string; onClose: () => void;
         </section>
       )}
       {reading && <ReadingModal assetId={a.id} onClose={() => setReading(false)} onDone={load} />}
+      <MachineWalletSection assetId={a.id} name={a.name} />
       {upload && <UploadModal assetId={a.id} onClose={() => setUpload(false)} onDone={load} />}
     </Drawer>
   );

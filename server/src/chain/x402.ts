@@ -13,6 +13,9 @@ import type { Context, Next } from "hono";
 import { parseHederaKey } from "./hedera.js";
 
 export const ASSESSMENT_PATH = "/v1/x402/vibration-assessment";
+/** A vendor's urgent call-out, sold per reservation: the deposit goes straight to the vendor's Hedera account */
+export const CALLOUT_PATH = "/v1/x402/vendors/:vendorId/callout";
+export const calloutVendor = (path: string) => /^\/v1\/x402\/vendors\/([\w-]+)\/callout$/.exec(path)?.[1] ?? null;
 const HBAR = "0.0.0";
 
 type Network = "hedera:testnet" | "hedera:mainnet";
@@ -85,6 +88,8 @@ export interface SellerConfig {
   facilitatorUrl: string;
   /** Tests pass an in-process facilitator */
   facilitator?: FacilitatorClient;
+  /** Vendors' call-outs: each vendor is paid at its own account, at its own deposit */
+  vendors?: { payTo: (vendorId: string) => Promise<string | null>; deposit: (vendorId: string) => Promise<bigint> };
 }
 
 class HonoAdapter implements HTTPAdapter {
@@ -132,6 +137,26 @@ export function x402Seller(cfg: SellerConfig) {
       mimeType: "application/json",
       serviceName: "Ordo condition monitoring",
     },
+    ...(cfg.vendors
+      ? {
+          [`POST ${CALLOUT_PATH}`]: {
+            accepts: {
+              scheme: "exact",
+              network: cfg.network,
+              payTo: async (ctx: HTTPRequestContext) => {
+                const account = await cfg.vendors!.payTo(calloutVendor(ctx.path) ?? "");
+                if (!account) throw new Error("This vendor has no Hedera account");
+                return account;
+              },
+              price: async (ctx: HTTPRequestContext) => ({ amount: (await cfg.vendors!.deposit(calloutVendor(ctx.path) ?? "")).toString(), asset: HBAR }),
+              maxTimeoutSeconds: 120,
+            },
+            description: "Reserve an urgent maintenance call-out; the deposit is paid to the vendor",
+            mimeType: "application/json",
+            serviceName: "Ordo vendor call-outs",
+          },
+        }
+      : {}),
   });
   let ready: Promise<void> | null = null;
 
