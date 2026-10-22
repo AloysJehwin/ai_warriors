@@ -1,4 +1,3 @@
 # What the "Hedera setup" workflow creates on its next run, one per line: topic, contracts, passport, agent, stablecoin, payonproof,
 # or "fund 0x… N" to send N HBAR to a wallet. Edit and push to run it again; each run creates new resources. Created so far: topic and
-# contracts (run 1), passport (run 2), agent (run 4), stablecoin and payonproof (2026-10-22). Emptied after each run so merges do not repeat it.
-fund 0x69E86e060C4275D985089783EA9CDb206B4E1A9B 25
+# contracts (run 1), passport (run 2), agent (run 4), stablecoin and payonproof (2026-10-22), 25 HBAR to 0x69E8…1A9B (run 12). Emptied after each run so merges do not repeat it.
