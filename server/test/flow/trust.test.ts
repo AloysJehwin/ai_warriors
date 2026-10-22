@@ -155,6 +155,19 @@ describe("on-chain trust", () => {
     expect(st[0]).toBe(parseEther("7"));
   });
 
+  it("a validator whose credential never reached the chain is told so, not sent to stake into a revert", async () => {
+    const w = await wallet(app);
+    const id = await uid(w);
+    // approved in Ordo, but the grant relay failed: no VALIDATOR role in OrdoTrust
+    await sys.db.query("INSERT INTO memberships (site_id, user_id, role) VALUES ($1,$2,'quality_engineer')", [site, id]);
+    await sys.db.query("INSERT INTO validators (site_id, user_id, scope, status, request_id) VALUES ($1,$2,'quality','approved','onb_lost')", [site, id]);
+    await sys.db.query("INSERT INTO chain_relays (id, site_id, kind, ref, payload_json, status, error) VALUES ('rly_lost',$1,'grant','onb_lost','{}','failed','relayer out of gas')", [site]);
+    const v = (await w.call("GET", `${S()}/validators`)).json;
+    expect(v.me).toMatchObject({ ok: false, reason: expect.stringMatching(/credential is not in OrdoTrust/) });
+    expect(v.validators.find((x: any) => x.userId === id)).toMatchObject({ requestId: "onb_lost", credential: { status: "failed", error: "relayer out of gas" }, onchain: { credentialed: false, active: false } });
+    expect(v.validators.find((x: any) => x.address === people.qe.address).onchain.credentialed).toBe(true);
+  });
+
   it("an administrator removes a validator: the credential is revoked on-chain, the stake stays withdrawable", async () => {
     const remove = async (by: Client, who: Client) => {
       const t = await by.call("POST", `${S()}/validators/${await uid(who)}/remove/sign-request`, { comment: "left the company" });

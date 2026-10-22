@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { Hex } from "viem";
 import type { ReleaseTyped, Signatures, TypedSignature, User } from "../auth/auth.js";
 import { chainErrorMessage } from "../chain/errors.js";
-import { releaseSigArg, sigArg, type ChainRole, type ReleaseLot, type ReleaseSigArg, type TrustChain } from "../chain/trust.js";
+import { CHAIN_ROLE, releaseSigArg, sigArg, type ChainRole, type ReleaseLot, type ReleaseSigArg, type TrustChain } from "../chain/trust.js";
 import type { Db, Queryable } from "../db/db.js";
 import { hashOf } from "../domain/canonical.js";
 import { canApproveAny } from "../domain/policy.js";
@@ -411,6 +411,9 @@ export class Trust {
     if (!this.chain) return { ok: true, reason: null };
     const active = await this.chain.isActiveValidator(siteId, user.address).catch(() => null);
     if (active === null) return { ok: false, reason: "Could not reach the trust contract to check your stake. Try again." };
+    const roles = active ? null : await this.chain.roles(siteId, user.address).catch(() => null);
+    if (roles !== null && (roles & CHAIN_ROLE.VALIDATOR) === 0)
+      return { ok: false, reason: "Your validator credential is not in OrdoTrust yet, so the contract refuses your stake. An administrator can retry it from Team → Validators." };
     if (!active) return { ok: false, reason: "Your validator stake is not active on-chain: stake at least the minimum (Team → Validators), and make sure you have not requested to unstake." };
     return { ok: true, reason: null };
   }
@@ -494,18 +497,20 @@ export class Trust {
   }
 
   async validators(siteId: string) {
-    const rows = await this.db.query<{ user_id: string; scope: ValidatorScope; status: string; approved_at: string; address: string; display_name: string | null; human: boolean }>(
-      "SELECT v.user_id, v.scope, v.status, v.approved_at::text, u.address, u.display_name, EXISTS (SELECT 1 FROM validator_humans h WHERE h.site_id = v.site_id AND h.user_id = v.user_id) AS human FROM validators v JOIN users u ON u.id = v.user_id WHERE v.site_id = $1 ORDER BY v.approved_at",
+    const rows = await this.db.query<{ user_id: string; scope: ValidatorScope; status: string; approved_at: string; address: string; display_name: string | null; human: boolean; request_id: string | null }>(
+      "SELECT v.user_id, v.scope, v.status, v.approved_at::text, v.request_id, u.address, u.display_name, EXISTS (SELECT 1 FROM validator_humans h WHERE h.site_id = v.site_id AND h.user_id = v.user_id) AS human FROM validators v JOIN users u ON u.id = v.user_id WHERE v.site_id = $1 ORDER BY v.approved_at",
       [siteId],
     );
     return Promise.all(
       rows.rows.map(async (v) => {
         const onchain = this.chain
-          ? await Promise.all([this.chain.stakeOf(siteId, v.address), this.chain.isActiveValidator(siteId, v.address), this.schedules?.stakeSchedule(siteId, v.address) ?? null])
-              .then(([s, a, payout]) => ({ stake: s.amount, unlockAt: s.unlockAt, active: a, payout }))
+          ? await Promise.all([this.chain.stakeOf(siteId, v.address), this.chain.isActiveValidator(siteId, v.address), this.schedules?.stakeSchedule(siteId, v.address) ?? null, this.chain.roles(siteId, v.address)])
+              .then(([s, a, payout, roles]) => ({ stake: s.amount, unlockAt: s.unlockAt, active: a, payout, credentialed: (roles & CHAIN_ROLE.VALIDATOR) !== 0 }))
               .catch(() => null)
           : null;
-        return { userId: v.user_id, address: v.address, name: v.display_name, scope: v.scope, scopeLabel: ROLE_LABEL[VALIDATOR_SCOPES[v.scope]], status: v.status, approvedAt: new Date(v.approved_at).toISOString(), human: Boolean(v.human), onchain };
+        // the relay that put (or failed to put) the credential on-chain: an administrator retries a failed one by this ref
+        const credential = this.chain && v.request_id ? await this.relayOf(siteId, v.request_id) : null;
+        return { requestId: v.request_id, credential, userId: v.user_id, address: v.address, name: v.display_name, scope: v.scope, scopeLabel: ROLE_LABEL[VALIDATOR_SCOPES[v.scope]], status: v.status, approvedAt: new Date(v.approved_at).toISOString(), human: Boolean(v.human), onchain };
       }),
     );
   }
