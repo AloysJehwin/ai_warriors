@@ -12,6 +12,7 @@ let app: Awaited<ReturnType<typeof boot>>["app"];
 let admin: Client;
 let site = "";
 const S = () => `/v1/sites/${site}`;
+const uid = async (c: Client): Promise<string> => (await c.call("GET", "/v1/me")).json.user.id;
 const portal: { url: string; body: any }[] = [];
 const fakePortal = (async (url: string | URL | Request, init?: RequestInit) => {
   const body = JSON.parse(String(init?.body));
@@ -84,7 +85,20 @@ describe("World ID for validators", () => {
     expect(decisions).not.toContain('"222"');
   });
 
-  it("a validator approved without World ID can't sign until they verify", async () => {
+  it("removing a validator frees the person's seat, so they can validate again from another wallet", async () => {
+    const w1 = await wallet(app);
+    const w2 = await wallet(app);
+    const id = (await apply(w1, proof("555", w1.address))).json.id;
+    await approve(id);
+    expect((await apply(w2, proof("555", w2.address))).status).toBe(409);
+    const t = (await admin.call("POST", `${S()}/validators/${await uid(w1)}/remove/sign-request`, {})).json;
+    const r = await admin.call("POST", `${S()}/validators/${await uid(w1)}/remove`, { comment: "", nonce: t.message.nonce, signature: await admin.sign(t) });
+    expect(r.json).toEqual({ removed: true, chain: null });
+    expect((await w1.call("GET", `${S()}/validators`)).json.me.ok).toBe(false);
+    expect((await apply(w2, proof("555", w2.address))).status).toBe(200);
+  });
+
+    it("a validator approved without World ID can't sign until they verify", async () => {
     const w = await wallet(app);
     const id = (await apply(w, proof("444", w.address))).json.id;
     // simulate a validator approved before World ID was required

@@ -18,6 +18,7 @@ const keys = { admin: generatePrivateKey(), qe: generatePrivateKey(), v2: genera
 const people: Record<keyof typeof keys, Client> = {} as never;
 let site = "";
 const S = () => `/v1/sites/${site}`;
+const uid = async (c: Client): Promise<string> => (await c.call("GET", "/v1/me")).json.user.id;
 let transport: ReturnType<typeof custom>;
 
 beforeAll(async () => {
@@ -152,5 +153,32 @@ describe("on-chain trust", () => {
     expect(prop.chain.status).toBe("done");
     const st = await read<readonly [bigint, bigint]>("stakes", [await read("siteKey", [site]), people.qe.address]);
     expect(st[0]).toBe(parseEther("7"));
+  });
+
+  it("an administrator removes a validator: the credential is revoked on-chain, the stake stays withdrawable", async () => {
+    const remove = async (by: Client, who: Client) => {
+      const t = await by.call("POST", `${S()}/validators/${await uid(who)}/remove/sign-request`, { comment: "left the company" });
+      if (t.status !== 200) return t;
+      expect(t.json.message.action).toBe("role.revoke");
+      return by.call("POST", `${S()}/validators/${await uid(who)}/remove`, { comment: "left the company", nonce: t.json.message.nonce, signature: await by.sign(t.json) });
+    };
+    expect(await read<boolean>("isActiveValidator", [site, people.v2.address])).toBe(true);
+    expect((await remove(people.qe, people.v2)).status).toBe(403); // only an administrator
+    const r = await remove(people.admin, people.v2);
+    expect(r.status).toBe(200);
+    expect(r.json.chain.status).toBe("done");
+    expect(await read<boolean>("hasRole", [site, people.v2.address, 4])).toBe(false);
+    expect(await read<boolean>("isActiveValidator", [site, people.v2.address])).toBe(false);
+    const v = (await people.v2.call("GET", `${S()}/validators`)).json;
+    expect(v.me.ok).toBe(false);
+    expect(v.me.reason).toMatch(/removed you/);
+    expect(v.validators.find((x: any) => x.address === people.v2.address).status).toBe("removed");
+    expect((await remove(people.admin, people.v2)).status).toBe(404);
+    // their stake is still theirs to take back
+    const w = createWalletClient({ chain: foundry, transport, account: privateKeyToAccount(keys.v2) });
+    const h = await w.writeContract({ address: contract, abi: ORDO_TRUST_ABI, functionName: "requestUnstake", args: [site] } as never);
+    expect((await pub.waitForTransactionReceipt({ hash: h })).status).toBe("success");
+    const kinds = (await people.admin.call("GET", `${S()}/decisions?limit=50`)).json.map((d: any) => d.kind);
+    expect(kinds).toContain("validator.removed");
   });
 });

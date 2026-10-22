@@ -78,6 +78,7 @@ export function Validators() {
   const [apply, setApply] = useState(false);
   const [amount, setAmount] = useState("");
   const [propose, setPropose] = useState(false);
+  const [removing, setRemoving] = useState<ValidatorsView["validators"][number] | null>(null);
   const [appsKey, setAppsKey] = useState(0);
   const toast = useToast();
   const sign = useSign();
@@ -88,6 +89,8 @@ export function Validators() {
   if (!v) return <Loading />;
   const trust = status.trust;
   const info = v.chain.info && "minStake" in v.chain.info ? v.chain.info : null;
+  // removed validators stay listed by the server so they can still take their stake back
+  const seated = v.validators.filter((x) => x.status === "approved");
   const mine = v.validators.find((x) => x.address === me.user!.address);
   const unit = (x: string) => (info ? `${fromUnits(x, info.decimals)} ${info.symbol}` : x);
   const tx = async (fn: "stake" | "requestUnstake" | "withdraw") => {
@@ -104,13 +107,13 @@ export function Validators() {
       <section className="section">
         <div className="section-h spread">
           <h2>Validators</h2>
-          {!v.me.row && (
+          {v.me.row?.status !== "approved" && (
             <button type="button" className="btn accent" onClick={() => setApply(true)}>
               Apply as validator
             </button>
           )}
         </div>
-        {v.validators.length === 0 ? (
+        {seated.length === 0 ? (
           <Empty title="No validators yet">Only an approved validator can sign “Reviewed by” and “Approved by” on a validation package or release a quality gate. People apply here; an administrator approves with a signature.</Empty>
         ) : (
           <div className="card scroll-x">
@@ -122,10 +125,11 @@ export function Validators() {
                   <th>Approved</th>
                   {info && <th className="r">Stake</th>}
                   <th>Status</th>
+                  {can("admin") && <th />}
                 </tr>
               </thead>
               <tbody>
-                {v.validators.map((x) => {
+                {seated.map((x) => {
                   const st = !info ? (x.status === "approved" ? ["Can sign", "ok"] : [x.status, "bad"]) : !x.onchain ? ["Chain unreachable", "warn"] : x.onchain.active ? ["Active", "ok"] : x.onchain.unlockAt ? [`Unstaking · ${x.onchain.unlockAt * 1000 > Date.now() ? `free ${dateTime(new Date(x.onchain.unlockAt * 1000).toISOString())}` : "withdrawable"}`, "warn"] : ["Not staked", "warn"];
                   return (
                     <tr key={x.userId}>
@@ -139,6 +143,13 @@ export function Validators() {
                       <td>
                         <span className={`tag ${st[1]}`}>{st[0]}</span>
                       </td>
+                      {can("admin") && (
+                        <td className="r">
+                          <button type="button" className="btn sm danger" onClick={() => setRemoving(x)}>
+                            Remove
+                          </button>
+                        </td>
+                      )}
                     </tr>
                   );
                 })}
@@ -152,11 +163,11 @@ export function Validators() {
         <section className="section card">
           <div className="card-h">
             <h2>Your validator status</h2>
-            <span className={`tag ${v.me.ok ? "ok" : "warn"}`}>{v.me.ok ? "You can sign" : "You cannot sign yet"}</span>
+            <span className={`tag ${v.me.ok ? "ok" : mine.status === "removed" ? "bad" : "warn"}`}>{v.me.ok ? "You can sign" : mine.status === "removed" ? "Removed by an administrator" : "You cannot sign yet"}</span>
           </div>
           <div className="card-b">
             {v.me.reason && <p className="muted">{v.me.reason}</p>}
-            {status.worldId && (
+            {status.worldId && mine.status === "approved" && (
               <WorldIdButton
                 done={v.me.human}
                 onProof={async (worldId) => {
@@ -215,7 +226,7 @@ export function Validators() {
         <section className="section">
           <div className="section-h spread">
             <h2>Slash proposals</h2>
-            {can("plant_manager") && v.validators.length > 0 && (
+            {can("plant_manager") && seated.length > 0 && (
               <button type="button" className="btn danger sm" onClick={() => setPropose(true)}>
                 Propose a slash
               </button>
@@ -278,8 +289,65 @@ export function Validators() {
         <p className="muted">Validators sign the quality decisions that release product. An administrator reviews your qualifications and approves with a signature{trust ? `; then you stake ${info ? unit(info.minStake) : "the minimum"} from your wallet to become active` : ""}.</p>
         <ApplyForm siteId={siteId} kind="validator" onCancel={() => setApply(false)} onDone={() => (setApply(false), setAppsKey((k) => k + 1))} />
       </Modal>
+      {removing && (
+        <RemoveValidator
+          who={removing}
+          staked={Boolean(info && removing.onchain && BigInt(removing.onchain.stake) > 0n)}
+          onClose={() => setRemoving(null)}
+          onRemove={async (comment) => {
+            const x = removing;
+            setRemoving(null);
+            const r = await sign<{ removed: true; chain: { status: string; error: string | null } | null }>({
+              title: `Remove ${x.name ?? names.get(x.address) ?? shortAddr(x.address)} as validator`,
+              request: (chainId) => api.post<TypedSignature>(path(`/validators/${x.userId}/remove/sign-request`), { comment, chainId }),
+              submit: (proof) => api.post(path(`/validators/${x.userId}/remove`), { comment, ...proof }),
+            });
+            if (!r) return;
+            toast(r.chain?.status === "failed" ? `Removed in Ordo; the on-chain revoke failed: ${r.chain.error ?? "retry from Settings"}` : "Validator removed", r.chain?.status === "failed" ? "bad" : "ok");
+            await load();
+          }}
+        />
+      )}
       {propose && info && <ProposeSlash v={v} decimals={info.decimals} symbol={info.symbol} onClose={() => setPropose(false)} onDone={load} />}
     </div>
+  );
+}
+
+/** An administrator takes a validator's seat away, with a signature OrdoTrust checks before it revokes the credential. */
+function RemoveValidator({ who, staked, onClose, onRemove }: { who: ValidatorsView["validators"][number]; staked: boolean; onClose: () => void; onRemove: (comment: string) => Promise<void> }) {
+  const { names, status } = useApp();
+  const [reason, setReason] = useState("");
+  const name = who.name ?? names.get(who.address) ?? shortAddr(who.address);
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      eyebrow="Validators"
+      title={`Remove ${name}`}
+      footer={
+        <div className="btns end">
+          <button type="button" className="btn" onClick={onClose}>
+            Cancel
+          </button>
+          <Action className="btn danger" onClick={() => onRemove(reason.trim())}>
+            Sign and remove
+          </Action>
+        </div>
+      }
+    >
+      <p className="muted">
+        {name} stops signing “Reviewed by”, “Approved by” and quality gates as {who.scopeLabel.toLowerCase()} validator straight away. What they already signed stays on the record.
+      </p>
+      <ul className="gate-why">
+        {status.trust && <li>Their VALIDATOR credential is revoked in OrdoTrust with your signature.</li>}
+        {staked && <li>Their stake stays theirs: they can request unstake and withdraw it from this page after the cooldown.</li>}
+        {status.worldId && <li>Their World ID is released at this site, so the same person can apply again later, from any wallet.</li>}
+        <li>They stay on the team as {who.scopeLabel.toLowerCase()}; take that role away in Team if they are leaving the site.</li>
+      </ul>
+      <Field label="Reason" hint="Optional. Goes into the signed record.">
+        <textarea value={reason} onChange={(e) => setReason(e.target.value)} maxLength={500} />
+      </Field>
+    </Modal>
   );
 }
 
@@ -320,7 +388,7 @@ function ProposeSlash({ v, decimals, symbol, onClose, onDone }: { v: ValidatorsV
       }
     >
       <Field label="Validator">
-        <Select value={who} onChange={setWho} options={v.validators.map((x) => ({ value: x.userId, label: x.name ?? names.get(x.address) ?? shortAddr(x.address), hint: x.onchain ? `${fromUnits(x.onchain.stake, decimals)} ${symbol} staked` : x.scopeLabel }))} placeholder="Choose validator" />
+        <Select value={who} onChange={setWho} options={v.validators.filter((x) => x.status === "approved").map((x) => ({ value: x.userId, label: x.name ?? names.get(x.address) ?? shortAddr(x.address), hint: x.onchain ? `${fromUnits(x.onchain.stake, decimals)} ${symbol} staked` : x.scopeLabel }))} placeholder="Choose validator" />
       </Field>
       <div className="form-grid two">
         <Field label={`Amount (${symbol})`} hint={target?.onchain ? `At most ${fromUnits(target.onchain.stake, decimals)} ${symbol}` : undefined}>
