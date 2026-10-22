@@ -109,10 +109,15 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
 
   // ---- LLM ----
   let llm: LlmProvider = opts.llm ?? new OfflineLlm();
-  if (!opts.llm && cfg.LLM_PROVIDER === "gemini") {
+  const provider = cfg.LLM_PROVIDER ?? (cfg.ANTHROPIC_API_KEY ? "claude" : "offline");
+  if (!opts.llm && provider === "gemini") {
     if (cfg.GEMINI_API_KEY) llm = await geminiProvider(cfg.GEMINI_API_KEY, cfg.GEMINI_MODEL, cfg.LLM_TIMEOUT_MS);
     else warnings.push("LLM_PROVIDER=gemini but GEMINI_API_KEY is missing; agents use their deterministic offline reasoning");
-  } else if (!opts.llm && cfg.LLM_PROVIDER === "openai_compat") {
+  } else if (!opts.llm && provider === "claude") {
+    // Claude thinks before it answers: 25 s a call, so a diagnosis and a recommendation fit in one 60 s function
+    if (cfg.ANTHROPIC_API_KEY) llm = (await import("./adapters/claude.js")).claudeProvider(cfg.ANTHROPIC_API_KEY, cfg.CLAUDE_MODEL, Math.max(cfg.LLM_TIMEOUT_MS, 25_000));
+    else warnings.push("LLM_PROVIDER=claude but ANTHROPIC_API_KEY is missing; agents use their deterministic offline reasoning");
+  } else if (!opts.llm && provider === "openai_compat") {
     if (cfg.OPENAI_COMPAT_BASE_URL && cfg.OPENAI_COMPAT_MODEL)
       llm = openAiCompatProvider({
         name: "openai-compat",
@@ -122,7 +127,7 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
         headers: async (): Promise<Record<string, string>> => (cfg.OPENAI_COMPAT_API_KEY ? { authorization: `Bearer ${cfg.OPENAI_COMPAT_API_KEY}` } : {}),
       });
     else warnings.push("openai_compat needs OPENAI_COMPAT_BASE_URL and OPENAI_COMPAT_MODEL; agents use offline reasoning");
-  } else if (!opts.llm && cfg.LLM_PROVIDER === "0g") {
+  } else if (!opts.llm && provider === "0g") {
     const { zeroGComputeProvider } = await import("./chain/zerog.js");
     llm = await zeroGComputeProvider(cfg).catch((e) => {
       warnings.push(`0G Compute unavailable (${e instanceof Error ? e.message : e}); agents use offline reasoning`);
@@ -378,7 +383,7 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
   } else if (cfg.ZG_INFT_ADDRESS) {
     warnings.push("ZG_INFT_ADDRESS is set but ZG_PRIVATE_KEY is not: agents are not minted as iNFTs");
   }
-  const agentNfts = new AgentNfts(db, rec, inftRail, policy.hash, () => (llm.name === "gemini" ? `gemini:${cfg.GEMINI_MODEL}` : llm.name), now);
+  const agentNfts = new AgentNfts(db, rec, inftRail, policy.hash, () => (llm.name === "gemini" ? `gemini:${cfg.GEMINI_MODEL}` : llm.name === "claude" ? `claude:${cfg.CLAUDE_MODEL}` : llm.name), now);
   // ---- Licensing proven agents between sites through their iNFTs; playbooks on 0G Storage with the evidence ----
   const agentLicenses = new AgentLicenses(db, rec, sigs, inftRail, validation.replicas?.store ?? null, cfg.SIGNATURE_CHAIN_ID, now);
   // ---- Agent memory on 0G, sealed for the agent's site and its licensees, named by the agent's iNFT ----
@@ -453,7 +458,7 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
     { rail: "ens credentials", mode: lotNames.live ? `roles from member names (OrdoEnsRoles ${cfg.ENS_ROLES_ADDRESS}) · lot names via OrdoLotResolver ${cfg.ENS_LOT_RESOLVER_ADDRESS}` : "off: ENS names are records only", live: lotNames.live },
     { rail: "signatures", mode: "EIP-712 typed data", live: true },
     { rail: "trust contract", mode: trustChain ? `OrdoTrust ${cfg.TRUST_CONTRACT_ADDRESS} · ${cfg.TRUST_CHAIN_NAME} (${cfg.TRUST_CHAIN_ID})` : "off: validators approved in-app, no stakes", live: Boolean(trustChain) },
-    { rail: "ai", mode: llm.name === "gemini" ? `gemini:${cfg.GEMINI_MODEL}` : llm.name, live: llm.name !== "offline" },
+    { rail: "ai", mode: llm.name === "gemini" ? `gemini:${cfg.GEMINI_MODEL}` : llm.name === "claude" ? `claude:${cfg.CLAUDE_MODEL}` : llm.name, live: llm.name !== "offline" },
     { rail: "anchor", mode: anchor.kind, live: anchor.kind !== "local-signed" },
     {
       rail: "agent payments",

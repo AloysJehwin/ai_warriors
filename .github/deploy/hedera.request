@@ -1,3 +1,3 @@
 # What the "Hedera setup" workflow creates on its next run, one per line: topic, contracts, passport, agent, stablecoin, payonproof.
 # Edit and push to run it again; each run creates new resources. Created so far: topic and contracts (run 1),
-# passport (run 2), agent (run 4). Kept empty so merges do not create them again.
+# passport (run 2), agent (run 4), stablecoin and payonproof (2026-10-22). Kept empty so merges do not create them again.
