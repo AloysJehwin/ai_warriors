@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
+import { oidcFederationProvider } from "@anthropic-ai/sdk/lib/credentials/oidc-federation";
 import { GuardedLlm, buildUserMessage, type LlmProvider } from "./llm.js";
 
 /**
@@ -7,8 +8,31 @@ import { GuardedLlm, buildUserMessage, type LlmProvider } from "./llm.js";
  * (structured outputs) and still re-validated by GuardedLlm, which falls back to the offline reasoning on any failure.
  * A refused request is re-run on Anthropic's default fallback model inside the same call (server-side fallbacks).
  */
-export function claudeProvider(apiKey: string, model: string, timeoutMs: number, fetchImpl?: typeof fetch): LlmProvider {
-  const client = new Anthropic({ apiKey, maxRetries: 1, ...(fetchImpl ? { fetch: fetchImpl } : {}) });
+export type ClaudeAuth =
+  | { apiKey: string }
+  /** Workload Identity Federation: the workload's own identity token, exchanged for short-lived Claude API tokens */
+  | { federation: { ruleId: string; organizationId: string; serviceAccountId: string; workspaceId?: string; identityToken: () => string | Promise<string> } };
+
+export function claudeProvider(auth: ClaudeAuth, model: string, timeoutMs: number, fetchImpl?: typeof fetch): LlmProvider {
+  const f = fetchImpl ?? fetch;
+  const client = new Anthropic({
+    maxRetries: 1,
+    fetch: f,
+    ...("apiKey" in auth
+      ? { apiKey: auth.apiKey }
+      : {
+          // the client caches the exchanged token and refreshes it before it expires
+          credentials: oidcFederationProvider({
+            identityTokenProvider: auth.federation.identityToken,
+            federationRuleId: auth.federation.ruleId,
+            organizationId: auth.federation.organizationId,
+            serviceAccountId: auth.federation.serviceAccountId,
+            workspaceId: auth.federation.workspaceId,
+            baseURL: "https://api.anthropic.com",
+            fetch: f,
+          }),
+        }),
+  });
   return new GuardedLlm(
     {
       name: "claude",
