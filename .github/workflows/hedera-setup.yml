@@ -9,6 +9,7 @@ name: Hedera setup
 #              (needs VERCEL_TOKEN as a repository secret, and is never printed)
 #   stablecoin Ordo USD, made with Stablecoin Studio's SDK and factory  → STABLECOIN_ADDRESS, STABLECOIN_TOKEN_ADDRESS
 #   payonproof OrdoPayOnProof, bound to Ordo USD and OrdoTrust         → PAY_ON_PROOF_ADDRESS
+#   check 0x… site_… N  read-only: why staking N HBAR from that wallet fails (balance, account, credential, simulation)
 #   fund 0x… N sends N HBAR (default 25, at most 100) from the operator to a wallet; one line per wallet
 #              (stablecoin and payonproof write their values to Vercel; payonproof uses the stablecoin from the
 #              same run, or the STABLECOIN_ADDRESS / STABLECOIN_TOKEN_ADDRESS repository variables)
@@ -51,6 +52,12 @@ jobs:
         run: |
           sed 's/#.*//' .github/deploy/hedera.request | awk '$1 == "fund" { print $2, ($3 == "" ? 25 : $3) }' | while read -r to hbar; do
             pnpm --filter @ordo/contracts setup:hedera fund "$to" "$hbar" | tee -a setup.log
+          done
+      - name: Check wallets
+        if: contains(steps.what.outputs.tasks, ' check ')
+        run: |
+          sed 's/#.*//' .github/deploy/hedera.request | awk '$1 == "check" { print $2, $3, ($4 == "" ? 10 : $4) }' | while read -r who site hbar; do
+            pnpm --filter @ordo/contracts setup:hedera check "$who" "$site" "$hbar" | tee -a setup.log
           done
       - name: Ledger topic
         if: contains(steps.what.outputs.tasks, ' topic ')
