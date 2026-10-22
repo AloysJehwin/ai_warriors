@@ -45,7 +45,7 @@ function Clock({ tz }: { tz: string }) {
   return <>{now.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", timeZone: tz })} local</>;
 }
 
-export function Shell({ onSignOut, onSwitchSite }: { onSignOut: () => void; onSwitchSite: (id: string) => void }) {
+export function Shell({ onSignOut, onSwitchAccount, onSwitchSite }: { onSignOut: () => void; onSwitchAccount: () => void; onSwitchSite: (id: string) => void }) {
   const { site, live, me, setMe } = useApp();
   const route = useRoute();
   const toast = useToast();
@@ -106,12 +106,12 @@ export function Shell({ onSignOut, onSwitchSite }: { onSignOut: () => void; onSw
   return (
     <div className="shell">
       <aside className="side">
-        <div className="brand-row">
-          <div className="brand">
+        <div className="brand">
+          <div className="brand-row">
             <b>Ordo</b>
-            <span className="eyebrow">Autonomous orchestration</span>
+            <ThemeToggle />
           </div>
-          <ThemeToggle />
+          <span className="eyebrow">Autonomous orchestration</span>
         </div>
         <nav className="nav" aria-label="Main">
           {NAV.map(navItem)}
@@ -154,6 +154,7 @@ export function Shell({ onSignOut, onSwitchSite }: { onSignOut: () => void; onSw
             items={[
               { label: "Set display name", onClick: () => setRename(user.displayName ?? "") },
               ...me.memberships.filter((m) => m.siteId !== site.id).map((m) => ({ label: `Switch to ${m.siteName}`, onClick: () => onSwitchSite(m.siteId) })),
+              { label: "Switch account", onClick: onSwitchAccount },
               { label: "Sign out", onClick: onSignOut, danger: true },
             ]}
           />

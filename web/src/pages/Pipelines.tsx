@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import { useApp } from "../lib/app";
 import { actorLabel, AGENT_LABEL, dateTime, dur, LEVEL_LABEL, LEVEL_TEXT, num, pct, STATE_LABEL, time } from "../lib/format";
@@ -51,6 +51,7 @@ function RunScreen({ runId, runs, onNew }: { runId: string; runs: RunView[]; onN
   const [data, setData] = useState<{ run: RunView; decisions: DecisionView[]; inbox: InboxItemView[] } | null>(null);
   const [view, setView] = useState<View>("flow");
   const [sel, setSel] = useState<{ code: string; x: number; y: number } | null>(null);
+  const canvas = useRef<HTMLDivElement>(null);
   const [drawer, setDrawer] = useState<string | null>(null);
   const [record, setRecord] = useState<StageRunView | null>(null);
   const [hold, setHold] = useState<StageRunView | null>(null);
@@ -203,12 +204,12 @@ function RunScreen({ runId, runs, onNew }: { runId: string; runs: RunView[]; onN
         <span className="faint small">Click a node to open its block</span>
       </div>
 
-      <div className="canvas" onClick={(e) => e.target === e.currentTarget && setSel(null)}>
+      <div className="canvas" ref={canvas} onClick={(e) => e.target === e.currentTarget && setSel(null)}>
         {view === "flow" && <FlowView run={run} selected={sel?.code ?? null} onSelect={(code, x, y) => setSel({ code, x, y })} />}
         {view === "graph" && <GraphView run={run} selected={sel?.code ?? null} onSelect={(code, x, y) => setSel({ code, x, y })} />}
         {view === "ledger" && <LedgerView run={run} onOpen={setDrawer} />}
         {s && view !== "ledger" && (
-          <div className="block" style={{ left: Math.min(sel!.x + 40, 9999), top: Math.max(10, sel!.y - 90) }} role="dialog" aria-label={`Stage ${s.code}`}>
+          <div className="block" style={{ left: Math.max(0, Math.min(sel!.x + 40, (canvas.current?.clientWidth ?? 9999) - 332)), top: Math.max(10, sel!.y - 90) }} role="dialog" aria-label={`Stage ${s.code}`}>
             <div className="block-h">
               <span className="eyebrow">Stage {s.code}</span>
               <span className={`tag st-${s.state}`}>{STATE_LABEL[s.state]}</span>

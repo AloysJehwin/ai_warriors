@@ -5,6 +5,7 @@ import { ago, dateTime, shortAddr } from "../lib/format";
 import { fromUnits } from "../lib/wallet";
 import type { FinanceOrder, FinanceParty, FinanceResponse, PackageSummary } from "../types";
 import { Action, Empty, Field, Loading, Modal, useToast } from "../ui/kit";
+import { Select } from "../ui/Select";
 
 const STATUS: Record<FinanceOrder["status"], [string, string]> = {
   funding: ["Customer funding…", "warn"],
@@ -350,24 +351,10 @@ function NewOrder({ open, onClose, customers, symbol, onDone }: { open: boolean;
     >
       <p className="small muted">The customer locks the amount in a Stablecoin Studio hold, committed to this package and this plant. OrdoPayOnProof pays it out only when OrdoTrust records the package's release.</p>
       <Field label="Validation package">
-        <select className="input" value={pkg} onChange={(e) => setPkg(e.target.value)}>
-          <option value="">Choose a package…</option>
-          {pkgs.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.code} {p.title}
-            </option>
-          ))}
-        </select>
+        <Select value={pkg || null} onChange={setPkg} options={pkgs.map((p) => ({ value: p.id, label: `${p.code} ${p.title}` }))} placeholder="Choose a package…" emptyText="No packages yet" />
       </Field>
       <Field label="Customer">
-        <select className="input" value={customer} onChange={(e) => setCustomer(e.target.value)}>
-          <option value="">Choose a customer…</option>
-          {customers.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.name}
-            </option>
-          ))}
-        </select>
+        <Select value={customer || null} onChange={setCustomer} options={customers.map((c) => ({ value: c.id, label: c.name }))} placeholder="Choose a customer…" emptyText="No active customers" />
       </Field>
       <div className="grid2">
         <Field label={`Amount (${symbol})`}>

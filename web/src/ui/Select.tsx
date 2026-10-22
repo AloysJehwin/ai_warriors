@@ -1,4 +1,5 @@
-import { useMemo, useRef, useState, type ReactNode } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { useDismiss, useId } from "./hooks";
 
 export interface Option<V extends string = string> {
@@ -33,6 +34,9 @@ export function Select<V extends string>(props: {
   const [q, setQ] = useState("");
   const [active, setActive] = useState(0);
   const wrap = useRef<HTMLDivElement>(null);
+  const btn = useRef<HTMLButtonElement>(null);
+  const pop = useRef<HTMLDivElement>(null);
+  const place = usePlacement(open, btn, align);
   const listRef = useRef<HTMLUListElement>(null);
   const id = useId("sel");
   const current = options.find((o) => o.value === value) ?? null;
@@ -40,7 +44,7 @@ export function Select<V extends string>(props: {
     const s = q.trim().toLowerCase();
     return s ? options.filter((o) => `${o.label} ${o.hint ?? ""} ${o.group ?? ""}`.toLowerCase().includes(s)) : options;
   }, [options, q]);
-  useDismiss(open, [wrap], () => setOpen(false));
+  useDismiss(open, [wrap, pop], () => setOpen(false));
 
   const openList = () => {
     if (disabled) return;
@@ -87,51 +91,88 @@ export function Select<V extends string>(props: {
   return (
     <div className={`sel ${size}`} ref={wrap} style={{ width }} onKeyDown={onKey}>
       {label && <span className="sel-label">{label}</span>}
-      <button type="button" className="sel-btn" disabled={disabled} aria-haspopup="listbox" aria-expanded={open} aria-controls={id} onClick={() => (open ? setOpen(false) : openList())}>
+      <button type="button" ref={btn} className="sel-btn" disabled={disabled} aria-haspopup="listbox" aria-expanded={open} aria-controls={id} onClick={() => (open ? setOpen(false) : openList())}>
         {current?.icon}
         <span className={current ? "" : "faint"}>{current?.label ?? placeholder}</span>
         <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden className="chev">
           <path d="M3 4.5 6 7.5 9 4.5" fill="none" stroke="currentColor" strokeWidth="1.4" />
         </svg>
       </button>
-      {open && (
-        <div className={`sel-pop ${align}`}>
-          {searchable && <input autoFocus className="sel-search" placeholder="Search…" value={q} onChange={(e) => (setQ(e.target.value), setActive(0))} aria-label="Filter options" />}
-          <ul role="listbox" id={id} ref={listRef} tabIndex={-1} aria-activedescendant={`${id}-${active}`}>
-            {filtered.length === 0 && <li className="sel-empty">{emptyText}</li>}
-            {filtered.map((o, i) => {
-              const head = o.group && o.group !== lastGroup ? o.group : null;
-              lastGroup = o.group;
-              return (
-                <li key={o.value} role="presentation">
-                  {head && <div className="sel-group">{head}</div>}
-                  <div
-                    role="option"
-                    id={`${id}-${i}`}
-                    data-i={i}
-                    aria-selected={o.value === value}
-                    aria-disabled={o.disabled}
-                    className={`sel-opt${i === active ? " active" : ""}${o.value === value ? " chosen" : ""}${o.disabled ? " disabled" : ""}`}
-                    onPointerEnter={() => setActive(i)}
-                    onClick={() => choose(o)}
-                  >
-                    {o.icon}
-                    <span className="sel-text">
-                      <span>{o.label}</span>
-                      {o.hint && <span className="sel-hint">{o.hint}</span>}
-                    </span>
-                    {o.value === value && (
-                      <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden className="tick">
-                        <path d="M3 7.5 6 10.5 11 4" fill="none" stroke="currentColor" strokeWidth="1.6" />
-                      </svg>
-                    )}
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        </div>
-      )}
+      {open &&
+        createPortal(
+          <div className="sel-pop floating" ref={pop} style={place}>
+            {searchable && <input autoFocus className="sel-search" placeholder="Search…" value={q} onChange={(e) => (setQ(e.target.value), setActive(0))} aria-label="Filter options" />}
+            <ul role="listbox" id={id} ref={listRef} tabIndex={-1} aria-activedescendant={`${id}-${active}`}>
+              {filtered.length === 0 && <li className="sel-empty">{emptyText}</li>}
+              {filtered.map((o, i) => {
+                const head = o.group && o.group !== lastGroup ? o.group : null;
+                lastGroup = o.group;
+                return (
+                  <li key={o.value} role="presentation">
+                    {head && <div className="sel-group">{head}</div>}
+                    <div
+                      role="option"
+                      id={`${id}-${i}`}
+                      data-i={i}
+                      aria-selected={o.value === value}
+                      aria-disabled={o.disabled}
+                      className={`sel-opt${i === active ? " active" : ""}${o.value === value ? " chosen" : ""}${o.disabled ? " disabled" : ""}`}
+                      onPointerEnter={() => setActive(i)}
+                      onClick={() => choose(o)}
+                    >
+                      {o.icon}
+                      <span className="sel-text">
+                        <span>{o.label}</span>
+                        {o.hint && <span className="sel-hint">{o.hint}</span>}
+                      </span>
+                      {o.value === value && (
+                        <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden className="tick">
+                          <path d="M3 7.5 6 10.5 11 4" fill="none" stroke="currentColor" strokeWidth="1.6" />
+                        </svg>
+                      )}
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>,
+          document.body,
+        )}
     </div>
   );
+}
+
+/**
+ * Where the list goes: fixed to the viewport under its button (above it when there is more room there), in a portal so
+ * the scrolling body of a dialog or drawer never clips it. Follows the button while anything scrolls or resizes.
+ */
+function usePlacement(open: boolean, btn: React.RefObject<HTMLButtonElement | null>, align: "left" | "right"): CSSProperties {
+  const [style, setStyle] = useState<CSSProperties>({ visibility: "hidden" });
+  useLayoutEffect(() => {
+    if (!open) return;
+    const update = () => {
+      const r = btn.current?.getBoundingClientRect();
+      if (!r) return;
+      const below = window.innerHeight - r.bottom - 8;
+      const above = r.top - 8;
+      const up = below < 240 && above > below;
+      const room = Math.max(120, (up ? above : below) - 4);
+      setStyle({
+        position: "fixed",
+        minWidth: r.width,
+        maxWidth: Math.min(420, window.innerWidth - 16),
+        maxHeight: Math.min(360, room),
+        ...(align === "right" ? { right: Math.max(8, window.innerWidth - r.right) } : { left: Math.max(8, Math.min(r.left, window.innerWidth - 8 - Math.max(r.width, 160))) }),
+        ...(up ? { bottom: window.innerHeight - r.top + 4 } : { top: r.bottom + 4 }),
+      });
+    };
+    update();
+    window.addEventListener("scroll", update, true);
+    window.addEventListener("resize", update);
+    return () => {
+      window.removeEventListener("scroll", update, true);
+      window.removeEventListener("resize", update);
+    };
+  }, [open, btn, align]);
+  return style;
 }

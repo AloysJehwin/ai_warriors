@@ -6,10 +6,17 @@ import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
  * Signing happens in the test process with a real secp256k1 key, so the server verifies
  * genuine SIWE and EIP-712 signatures.
  */
-export async function injectWallet(page: Page, key = generatePrivateKey()) {
-  const account = privateKeyToAccount(key);
+export async function injectWallet(page: Page, key = generatePrivateKey(), other = generatePrivateKey()) {
+  // the wallet holds two accounts; its account picker (wallet_requestPermissions) moves to the other one
+  const accounts = [privateKeyToAccount(key), privateKeyToAccount(other)];
+  let account = accounts[0]!;
+  const picks = { count: 0 };
   await page.exposeFunction("__ordoWallet", async (method: string, params: unknown[]) => {
     switch (method) {
+      case "wallet_requestPermissions":
+        picks.count++;
+        account = accounts[picks.count % 2]!;
+        return [{ parentCapability: "eth_accounts" }];
       case "eth_requestAccounts":
       case "eth_accounts":
         return [account.address];
@@ -43,5 +50,5 @@ export async function injectWallet(page: Page, key = generatePrivateKey()) {
     window.addEventListener("eip6963:requestProvider", announce);
     announce();
   });
-  return { address: account.address.toLowerCase(), key };
+  return { address: accounts[0]!.address.toLowerCase(), key, otherAddress: accounts[1]!.address.toLowerCase(), picks };
 }
