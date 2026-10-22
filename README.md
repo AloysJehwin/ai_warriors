@@ -103,6 +103,13 @@ Settled on Hedera testnet, each paid by an agent with no one approving:
 | `assess_vibration` on Ordo's metered MCP server (x402, 0.1 HBAR) | buyer agent [0.0.11118723](https://hashscan.io/testnet/account/0.0.11118723) | [0.0.9185802@1792617008.223711953](https://hashscan.io/testnet/transaction/0.0.9185802-1792617008-223711953) |
 | `forecast_failure` on Ordo's metered MCP server (x402, 0.1 HBAR) | buyer agent [0.0.11118723](https://hashscan.io/testnet/account/0.0.11118723) | [0.0.9185802@1792617008.694161567](https://hashscan.io/testnet/transaction/0.0.9185802-1792617008-694161567) |
 
+Deployed on Hedera testnet for pay on proof:
+
+| What | Where |
+|---|---|
+| Ordo USD (OUSD), created with Stablecoin Studio's SDK and factory | token [0.0.11123629](https://hashscan.io/testnet/token/0.0.11123629) · proxy [0.0.11123628](https://hashscan.io/testnet/contract/0xacb80acbc65d73f4b544e2324fa2f5dcc38c8594) |
+| OrdoPayOnProof: pays a Stablecoin Studio hold only on a recorded quality release | [0xe9f1…a5e8](https://hashscan.io/testnet/contract/0xe9f1bea75738434d45be5b92d2108b88d515a5e8) |
+
 Reproduce it with the **x402 demo** workflow (Actions tab): it opens a fresh buyer account and pays `https://aiwarriors.vercel.app/v1/x402/mcp` per tool call. Every sale is also listed at `GET /v1/x402`.
 
 ## What is real

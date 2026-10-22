@@ -62,8 +62,12 @@ const Env = z.object({
   WORLD_ID_VERIFY_URL: z.string().url().default("https://developer.worldcoin.org"),
 
   // ---- Agents ----
-  LLM_PROVIDER: z.enum(["offline", "gemini", "openai_compat", "0g"]).default("offline"),
+  /** Unset: Claude when ANTHROPIC_API_KEY is set, else the deterministic offline reasoning */
+  LLM_PROVIDER: z.enum(["offline", "gemini", "openai_compat", "0g", "claude"]).optional(),
   LLM_TIMEOUT_MS: z.coerce.number().int().default(15000),
+  /** Claude (LLM_PROVIDER=claude): Anthropic's API, Claude Opus 5.5 unless CLAUDE_MODEL names another */
+  ANTHROPIC_API_KEY: z.string().optional(),
+  CLAUDE_MODEL: z.string().default("claude-opus-5-5"),
   GEMINI_API_KEY: z.string().optional(),
   GEMINI_MODEL: z.string().default("gemini-flash-latest"),
   OPENAI_COMPAT_BASE_URL: z.string().optional(),
