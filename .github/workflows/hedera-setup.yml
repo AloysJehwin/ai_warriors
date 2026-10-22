@@ -65,7 +65,7 @@ jobs:
       - name: Contracts
         if: contains(steps.what.outputs.tasks, ' contracts ')
         env:
-          TRUST_CONTRACT_ADDRESS: "0x608cba52976e34fa160fe64ff0499a8a5a4eb9e1"
+          TRUST_CONTRACT_ADDRESS: "0xbb744b4a87aef7996537f5583e71ec14e093ffc0"
           TRUST_RPC_URL: https://testnet.hashio.io/api
           TRUST_CHAIN_ID: "296"
         run: pnpm --filter @ordo/contracts setup:hedera contracts | tee -a setup.log
@@ -95,7 +95,7 @@ jobs:
       - name: OrdoPayOnProof
         if: contains(steps.what.outputs.tasks, ' payonproof ')
         env:
-          TRUST_CONTRACT_ADDRESS: ${{ vars.TRUST_CONTRACT_ADDRESS || '0x608cba52976e34fa160fe64ff0499a8a5a4eb9e1' }}
+          TRUST_CONTRACT_ADDRESS: ${{ vars.TRUST_CONTRACT_ADDRESS || '0xbb744b4a87aef7996537f5583e71ec14e093ffc0' }}
           TRUST_RPC_URL: https://testnet.hashio.io/api
           TRUST_CHAIN_ID: "296"
           VAR_STABLECOIN_ADDRESS: ${{ vars.STABLECOIN_ADDRESS }}

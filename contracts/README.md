@@ -23,9 +23,9 @@ Live on Hedera testnet:
 
 | What | Where |
 | --- | --- |
-| `OrdoTrust` | [`0x608cba52976e34fa160fe64ff0499a8a5a4eb9e1`](https://hashscan.io/testnet/contract/0x608cba52976e34fa160fe64ff0499a8a5a4eb9e1) |
-| `OrdoWorkOrders` | [`0x600807998f50258bc0319afab3411225c51a993f`](https://hashscan.io/testnet/contract/0x600807998f50258bc0319afab3411225c51a993f) |
-| `OrdoPolicies` | [`0xfcde36a4668c18c219ba1f3696bb0d68b9babd43`](https://hashscan.io/testnet/contract/0xfcde36a4668c18c219ba1f3696bb0d68b9babd43) |
+| `OrdoTrust` | [`0xbb744b4a87aef7996537f5583e71ec14e093ffc0`](https://hashscan.io/testnet/contract/0xbb744b4a87aef7996537f5583e71ec14e093ffc0) |
+| `OrdoWorkOrders` | [`0x194a5556707d7249f6729cc7257b435395e2441f`](https://hashscan.io/testnet/contract/0x194a5556707d7249f6729cc7257b435395e2441f) |
+| `OrdoPolicies` | [`0x7ba973ee8c3d586e1d2e46e723191d00b84b42eb`](https://hashscan.io/testnet/contract/0x7ba973ee8c3d586e1d2e46e723191d00b84b42eb) |
 | Ledger topic (HCS) | [`0.0.11087048`](https://hashscan.io/testnet/topic/0.0.11087048) |
 | Lot passport collection (HTS NFT) | [`0.0.11087232`](https://hashscan.io/testnet/token/0.0.11087232) |
 | Maintenance agent account | [`0.0.11087374`](https://hashscan.io/testnet/account/0.0.11087374) · EVM `0x8af16bA6Bbae3DDA39acF028017e175390584db2` |

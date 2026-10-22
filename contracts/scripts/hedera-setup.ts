@@ -44,7 +44,7 @@ Wallet: https://hashscan.io/testnet/account/${to}
 `);
 } else if (task === "check") {
   const [who, site, amount = "10"] = process.argv.slice(3) as [Hex, string, string?];
-  const trust = (process.env.TRUST_CONTRACT_ADDRESS ?? "0x608cba52976e34fa160fe64ff0499a8a5a4eb9e1") as Hex;
+  const trust = (process.env.TRUST_CONTRACT_ADDRESS ?? "0xbb744b4a87aef7996537f5583e71ec14e093ffc0") as Hex;
   const rpc = process.env.TRUST_RPC_URL ?? "https://testnet.hashio.io/api";
   const pub = createPublicClient({ transport: http(rpc) });
   const acct = await fetch(`https://testnet.mirrornode.hedera.com/api/v1/accounts/${who}`).then((r) => (r.ok ? r.json() : null));
