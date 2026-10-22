@@ -362,11 +362,13 @@ export class Trust {
 
   // ---------------------------------------------------------------- site registration
   async siteRegistered(siteId: string): Promise<boolean> {
-    return (await this.db.query("SELECT 1 FROM chain_sites WHERE site_id = $1", [siteId])).rows.length > 0;
+    // registered with the contract this deployment uses: after a redeploy every site registers again
+    if (!this.chain) return false;
+    return (await this.db.query("SELECT 1 FROM chain_sites WHERE site_id = $1 AND lower(contract) = lower($2)", [siteId, this.chain.cfg.address])).rows.length > 0;
   }
   async chainStatus(siteId: string) {
     if (!this.chain) return { configured: false as const };
-    const reg = (await this.db.query<{ tx_hash: string; registered_at: string }>("SELECT tx_hash, registered_at::text FROM chain_sites WHERE site_id = $1", [siteId])).rows[0];
+    const reg = (await this.db.query<{ tx_hash: string; registered_at: string }>("SELECT tx_hash, registered_at::text FROM chain_sites WHERE site_id = $1 AND lower(contract) = lower($2)", [siteId, this.chain.cfg.address])).rows[0];
     const info = await this.chain.info().catch((e: unknown) => ({ error: e instanceof Error ? e.message : String(e) }));
     return { configured: true as const, info, registered: Boolean(reg), txHash: reg?.tx_hash ?? null, txUrl: reg ? this.chain.txUrl(reg.tx_hash) : null, registeredAt: iso(reg?.registered_at ?? null) };
   }
@@ -389,7 +391,10 @@ export class Trust {
     const tx = await this.chain.registerSite(siteId, admin.address, sigArg(sig.typed, proof.signature)).catch((e: unknown) => {
       throw new HttpError(502, `The contract refused the registration: ${e instanceof Error ? (e as Error & { shortMessage?: string }).shortMessage ?? e.message : e}`);
     });
-    await this.db.query("INSERT INTO chain_sites (site_id, chain_id, contract, tx_hash) VALUES ($1,$2,$3,$4)", [siteId, this.chain.cfg.chainId, this.chain.cfg.address, tx]);
+    await this.db.query(
+      "INSERT INTO chain_sites (site_id, chain_id, contract, tx_hash) VALUES ($1,$2,$3,$4) ON CONFLICT (site_id) DO UPDATE SET chain_id = EXCLUDED.chain_id, contract = EXCLUDED.contract, tx_hash = EXCLUDED.tx_hash, registered_at = now()",
+      [siteId, this.chain.cfg.chainId, this.chain.cfg.address, tx],
+    );
     await this.rec.decide(siteId, { agent: `user:${admin.address}`, kind: "chain.site_registered", summary: `Registered the site in OrdoTrust`, data: { txHash: tx, chainId: this.chain.cfg.chainId, contract: this.chain.cfg.address, signatureId: sig.id } });
     // grants approved before registration go out now
     const waiting = await this.db.query<{ ref: string }>("SELECT DISTINCT ref FROM chain_relays WHERE site_id = $1 AND status = 'waiting_site'", [siteId]);
@@ -445,6 +450,65 @@ export class Trust {
     await this.db.tx((q) => this.bindHuman(q, siteId, user.id, user.address, nullifier));
     await this.rec.decide(siteId, { agent: `user:${user.address}`, kind: "validator.human_verified", summary: `${user.address} verified with World ID as a unique person`, data: { worldId: WorldId.ledgerRef(siteId, nullifier) } });
     return { human: true };
+  }
+
+  // ---------------------------------------------------------------- credentials missing on-chain
+  /**
+   * The roles Ordo holds that OrdoTrust should also know (validators, vendors, and members whose role has an on-chain
+   * credential), with what the contract has now. Needed after a redeploy, or when a grant's signature can't be used.
+   */
+  async credentials(siteId: string) {
+    if (!this.chain) return { configured: false as const, registered: false, admins: [] as string[], missing: [] as { userId: string; address: string; name: string | null; role: ChainRole; label: string }[] };
+    const want = new Map<string, { userId: string; address: string; name: string | null; roles: Set<ChainRole>; labels: Map<ChainRole, string> }>();
+    const add = (r: { user_id: string; address: string; display_name: string | null }, role: ChainRole, label: string) => {
+      const w = want.get(r.address) ?? { userId: r.user_id, address: r.address, name: r.display_name, roles: new Set<ChainRole>(), labels: new Map<ChainRole, string>() };
+      w.roles.add(role);
+      if (!w.labels.has(role)) w.labels.set(role, label);
+      want.set(r.address, w);
+    };
+    type Row = { user_id: string; address: string; display_name: string | null };
+    for (const m of (await this.db.query<Row & { role: Role }>("SELECT m.user_id, m.role, u.address, u.display_name FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.site_id = $1", [siteId])).rows) {
+      const role = MEMBER_CHAIN_ROLE[m.role];
+      if (role) add(m, role, ROLE_LABEL[m.role]);
+    }
+    for (const v of (await this.db.query<Row & { scope: ValidatorScope }>("SELECT v.user_id, v.scope, u.address, u.display_name FROM validators v JOIN users u ON u.id = v.user_id WHERE v.site_id = $1 AND v.status = 'approved'", [siteId])).rows)
+      add(v, "VALIDATOR", Trust.labelOf("validator", v.scope));
+    for (const v of (await this.db.query<Row>("SELECT v.user_id, v.address, u.display_name FROM vendors v JOIN users u ON u.id = v.user_id WHERE v.site_id = $1 AND v.status = 'approved'", [siteId])).rows) add(v, "VENDOR", "Maintenance vendor");
+    const have = new Map(await Promise.all([...want.keys()].map(async (a) => [a, await this.chain!.roles(siteId, a).catch(() => null)] as const)));
+    const missing = [...want.values()].flatMap((w) => {
+      const bits = have.get(w.address);
+      if (bits === null || bits === undefined) return [];
+      return [...w.roles].filter((r) => (bits & CHAIN_ROLE[r]) === 0).map((role) => ({ userId: w.userId, address: w.address, name: w.name, role, label: w.labels.get(role)! }));
+    });
+    const admins = [...have].filter(([, bits]) => bits !== null && (bits & CHAIN_ROLE.ADMIN) !== 0).map(([a]) => a);
+    return { configured: true as const, registered: await this.siteRegistered(siteId), admins, missing };
+  }
+  private async assertChainAdmin(siteId: string, admin: User) {
+    if (!this.chain) throw new HttpError(409, "No trust contract is configured");
+    if (!(await this.siteRegistered(siteId))) throw new HttpError(409, "Register the site on-chain first (Team → Validators)");
+    const bits = await this.chain.roles(siteId, admin.address).catch(() => null);
+    if (bits === null) throw new HttpError(502, "Could not reach the trust contract. Try again.");
+    if ((bits & CHAIN_ROLE.ADMIN) === 0) {
+      const { admins } = await this.credentials(siteId);
+      throw new HttpError(409, `Your wallet ${admin.address} is not an administrator in OrdoTrust for this site, so the contract would refuse your signature.${admins.length ? ` Sign in with ${admins.join(" or ")}.` : ""}`);
+    }
+  }
+  /** A fresh "role.grant" for a role Ordo already gave, signed by an administrator OrdoTrust knows. */
+  async credentialRequest(siteId: string, admin: User, address: string, role: ChainRole): Promise<TypedSignature> {
+    await this.assertChainAdmin(siteId, admin);
+    const m = (await this.credentials(siteId)).missing.find((x) => x.address === address.toLowerCase() && x.role === role);
+    if (!m) throw new HttpError(409, "That credential is not missing");
+    return this.sigs.request(admin, { action: "role.grant", entity: `${m.address}#${role}`, meaning: `Record ${m.name ?? m.address} (${m.address}) as ${m.label} in OrdoTrust`, comment: "", site: siteId, ...this.contractDomain(true) });
+  }
+  async grantCredential(siteId: string, admin: User, address: string, role: ChainRole, proof: { nonce: string; signature: Hex }): Promise<RelayView> {
+    await this.assertChainAdmin(siteId, admin);
+    const a = address.toLowerCase();
+    const sig = await this.db.tx((q) => this.sigs.consume(q, admin, { action: "role.grant", entity: `${a}#${role}` }, proof));
+    await this.rec.decide(siteId, { agent: `user:${admin.address}`, kind: "chain.credential_signed", summary: `Signed ${a}'s ${role} credential for OrdoTrust`, data: { address: a, role, signatureId: sig.id } });
+    // validators' credentials keep their onboarding request as the relay ref, so the validators list shows this one
+    const v = (await this.db.query<{ request_id: string | null }>("SELECT v.request_id FROM validators v JOIN users u ON u.id = v.user_id WHERE v.site_id = $1 AND u.address = $2 AND v.status = 'approved'", [siteId, a])).rows[0];
+    const ref = role === "VALIDATOR" && v?.request_id ? v.request_id : `cred_${a}_${role}`;
+    return this.relayGrant(siteId, ref, a, role, sigArg(sig.typed, proof.signature));
   }
 
   // ---------------------------------------------------------------- removing a validator

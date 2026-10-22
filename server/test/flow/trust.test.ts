@@ -168,6 +168,30 @@ describe("on-chain trust", () => {
     expect(v.validators.find((x: any) => x.address === people.qe.address).onchain.credentialed).toBe(true);
   });
 
+  it("an administrator OrdoTrust knows re-signs a credential Ordo holds but the contract lacks", async () => {
+    const op = await wallet(app);
+    const other = await wallet(app);
+    await sys.db.query("INSERT INTO memberships (site_id, user_id, role) VALUES ($1,$2,'operator'), ($1,$3,'admin')", [site, await uid(op), await uid(other)]);
+    const creds = (await people.admin.call("GET", `${S()}/chain/credentials`)).json;
+    expect(creds.registered).toBe(true);
+    expect(creds.admins).toEqual([people.admin.address]);
+    expect(creds.missing).toEqual(expect.arrayContaining([expect.objectContaining({ address: op.address, role: "OPERATOR", label: "Operator" })]));
+    // an Ordo admin the contract does not know is told who can sign, before any signature is wasted
+    const refused = await other.call("POST", `${S()}/chain/credentials/sign-request`, { address: op.address, role: "OPERATOR" });
+    expect(refused.status).toBe(409);
+    expect(refused.json.error).toContain(people.admin.address);
+    const t = (await people.admin.call("POST", `${S()}/chain/credentials/sign-request`, { address: op.address, role: "OPERATOR" })).json;
+    const r = await people.admin.call("POST", `${S()}/chain/credentials/grant`, { address: op.address, role: "OPERATOR", nonce: t.message.nonce, signature: await people.admin.sign(t) });
+    expect(r.json.status).toBe("done");
+    expect(await read<boolean>("hasRole", [site, op.address, 1])).toBe(true);
+    expect((await people.admin.call("GET", `${S()}/chain/credentials`)).json.missing.some((m: any) => m.address === op.address && m.role === "OPERATOR")).toBe(false);
+    // registration belongs to the contract it was made with: after a redeploy the site registers again
+    await sys.db.query("UPDATE chain_sites SET contract = '0x000000000000000000000000000000000000dead' WHERE site_id = $1", [site]);
+    expect((await people.admin.call("GET", `${S()}/chain`)).json.registered).toBe(false);
+    await sys.db.query("UPDATE chain_sites SET contract = $2 WHERE site_id = $1", [site, contract]);
+    expect((await people.admin.call("GET", `${S()}/chain`)).json.registered).toBe(true);
+  });
+
   it("an administrator removes a validator: the credential is revoked on-chain, the stake stays withdrawable", async () => {
     const remove = async (by: Client, who: Client) => {
       const t = await by.call("POST", `${S()}/validators/${await uid(who)}/remove/sign-request`, { comment: "left the company" });

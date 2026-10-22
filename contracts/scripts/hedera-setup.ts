@@ -112,12 +112,15 @@ TRUST_WORKORDERS_ADDRESS=${deployed.OrdoWorkOrders}
 TRUST_POLICIES_ADDRESS=${deployed.OrdoPolicies}
 `);
 } else if (task === "payonproof") {
-  const [coin, token, trust] = [need("STABLECOIN_ADDRESS"), need("STABLECOIN_TOKEN_ADDRESS"), need("TRUST_CONTRACT_ADDRESS")] as Hex[];
+  const [coin, trust] = [need("STABLECOIN_ADDRESS") as Hex, need("TRUST_CONTRACT_ADDRESS") as Hex];
   const rpc = process.env.TRUST_RPC_URL ?? "https://testnet.hashio.io/api";
   const chainId = Number(process.env.TRUST_CHAIN_ID ?? 296);
   const chain = defineChain({ id: chainId, name: `chain-${chainId}`, nativeCurrency: { name: "HBAR", symbol: "HBAR", decimals: 18 }, rpcUrls: { default: { http: [rpc] } } });
   const account = privateKeyToAccount(`0x${operatorKey.toStringRaw()}`);
   const pub = createPublicClient({ chain, transport: http(rpc) });
+  // the stablecoin's HTS token, read from its proxy when not given
+  const token = (process.env.STABLECOIN_TOKEN_ADDRESS ||
+    (await pub.readContract({ address: coin, abi: parseAbi(["function getTokenAddress() view returns (address)"]), functionName: "getTokenAddress" }))) as Hex;
   const wallet = createWalletClient({ chain, transport: http(rpc), account });
   const { abi, bytecode } = JSON.parse(readFileSync(new URL("../artifacts/OrdoPayOnProof.json", import.meta.url), "utf8")) as { abi: Abi; bytecode: Hex };
   const hash = await wallet.deployContract({ abi, bytecode, args: [coin, token, trust], gas: 3_000_000n } as never);

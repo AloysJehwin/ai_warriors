@@ -754,6 +754,21 @@ export function createApp(sys: System, opts: AppOptions = {}) {
     need(c, "admin");
     return c.json(await sys.trust.register(sid(c), me(c).user, await body(c, SignedBody)));
   });
+  const ChainRoleName = z.enum(["OPERATOR", "SUPERVISOR", "VALIDATOR", "PLANT_MANAGER", "ADMIN", "VENDOR", "DEVICE"]);
+  site.get("/chain/credentials", async (c) => {
+    need(c, "admin");
+    return c.json(await sys.trust.credentials(sid(c)));
+  });
+  site.post("/chain/credentials/sign-request", async (c) => {
+    need(c, "admin");
+    const b = await body(c, z.object({ address: Hex, role: ChainRoleName }));
+    return c.json(await sys.trust.credentialRequest(sid(c), me(c).user, b.address, b.role));
+  });
+  site.post("/chain/credentials/grant", async (c) => {
+    need(c, "admin");
+    const b = await body(c, z.object({ address: Hex, role: ChainRoleName }).merge(SignedBody));
+    return c.json(await sys.trust.grantCredential(sid(c), me(c).user, b.address, b.role, b));
+  });
   site.post("/chain/retry", async (c) => {
     need(c, "admin");
     return c.json(await sys.trust.retry(sid(c), (await body(c, z.object({ ref: z.string().min(3) }))).ref));

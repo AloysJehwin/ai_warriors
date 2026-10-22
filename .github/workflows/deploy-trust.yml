@@ -2,7 +2,8 @@ name: Deploy OrdoTrust
 
 # Deploys contracts/src/OrdoTrust.sol to Hedera testnet with the operator key held in the
 # `hedera-testnet` environment. Runs when .github/deploy/trust.request changes (so it works from
-# any branch) or by hand once this file is on the default branch. The log prints only public values.
+# any branch) or by hand once this file is on the default branch. Then deploys the contracts bound to it (OrdoWorkOrders,
+# OrdoPolicies, OrdoPayOnProof) and writes all four addresses to Vercel. The log prints only public values.
 on:
   push:
     paths: [".github/deploy/trust.request"]
@@ -37,6 +38,30 @@ jobs:
           MIN_STAKE: "10"
           UNSTAKE_COOLDOWN_SECONDS: "604800"
         run: pnpm --filter @ordo/contracts deploy:trust | tee deploy.log
+      - name: Contracts bound to OrdoTrust
+        # OrdoWorkOrders, OrdoPolicies and OrdoPayOnProof read OrdoTrust at an address fixed when they were deployed
+        env:
+          HEDERA_OPERATOR_ID: ${{ secrets.HEDERA_OPERATOR_ID }}
+          HEDERA_OPERATOR_KEY: ${{ secrets.HEDERA_OPERATOR_KEY }}
+          TRUST_RPC_URL: https://testnet.hashio.io/api
+          TRUST_CHAIN_ID: "296"
+          STABLECOIN_ADDRESS: ${{ vars.STABLECOIN_ADDRESS || '0xacb80acbc65d73f4b544e2324fa2f5dcc38c8594' }}
+          STABLECOIN_TOKEN_ADDRESS: ${{ vars.STABLECOIN_TOKEN_ADDRESS }}
+        run: |
+          export TRUST_CONTRACT_ADDRESS="$(grep -oE '^TRUST_CONTRACT_ADDRESS=0x[0-9a-fA-F]{40}' deploy.log | cut -d= -f2)"
+          [ -n "$TRUST_CONTRACT_ADDRESS" ] || { echo "::error::No OrdoTrust address in the deploy log"; exit 1; }
+          pnpm --filter @ordo/contracts setup:hedera contracts | tee -a deploy.log
+          pnpm --filter @ordo/contracts setup:hedera payonproof | tee -a deploy.log
+      - name: Set the addresses in Vercel
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_PROJECT_ID: prj_ua7E01jdI0VpLBJvZyqqulOlBzGP
+          VERCEL_ORG_ID: team_8ghjcEpH2t9p2BktkDNQ9ZXm
+        run: |
+          if [ -z "$VERCEL_TOKEN" ]; then echo "::warning::No VERCEL_TOKEN: set the values above in Vercel by hand"; exit 0; fi
+          grep -E '^(TRUST_CONTRACT_ADDRESS|TRUST_WORKORDERS_ADDRESS|TRUST_POLICIES_ADDRESS|PAY_ON_PROOF_ADDRESS)=0x' deploy.log > "$RUNNER_TEMP/trust.env"
+          cat "$RUNNER_TEMP/trust.env"
+          node scripts/vercel-env.mjs push "$RUNNER_TEMP/trust.env" production,preview
       - name: Summary
         run: |
           echo '### OrdoTrust on Hedera testnet' >> "$GITHUB_STEP_SUMMARY"
