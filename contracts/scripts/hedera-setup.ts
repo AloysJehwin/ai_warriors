@@ -6,13 +6,14 @@
  *   … setup:hedera agent        SECRET_OUT=<file> receives HEDERA_AGENT_KEY; the key is never printed
  *   … setup:hedera contracts    TRUST_CONTRACT_ADDRESS=0x… (OrdoTrust) is required
  *   … setup:hedera passport     the HTS NFT collection for lot passports
+ *   … setup:hedera fund 0x… 25  sends HBAR from the operator to a wallet (an EVM address; Hedera opens its account on first use)
  *   … setup:hedera payonproof   OrdoPayOnProof: needs STABLECOIN_ADDRESS and STABLECOIN_TOKEN_ADDRESS (Ordo USD, made with
  *                               Stablecoin Studio by tools/stablecoin/create.cjs) and TRUST_CONTRACT_ADDRESS
  *
  * Prints only public values: the variables to set in Vercel.
  */
 import { readFileSync, writeFileSync } from "node:fs";
-import { AccountCreateTransaction, Client, Hbar, PrivateKey, TokenCreateTransaction, TokenSupplyType, TokenType, TopicCreateTransaction } from "@hiero-ledger/sdk";
+import { AccountCreateTransaction, AccountId, Client, Hbar, PrivateKey, TransferTransaction, TokenCreateTransaction, TokenSupplyType, TokenType, TopicCreateTransaction } from "@hiero-ledger/sdk";
 import { createPublicClient, createWalletClient, defineChain, http, type Abi, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { need } from "./env.js";
@@ -22,7 +23,25 @@ const operatorId = need("HEDERA_OPERATOR_ID");
 const operatorKey = parseKey(need("HEDERA_OPERATOR_KEY"));
 const task = process.argv[2];
 
-if (task === "topic") {
+if (task === "fund") {
+  const to = process.argv[3] ?? "";
+  const hbar = Number(process.argv[4] ?? 25);
+  if (!/^0x[0-9a-fA-F]{40}$/.test(to)) throw new Error(`fund: "${to}" is not an EVM address`);
+  // a typo should not drain the operator: testnet wallets need tens of HBAR, not thousands
+  if (!(hbar > 0 && hbar <= 100)) throw new Error(`fund: send between 0 and 100 HBAR, not ${process.argv[4]}`);
+  const client = Client.forTestnet().setOperator(operatorId, operatorKey);
+  const tx = await new TransferTransaction()
+    .addHbarTransfer(operatorId, new Hbar(-hbar))
+    .addHbarTransfer(AccountId.fromEvmAddress(0, 0, to), new Hbar(hbar))
+    .setTransactionMemo("ordo:fund")
+    .execute(client);
+  const receipt = await tx.getReceipt(client);
+  client.close();
+  console.log(`Sent ${hbar} HBAR to ${to}: ${receipt.status.toString()}
+Transaction: https://hashscan.io/testnet/transaction/${tx.transactionId.toString()}
+Wallet: https://hashscan.io/testnet/account/${to}
+`);
+} else if (task === "topic") {
   const client = Client.forTestnet().setOperator(operatorId, operatorKey);
   const tx = await new TopicCreateTransaction().setTopicMemo("ordo:ledger:v2").setSubmitKey(operatorKey.publicKey).setAdminKey(operatorKey.publicKey).execute(client);
   const id = (await tx.getReceipt(client)).topicId!.toString();

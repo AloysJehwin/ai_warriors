@@ -9,6 +9,7 @@ name: Hedera setup
 #              (needs VERCEL_TOKEN as a repository secret, and is never printed)
 #   stablecoin Ordo USD, made with Stablecoin Studio's SDK and factory  → STABLECOIN_ADDRESS, STABLECOIN_TOKEN_ADDRESS
 #   payonproof OrdoPayOnProof, bound to Ordo USD and OrdoTrust         → PAY_ON_PROOF_ADDRESS
+#   fund 0x… N sends N HBAR (default 25, at most 100) from the operator to a wallet; one line per wallet
 #              (stablecoin and payonproof write their values to Vercel; payonproof uses the stablecoin from the
 #              same run, or the STABLECOIN_ADDRESS / STABLECOIN_TOKEN_ADDRESS repository variables)
 # The log and summary show only public values.
@@ -45,6 +46,12 @@ jobs:
         run: |
           curl -sf "https://testnet.mirrornode.hedera.com/api/v1/accounts/${HEDERA_OPERATOR_ID}" \
             | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const a=JSON.parse(s);console.log(`account ${a.account} · ${(Number(a.balance.balance)/1e8).toFixed(2)} HBAR · key ${a.key?._type}`);if(a.key?._type!=="ECDSA_SECP256K1"){console.error("The operator key must be ECDSA (secp256k1)");process.exit(1)}})'
+      - name: Fund wallets
+        if: contains(steps.what.outputs.tasks, ' fund ')
+        run: |
+          sed 's/#.*//' .github/deploy/hedera.request | awk '$1 == "fund" { print $2, ($3 == "" ? 25 : $3) }' | while read -r to hbar; do
+            pnpm --filter @ordo/contracts setup:hedera fund "$to" "$hbar" | tee -a setup.log
+          done
       - name: Ledger topic
         if: contains(steps.what.outputs.tasks, ' topic ')
         run: pnpm --filter @ordo/contracts setup:hedera topic | tee -a setup.log
