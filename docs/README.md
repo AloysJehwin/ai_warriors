@@ -11,6 +11,7 @@ Markdown versions of the Ordo product, architecture and validation documentation
 | [ethglobal-mumbai-strategy.md](ethglobal-mumbai-strategy.md) | ETHGlobal Mumbai partner choice (Hedera, 0G, ENS) |
 | [proof-of-work.md](proof-of-work.md) | Signed stage readings, zero-knowledge stage proofs, release statements bound to the proof root; trust model, ceremony, redeploy |
 | [ethglobal-mumbai-build-plan.md](ethglobal-mumbai-build-plan.md) | Event schedule, proof-of-work protocol, submission checklist |
+| [research.md](research.md) | Related work for the autonomous-lab pitch: self-driving labs, the A-Lab verification case, reproducibility, blockchain for research records, and how Ordo maps onto a protein lab |
 | [architecture.md](architecture.md) | Full system architecture: design principles, the five layers and every service in detail, end-to-end flows, autonomy and policy guard, events and messages, deployment, failure modes, technology options, open decisions |
 | [product.md](product.md) | What Ordo does, roles, core concepts (pipelines, node states, agents, autonomy, gates) and all seven console screens |
 | [agent-decision-model.md](agent-decision-model.md) | How an agent action is proposed, checked, executed or escalated, and recorded |
