@@ -8,6 +8,7 @@ import { Auth, Signatures } from "./auth/auth.js";
 import { Assessments } from "./core/assessments.js";
 import { Machines } from "./core/machines.js";
 import { AgentLicenses } from "./core/agent-licenses.js";
+import { AgentMemory } from "./core/agent-memory.js";
 import { AgentNfts } from "./core/agent-nfts.js";
 import { Autonomy } from "./core/autonomy.js";
 import { Inbox } from "./core/inbox.js";
@@ -85,6 +86,7 @@ export interface System {
   stageProofs: StageProofs;
   agentNfts: AgentNfts;
   agentLicenses: AgentLicenses;
+  agentMemory: AgentMemory;
   machines: Machines;
   payOnProof: import("./core/finance.js").PayOnProof;
   /** x402: the paid assessment route's middleware and terms, when Ordo sells assessments */
@@ -379,7 +381,14 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
   const agentNfts = new AgentNfts(db, rec, inftRail, policy.hash, () => (llm.name === "gemini" ? `gemini:${cfg.GEMINI_MODEL}` : llm.name), now);
   // ---- Licensing proven agents between sites through their iNFTs; playbooks on 0G Storage with the evidence ----
   const agentLicenses = new AgentLicenses(db, rec, sigs, inftRail, validation.replicas?.store ?? null, cfg.SIGNATURE_CHAIN_ID, now);
-  agentNfts.licensed = (siteId) => agentLicenses.licensedData(siteId);
+  // ---- Agent memory on 0G, sealed for the agent's site and its licensees, named by the agent's iNFT ----
+  const agentMemory = new AgentMemory(db, rec, agentLicenses, validation.replicas?.store ?? null, (h) => (validation.replicas?.store.kind === "0g-storage" ? `https://chainscan-galileo.0g.ai/tx/${h}` : null), cfg.ZG_PRIVATE_KEY ?? cfg.LEDGER_SIGNING_KEY ?? "ordo-local", now);
+  agentLicenses.memory = agentMemory;
+  agentNfts.licensed = async (siteId) => {
+    const out = await agentLicenses.licensedData(siteId);
+    for (const [a, d] of await agentMemory.latestData(siteId)) out.set(a, [...d, ...(out.get(a) ?? [])]);
+    return out;
+  };
   monitor.licenses = agentLicenses;
   passports.names = names;
   const openings = new Openings(db, engine);
@@ -430,6 +439,7 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
     await names.reconcile().catch((e) => console.error("[ordo] ens", e));
     await lotNames.reconcile().catch((e) => console.error("[ordo] ens lots", e));
     await agentLicenses.reconcile().catch((e) => console.error("[ordo] licences", e));
+    await agentMemory.reconcile().catch((e) => console.error("[ordo] agent memory", e));
     await agentNfts.reconcile().catch((e) => console.error("[ordo] inft", e));
     const head = await ledger.head();
     const last = (await proof.anchors(1))[0];
@@ -451,6 +461,7 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
       live: workOrders.live,
     },
     { rail: "evidence copies", mode: validation.replicas ? `${validation.replicas.store.kind}, encrypted · ${cfg.ZG_INDEXER_URL}` : "database only", live: Boolean(validation.replicas) },
+    { rail: "agent memory", mode: agentMemory.live ? `encrypted versions on ${agentMemory.store!.kind}, keys sealed per site, named on each agent's iNFT` : "off: needs 0G Storage", live: agentMemory.live },
     { rail: "agent iNFTs", mode: inftRail ? `ERC-7857 OrdoAgentNFT ${cfg.ZG_INFT_ADDRESS} · 0G (${cfg.ZG_CHAIN_ID})` : "off", live: Boolean(inftRail) },
     { rail: "lot passports", mode: passportRail ? `HTS NFT ${passportRail.tokenId}` : "in-app passports, no NFT", live: Boolean(passportRail) },
     {
@@ -504,6 +515,7 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
     stageProofs,
     agentNfts,
     agentLicenses,
+    agentMemory,
     x402,
     mcp,
     machines,

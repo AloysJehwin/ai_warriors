@@ -98,6 +98,8 @@ export interface LicensedPlaybook {
   tokenId: number | null;
   record: TrackRecord;
   cases: PlaybookCase[];
+  /** the licensor's live memory version it came from, when this site holds a key for it */
+  memory: { version: number; root: string; onchain: boolean } | null;
 }
 
 interface Row {
@@ -142,6 +144,9 @@ const SETTINGS = ["priority", "windowMinutes", "sampleRatePct"];
  * playbook as precedent when it recommends, and its own token's intelligent data names the licence.
  */
 export class AgentLicenses {
+  /** Live agent memory on 0G (set by the wiring): a licensee reads the licensor's current memory, sealed for it */
+  memory: import("./agent-memory.js").AgentMemory | null = null;
+
   constructor(
     private db: Db,
     private rec: Recorder,
@@ -403,11 +408,23 @@ export class AgentLicenses {
   /** Active licences this site holds for an agent kind, with the cases closest to this asset and signal first. */
   async playbooksFor(siteId: string, agent: AgentKey, near?: { assetKind: string; signal: string }): Promise<LicensedPlaybook[]> {
     const rows = await this.rows("l.licensee_site = $1 AND l.agent = $2 AND l.status = 'active' AND l.expires_at > $3", [siteId, agent, this.iso()]);
-    return rows.map((r) => {
-      const pb = JSON.parse(r.playbook_json!) as Playbook;
-      const score = (c: PlaybookCase) => (near ? Number(c.assetKind === near.assetKind) * 2 + Number(c.signal === near.signal) : 0);
-      return { licenseId: r.id, from: r.licensor_name, agent, tokenId: r.token_id === null ? null : Number(r.token_id), record: pb.record, cases: [...pb.cases].sort((a, b) => score(b) - score(a)).slice(0, 5) };
-    });
+    const score = (c: PlaybookCase) => (near ? Number(c.assetKind === near.assetKind) * 2 + Number(c.signal === near.signal) : 0);
+    return Promise.all(
+      rows.map(async (r) => {
+        // the licensor's live memory when this site holds a key for it; else the playbook the grant pinned
+        const live = await this.memory?.read(siteId, r.licensor_site, agent).catch((e: unknown) => (console.error("[ordo] agent memory", e), null));
+        const pb = live?.playbook ?? (JSON.parse(r.playbook_json!) as Playbook);
+        return {
+          licenseId: r.id,
+          from: r.licensor_name,
+          agent,
+          tokenId: r.token_id === null ? null : Number(r.token_id),
+          record: pb.record,
+          cases: [...pb.cases].sort((a, b) => score(b) - score(a)).slice(0, 5),
+          memory: live ? { version: live.version, root: live.root, onchain: live.onchain } : null,
+        };
+      }),
+    );
   }
 
   /** Intelligent data for the licensee's own tokens: one entry per active licence, hashed with its terms. */

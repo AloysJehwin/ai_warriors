@@ -614,6 +614,7 @@ export function createApp(sys: System, opts: AppOptions = {}) {
     const nfts = await sys.agentNfts.ofSite(sid(c));
     const records = new Map(await Promise.all(AGENTS.map(async (a) => [a, await sys.agentLicenses.record(sid(c), a)] as const)));
     const licensed = (await sys.agentLicenses.list(sid(c))).outgoing.filter((l) => l.status === "active");
+    const memories = await sys.agentMemory.ofSite(sid(c));
     return c.json(
       AGENTS.map((a) => {
         const st = stats.rows.find((x) => x.agent === `agent:${a}`);
@@ -622,6 +623,7 @@ export function createApp(sys: System, opts: AppOptions = {}) {
           key: a,
           ...AGENT_INFO[a],
           inft: nfts.get(a) ?? null,
+          memory: memories.get(a) ?? null,
           record: records.get(a)!,
           licensedFrom: licensed.filter((l) => l.agent === a).map((l) => ({ id: l.id, site: l.licensor.name, tokenId: l.tokenId, tokenUrl: l.tokenUrl, expiresAt: l.expiresAt })),
           autonomy: level,

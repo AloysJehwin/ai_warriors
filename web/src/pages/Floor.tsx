@@ -153,6 +153,20 @@ function Agents() {
                       )}
                     </div>
                   )}
+                  {a.memory && (
+                    <div className="small muted" title={`0G root ${a.memory.root}\nciphertext keccak ${a.memory.dataHash}\nkeys sealed for: ${a.memory.sealedFor.map((x) => x.name).join(", ")}`}>
+                      Memory v{a.memory.version} · {a.memory.cases} cases ·{" "}
+                      {a.memory.txUrl ? (
+                        <a href={a.memory.txUrl} target="_blank" rel="noreferrer">
+                          on 0G
+                        </a>
+                      ) : (
+                        "on 0G"
+                      )}
+                      {a.memory.onchain ? " · on its iNFT" : ""}
+                      {a.memory.sealedFor.length > 1 ? ` · shared with ${a.memory.sealedFor.length - 1} licensee${a.memory.sealedFor.length > 2 ? "s" : ""}` : ""}
+                    </div>
+                  )}
                   {a.record.proven && (
                     <div className="small">
                       <span className="pill ok" title={recordTitle(a.record)}>
