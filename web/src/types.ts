@@ -107,7 +107,20 @@ export interface ChainStatus {
   registeredAt?: string | null;
 }
 export interface ValidatorsView {
-  validators: { userId: string; address: string; name: string | null; scope: string; scopeLabel: string; status: string; approvedAt: string; human: boolean; onchain: { stake: string; unlockAt: number; active: boolean; payout: ScheduleView | null } | null }[];
+  validators: {
+    userId: string;
+    address: string;
+    name: string | null;
+    scope: string;
+    scopeLabel: string;
+    status: string;
+    approvedAt: string;
+    human: boolean;
+    requestId: string | null;
+    /** the relay that put the VALIDATOR credential in OrdoTrust */
+    credential: RelayView | null;
+    onchain: { stake: string; unlockAt: number; active: boolean; credentialed: boolean; payout: ScheduleView | null } | null;
+  }[];
   me: { ok: boolean; reason: string | null; row: { scope: string; status: string } | null; human: boolean };
   chain: ChainStatus;
   proposals: {

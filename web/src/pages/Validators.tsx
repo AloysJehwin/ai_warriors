@@ -130,7 +130,7 @@ export function Validators() {
               </thead>
               <tbody>
                 {seated.map((x) => {
-                  const st = !info ? (x.status === "approved" ? ["Can sign", "ok"] : [x.status, "bad"]) : !x.onchain ? ["Chain unreachable", "warn"] : x.onchain.active ? ["Active", "ok"] : x.onchain.unlockAt ? [`Unstaking · ${x.onchain.unlockAt * 1000 > Date.now() ? `free ${dateTime(new Date(x.onchain.unlockAt * 1000).toISOString())}` : "withdrawable"}`, "warn"] : ["Not staked", "warn"];
+                  const st = !info ? (x.status === "approved" ? ["Can sign", "ok"] : [x.status, "bad"]) : !x.onchain ? ["Chain unreachable", "warn"] : !x.onchain.credentialed ? [`No on-chain credential${x.credential ? ` · relay ${x.credential.status.replace("_", " ")}` : ""}`, "bad"] : x.onchain.active ? ["Active", "ok"] : x.onchain.unlockAt ? [`Unstaking · ${x.onchain.unlockAt * 1000 > Date.now() ? `free ${dateTime(new Date(x.onchain.unlockAt * 1000).toISOString())}` : "withdrawable"}`, "warn"] : ["Not staked", "warn"];
                   return (
                     <tr key={x.userId}>
                       <td>
@@ -142,9 +142,23 @@ export function Validators() {
                       {info && <td className="r">{x.onchain ? unit(x.onchain.stake) : "—"}</td>}
                       <td>
                         <span className={`tag ${st[1]}`}>{st[0]}</span>
+                        {x.credential?.error && x.onchain && !x.onchain.credentialed && <div className="bad-text small">{x.credential.error}</div>}
                       </td>
                       {can("admin") && (
                         <td className="r">
+                          {x.onchain && !x.onchain.credentialed && x.requestId && (
+                            <Action
+                              className="btn sm"
+                              title="Send the approval you signed to OrdoTrust again"
+                              onClick={async () => {
+                                const r = await api.post<{ status: string; error: string | null } | null>(path("/chain/retry"), { ref: x.requestId });
+                                toast(r?.status === "done" ? "Credential recorded on-chain" : `Still not recorded${r?.error ? `: ${r.error}` : ""}`, r?.status === "done" ? "ok" : "bad");
+                                await load();
+                              }}
+                            >
+                              Retry credential
+                            </Action>
+                          )}{" "}
                           <button type="button" className="btn sm danger" onClick={() => setRemoving(x)}>
                             Remove
                           </button>
@@ -205,7 +219,7 @@ export function Validators() {
                 </dl>
                 <div className="inline">
                   <input className="input" style={{ maxWidth: 160 }} type="number" min={0} step="any" placeholder={`Amount in ${info.symbol}`} value={amount} onChange={(e) => setAmount(e.target.value)} aria-label="Stake amount" />
-                  <Action className="btn accent" disabled={!(Number(amount) > 0) || !v.chain.registered} onClick={() => tx("stake")}>
+                  <Action className="btn accent" disabled={!(Number(amount) > 0) || !v.chain.registered || !mine.onchain.credentialed} title={mine.onchain.credentialed ? "" : "Your credential is not in OrdoTrust yet"} onClick={() => tx("stake")}>
                     Stake
                   </Action>
                   <Action className="btn" disabled={BigInt(mine.onchain.stake) === 0n || mine.onchain.unlockAt > 0} onClick={() => tx("requestUnstake")}>

@@ -6,14 +6,16 @@
  *   … setup:hedera agent        SECRET_OUT=<file> receives HEDERA_AGENT_KEY; the key is never printed
  *   … setup:hedera contracts    TRUST_CONTRACT_ADDRESS=0x… (OrdoTrust) is required
  *   … setup:hedera passport     the HTS NFT collection for lot passports
+ *   … setup:hedera fund 0x… 25  sends HBAR from the operator to a wallet (an EVM address; Hedera opens its account on first use)
+ *   … setup:hedera check 0x… site_… 10  read-only: why a wallet's stake would fail (balance, account, credential, a simulated stake)
  *   … setup:hedera payonproof   OrdoPayOnProof: needs STABLECOIN_ADDRESS and STABLECOIN_TOKEN_ADDRESS (Ordo USD, made with
  *                               Stablecoin Studio by tools/stablecoin/create.cjs) and TRUST_CONTRACT_ADDRESS
  *
  * Prints only public values: the variables to set in Vercel.
  */
 import { readFileSync, writeFileSync } from "node:fs";
-import { AccountCreateTransaction, Client, Hbar, PrivateKey, TokenCreateTransaction, TokenSupplyType, TokenType, TopicCreateTransaction } from "@hiero-ledger/sdk";
-import { createPublicClient, createWalletClient, defineChain, http, type Abi, type Hex } from "viem";
+import { AccountCreateTransaction, AccountId, Client, Hbar, PrivateKey, TransferTransaction, TokenCreateTransaction, TokenSupplyType, TokenType, TopicCreateTransaction } from "@hiero-ledger/sdk";
+import { createPublicClient, createWalletClient, defineChain, encodeFunctionData, formatUnits, http, parseAbi, parseUnits, type Abi, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { need } from "./env.js";
 
@@ -22,7 +24,45 @@ const operatorId = need("HEDERA_OPERATOR_ID");
 const operatorKey = parseKey(need("HEDERA_OPERATOR_KEY"));
 const task = process.argv[2];
 
-if (task === "topic") {
+if (task === "fund") {
+  const to = process.argv[3] ?? "";
+  const hbar = Number(process.argv[4] ?? 25);
+  if (!/^0x[0-9a-fA-F]{40}$/.test(to)) throw new Error(`fund: "${to}" is not an EVM address`);
+  // a typo should not drain the operator: testnet wallets need tens of HBAR, not thousands
+  if (!(hbar > 0 && hbar <= 100)) throw new Error(`fund: send between 0 and 100 HBAR, not ${process.argv[4]}`);
+  const client = Client.forTestnet().setOperator(operatorId, operatorKey);
+  const tx = await new TransferTransaction()
+    .addHbarTransfer(operatorId, new Hbar(-hbar))
+    .addHbarTransfer(AccountId.fromEvmAddress(0, 0, to), new Hbar(hbar))
+    .setTransactionMemo("ordo:fund")
+    .execute(client);
+  const receipt = await tx.getReceipt(client);
+  client.close();
+  console.log(`Sent ${hbar} HBAR to ${to}: ${receipt.status.toString()}
+Transaction: https://hashscan.io/testnet/transaction/${tx.transactionId.toString()}
+Wallet: https://hashscan.io/testnet/account/${to}
+`);
+} else if (task === "check") {
+  const [who, site, amount = "10"] = process.argv.slice(3) as [Hex, string, string?];
+  const trust = (process.env.TRUST_CONTRACT_ADDRESS ?? "0x608cba52976e34fa160fe64ff0499a8a5a4eb9e1") as Hex;
+  const rpc = process.env.TRUST_RPC_URL ?? "https://testnet.hashio.io/api";
+  const pub = createPublicClient({ transport: http(rpc) });
+  const acct = await fetch(`https://testnet.mirrornode.hedera.com/api/v1/accounts/${who}`).then((r) => (r.ok ? r.json() : null));
+  console.log(`mirror: account ${acct?.account ?? "none"} · ${acct ? (Number(acct.balance.balance) / 1e8).toFixed(4) : "?"} HBAR · key ${acct?.key?._type ?? "none (hollow until it pays for a transaction)"} · ethereum nonce ${acct?.ethereum_nonce ?? "?"}`);
+  console.log(`rpc: balance ${formatUnits(await pub.getBalance({ address: who }), 18)} HBAR · gas price ${formatUnits(await pub.getGasPrice(), 9)} gwei · nonce ${await pub.getTransactionCount({ address: who })}`);
+  const abi = parseAbi(["function minStake() view returns (uint256)", "function hasRole(string,address,uint8) view returns (bool)", "function isActiveValidator(string,address) view returns (bool)", "function stakes(bytes32,address) view returns (uint256,uint64)", "function siteKey(string) pure returns (bytes32)", "function sites(bytes32) view returns (bool,address)", "function stake(string) payable"]);
+  const read = (functionName: string, args: unknown[] = []) => pub.readContract({ address: trust, abi, functionName, args } as never).catch((e: Error) => `error: ${e.message.split("\n")[0]}`);
+  const key = (await read("siteKey", [site])) as Hex;
+  console.log(`OrdoTrust ${trust}: minStake ${String(await read("minStake"))} (tinybars) · site registered ${JSON.stringify(await read("sites", [key]), (_k, v) => (typeof v === "bigint" ? v.toString() : v))} · VALIDATOR ${await read("hasRole", [site, who, 4])} · active ${await read("isActiveValidator", [site, who])} · stake ${JSON.stringify(await read("stakes", [key, who]), (_k, v) => (typeof v === "bigint" ? v.toString() : v))}`);
+  // the same call the wallet makes: value in 18-decimal units, as wallets send it to the relay
+  const data = encodeFunctionData({ abi, functionName: "stake", args: [site] });
+  for (const [label, value] of [[`${amount} HBAR`, parseUnits(amount, 18)]] as const) {
+    const gas = await pub.estimateGas({ account: who, to: trust, data, value }).then(String).catch((e: Error & { details?: string }) => `error: ${e.details ?? e.message.split("\n")[0]}`);
+    console.log(`estimateGas stake(${site}) with ${label}: ${gas}`);
+    const raw = await fetch(rpc, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_call", params: [{ from: who, to: trust, data, value: `0x${value.toString(16)}` }, "latest"] }) });
+    console.log(`eth_call stake: HTTP ${raw.status} ${(await raw.text()).slice(0, 400)}`);
+  }
+} else if (task === "topic") {
   const client = Client.forTestnet().setOperator(operatorId, operatorKey);
   const tx = await new TopicCreateTransaction().setTopicMemo("ordo:ledger:v2").setSubmitKey(operatorKey.publicKey).setAdminKey(operatorKey.publicKey).execute(client);
   const id = (await tx.getReceipt(client)).topicId!.toString();
