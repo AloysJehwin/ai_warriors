@@ -342,6 +342,9 @@ export class Trust {
   private relayGrant(siteId: string, ref: string, address: string, role: ChainRole, sig: ReturnType<typeof sigArg>) {
     return this.relay(siteId, "grant", ref, { address, role, sig }, () => this.chain!.grantRole(siteId, address, role, sig));
   }
+  private relayRevoke(siteId: string, ref: string, address: string, role: ChainRole, sig: ReturnType<typeof sigArg>) {
+    return this.relay(siteId, "revoke", ref, { address, role, sig }, () => this.chain!.revokeRole(siteId, address, role, sig));
+  }
   /** Retry a failed relay, or one that waited for the site's registration. */
   async retry(siteId: string, ref: string): Promise<RelayView | null> {
     if (!this.chain) throw new HttpError(409, "No trust contract is configured");
@@ -350,6 +353,7 @@ export class Trust {
     const p = JSON.parse(r.payload_json);
     await this.db.query("UPDATE chain_relays SET status = 'superseded' WHERE id = $1", [r.id]);
     if (r.kind === "grant") return this.relayGrant(siteId, ref, p.address, p.role, p.sig);
+    if (r.kind === "revoke") return this.relayRevoke(siteId, ref, p.address, p.role, p.sig);
     if (r.kind === "release") return this.relay(siteId, "release", ref, p, () => this.chain!.recordRelease(p.lot, p.sigs.map(fromJsonSafe)));
     const other = this.retryers.get(r.kind);
     if (other) return this.relay(siteId, r.kind, ref, p, () => other(siteId, ref, p));
@@ -400,6 +404,7 @@ export class Trust {
   /** An approved validator; with the trust contract, also credentialed and staked on-chain right now. */
   async isValidator(siteId: string, user: User): Promise<{ ok: boolean; reason: string | null }> {
     const v = await this.validatorRow(siteId, user.id);
+    if (v?.status === "removed") return { ok: false, reason: "An administrator removed you as a validator at this site. Your stake is still yours: unstake and withdraw it here. To validate again, apply again." };
     if (!v || v.status !== "approved") return { ok: false, reason: "Only an approved validator can sign this. Apply as a validator from Team → Validators." };
     if (this.worldId && !(await this.isHuman(siteId, user.id)))
       return { ok: false, reason: "Verify with World ID before you sign (Team → Validators): each validator at a site must be a different person." };
@@ -437,6 +442,55 @@ export class Trust {
     await this.db.tx((q) => this.bindHuman(q, siteId, user.id, user.address, nullifier));
     await this.rec.decide(siteId, { agent: `user:${user.address}`, kind: "validator.human_verified", summary: `${user.address} verified with World ID as a unique person`, data: { worldId: WorldId.ledgerRef(siteId, nullifier) } });
     return { human: true };
+  }
+
+  // ---------------------------------------------------------------- removing a validator
+  private async approvedValidator(siteId: string, userId: string) {
+    const v = (
+      await this.db.query<{ scope: ValidatorScope; status: string; address: string; display_name: string | null }>(
+        "SELECT v.scope, v.status, u.address, u.display_name FROM validators v JOIN users u ON u.id = v.user_id WHERE v.site_id = $1 AND v.user_id = $2",
+        [siteId, userId],
+      )
+    ).rows[0];
+    if (!v || v.status !== "approved") throw new HttpError(404, "No approved validator with that id at this site");
+    return v;
+  }
+  /** What the administrator signs to take a validator's seat away: the same "role.revoke" OrdoTrust checks before it revokes VALIDATOR. */
+  async removeRequest(siteId: string, admin: User, userId: string, comment: string, clientChainId?: number): Promise<TypedSignature> {
+    const v = await this.approvedValidator(siteId, userId);
+    return this.sigs.request(admin, {
+      action: "role.revoke",
+      entity: `${v.address}#VALIDATOR`,
+      meaning: `Remove ${v.display_name ?? v.address} (${v.address}) as ${Trust.labelOf("validator", v.scope)}`,
+      comment,
+      site: siteId,
+      ...this.contractDomain(true, clientChainId),
+    });
+  }
+  /**
+   * The validator stops signing at once: their seat and their World ID binding at this site go, so the same person can
+   * validate again later from any wallet. They stay on the team (Team removes roles), which keeps the Validators page open
+   * to them: their stake stays theirs, and the contract lets them unstake and withdraw without the credential.
+   */
+  async remove(siteId: string, admin: User, userId: string, input: { comment: string; nonce: string; signature: Hex }) {
+    const v = await this.approvedValidator(siteId, userId);
+    const sig = await this.db.tx(async (q) => {
+      const s = await this.sigs.consume(q, admin, { action: "role.revoke", entity: `${v.address}#VALIDATOR` }, { nonce: input.nonce, signature: input.signature });
+      const u = await q.query("UPDATE validators SET status = 'removed' WHERE site_id = $1 AND user_id = $2 AND status = 'approved' RETURNING user_id", [siteId, userId]);
+      if (!u.rows.length) throw new HttpError(409, "This validator was already removed");
+      await q.query("DELETE FROM validator_humans WHERE site_id = $1 AND user_id = $2", [siteId, userId]);
+      return s;
+    });
+    const d = await this.rec.decide(siteId, {
+      agent: `user:${admin.address}`,
+      kind: "validator.removed",
+      summary: `Removed ${v.display_name ?? v.address} as ${Trust.labelOf("validator", v.scope)}`,
+      reason: input.comment || null,
+      data: { userId, address: v.address, scope: v.scope, signatureId: sig.id, typedData: sig.typed, signature: input.signature },
+    });
+    await this.db.query("UPDATE signatures SET ledger_seq = $1 WHERE id = $2", [d.ledgerSeq, sig.id]);
+    const chain = this.chain ? await this.relayRevoke(siteId, `valrm_${userId}_${sig.id}`, v.address, "VALIDATOR", sigArg(sig.typed, input.signature)) : null;
+    return { removed: true, chain };
   }
 
   async validators(siteId: string) {

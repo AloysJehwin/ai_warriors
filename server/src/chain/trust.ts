@@ -165,6 +165,9 @@ export class TrustChain {
   grantRole(siteId: string, account: string, role: ChainRole, sig: SigArg) {
     return this.write("grantRole", [siteId, account, CHAIN_ROLE[role], sig]);
   }
+  revokeRole(siteId: string, account: string, role: ChainRole, sig: SigArg) {
+    return this.write("revokeRole", [siteId, account, CHAIN_ROLE[role], sig]);
+  }
   recordRelease(lot: ReleaseLot, sigs: [ReleaseSigArg, ReleaseSigArg, ReleaseSigArg]) {
     return this.write("recordRelease", [lot, sigs]);
   }

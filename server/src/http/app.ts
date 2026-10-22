@@ -729,6 +729,17 @@ export function createApp(sys: System, opts: AppOptions = {}) {
     ]);
     return c.json({ validators, me: { ...mine, row: await sys.trust.validatorRow(sid(c), me(c).user.id), human: await sys.trust.isHuman(sid(c), me(c).user.id) }, chain, proposals });
   });
+  // an administrator removes a validator with a signed "role.revoke", relayed to OrdoTrust when it is configured
+  const Removal = z.object({ comment: z.string().max(500).default("") });
+  site.post("/validators/:userId/remove/sign-request", async (c) => {
+    need(c, "admin");
+    const b = await body(c, Removal.extend({ chainId: z.number().int().optional() }));
+    return c.json(await sys.trust.removeRequest(sid(c), me(c).user, c.req.param("userId"), b.comment, b.chainId));
+  });
+  site.post("/validators/:userId/remove", async (c) => {
+    need(c, "admin");
+    return c.json(await sys.trust.remove(sid(c), me(c).user, c.req.param("userId"), await body(c, Removal.merge(SignedBody))));
+  });
   // after a stake or unstake from the wallet: schedule (or delete) the payout at the end of the cooldown on Hedera
   site.post("/validators/me/payout-schedule", async (c) => c.json({ payout: (await sys.schedules?.syncStake(sid(c), me(c).user.address)) ?? null }));
   site.post("/validators/world-id", async (c) => c.json(await sys.trust.verifyHuman(sid(c), me(c).user, await body(c, z.object({ worldId: z.record(z.string(), z.unknown()) })).then((b) => b.worldId))));
