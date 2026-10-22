@@ -9,6 +9,7 @@ import { SignerProvider } from "./lib/sign";
 import { SignIn } from "./pages/SignIn";
 import { Setup } from "./pages/Setup";
 import { Shell } from "./Shell";
+import { requestAccountPick } from "./lib/wallet";
 import type { Me, Meta, Status } from "./types";
 import { ToastProvider } from "./ui/kit";
 import { ThemeToggle } from "./ui/ThemeToggle";
@@ -57,6 +58,11 @@ function Root() {
     window.location.hash = "";
     window.location.reload();
   };
+  // signs out, then the sign-in page opens the wallet's account picker
+  const switchAccount = () => {
+    requestAccountPick();
+    return signOut();
+  };
 
   // a lot's public passport (the QR code on a shipped lot) needs no account
   if (route.page === "passport" && route.id) return <Passport runId={route.id} />;
@@ -79,6 +85,7 @@ function Root() {
       <Setup
         me={me}
         onSignOut={signOut}
+        onSwitchAccount={switchAccount}
         onCreated={async (id) => {
           saveSite(id);
           setMe(await api.get<Me>("/v1/me"));
@@ -92,6 +99,7 @@ function Root() {
       <SignerProvider address={me.user.address} trust={status.trust}>
         <Shell
           onSignOut={signOut}
+          onSwitchAccount={switchAccount}
           onSwitchSite={(id) => {
             saveSite(id);
             setSiteId(id);

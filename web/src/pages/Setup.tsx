@@ -14,7 +14,7 @@ const zonesAll = (() => {
   }
 })();
 
-export function Setup({ me, onCreated, onSignOut }: { me: Me; onCreated: (id: string) => void; onSignOut: () => void }) {
+export function Setup({ me, onCreated, onSignOut, onSwitchAccount }: { me: Me; onCreated: (id: string) => void; onSignOut: () => void; onSwitchAccount: () => void }) {
   const [joining, setJoining] = useState(() => window.location.hash.startsWith("#/join"));
   useEffect(() => {
     const f = () => setJoining(window.location.hash.startsWith("#/join"));
@@ -30,7 +30,7 @@ export function Setup({ me, onCreated, onSignOut }: { me: Me; onCreated: (id: st
   const [busy, setBusy] = useState(false);
   const addr = me.user!.address;
 
-  if (!me.canCreateSite || joining) return <JoinSite me={me} onSignOut={onSignOut} canCreate={me.canCreateSite} />;
+  if (!me.canCreateSite || joining) return <JoinSite me={me} onSignOut={onSignOut} onSwitchAccount={onSwitchAccount} canCreate={me.canCreateSite} />;
 
   const submit = async () => {
     setBusy(true);
@@ -87,6 +87,9 @@ export function Setup({ me, onCreated, onSignOut }: { me: Me; onCreated: (id: st
           <a className="btn" href="#/join">
             Join an existing site instead
           </a>
+          <button type="button" className="btn" onClick={onSwitchAccount}>
+            Switch account
+          </button>
           <button type="button" className="btn" onClick={onSignOut}>
             Sign out
           </button>
@@ -97,7 +100,7 @@ export function Setup({ me, onCreated, onSignOut }: { me: Me; onCreated: (id: st
 }
 
 /** A wallet with no site yet applies to join one with the code its administrator shared. */
-function JoinSite({ me, onSignOut, canCreate }: { me: Me; onSignOut: () => void; canCreate: boolean }) {
+function JoinSite({ me, onSignOut, onSwitchAccount, canCreate }: { me: Me; onSignOut: () => void; onSwitchAccount: () => void; canCreate: boolean }) {
   const [code, setCode] = useState(() => new URLSearchParams(window.location.hash.split("?")[1] ?? "").get("site") ?? "");
   const [site, setSite] = useState<{ id: string; name: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -136,6 +139,9 @@ function JoinSite({ me, onSignOut, canCreate }: { me: Me; onSignOut: () => void;
                   Create a new site instead
                 </a>
               )}
+              <button type="button" className="btn" onClick={onSwitchAccount}>
+                Switch account
+              </button>
               <button type="button" className="btn" onClick={onSignOut}>
                 Sign out
               </button>

@@ -54,6 +54,25 @@ export const setActiveWallet = (w: WalletInfo) => {
   active = w;
 };
 
+/** Set by "Switch account": the sign-in page that follows opens the wallet's account picker. */
+const PICK = "ordo.pickAccount";
+export const requestAccountPick = () => {
+  try {
+    sessionStorage.setItem(PICK, "1");
+  } catch {
+    /* private mode */
+  }
+};
+export const takeAccountPick = () => {
+  try {
+    const v = sessionStorage.getItem(PICK) === "1";
+    sessionStorage.removeItem(PICK);
+    return v;
+  } catch {
+    return false;
+  }
+};
+
 async function client(expected?: string) {
   if (!active) throw new Error("Connect your wallet first");
   const c = createWalletClient({ transport: custom(active.provider) });
@@ -63,9 +82,23 @@ async function client(expected?: string) {
   return { c, account };
 }
 
-/** Sign-In with Ethereum: the server issues a nonce, the wallet signs the EIP-4361 message. */
-export async function signIn(w: WalletInfo): Promise<Me> {
+/**
+ * Asks the wallet to show its account picker again. Wallets otherwise hand back the account the site was last
+ * connected with, so without this there is no way to sign in as a different one. Wallets without EIP-2255 skip it.
+ */
+async function pickAccount(w: WalletInfo) {
+  try {
+    await w.provider.request({ method: "wallet_requestPermissions", params: [{ eth_accounts: {} }] } as never);
+  } catch (e) {
+    const code = (e as { code?: number }).code;
+    if (code === 4001) throw e; // the person closed the picker
+  }
+}
+
+/** Sign-In with Ethereum: the server issues a nonce, the wallet signs the EIP-4361 message. `pick` opens the wallet's account picker first. */
+export async function signIn(w: WalletInfo, opts: { pick?: boolean } = {}): Promise<Me> {
   active = w;
+  if (opts.pick) await pickAccount(w);
   const { c, account } = await client();
   const chainId = await c.getChainId().catch(() => 1);
   const n = await api.post<{ nonce: string; domain: string; uri: string }>("/v1/auth/nonce");

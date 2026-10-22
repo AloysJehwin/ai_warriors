@@ -228,4 +228,30 @@ test("sign in, set up a site, build, run, sign a gate, verify", async ({ page })
   await expect(pub.getByText(/^(\d+) of \1 signatures and proofs verified in this browser$/)).toBeVisible({ timeout: 30_000 });
   if (shotDir) await pub.screenshot({ path: `${shotDir}/16-public-passport-mobile.png`, fullPage: true });
   await anon.close();
+
+  // ---- Layout: the theme toggle sits inside the sidebar, a stage's details drawer fits the window and scrolls ----
+  await page.keyboard.press("Escape"); // the lot passport
+  await expect(page.locator(".overlay")).toHaveCount(0);
+  const side = (await page.locator(".side").boundingBox())!;
+  const toggle = (await page.locator(".side .theme-toggle").boundingBox())!;
+  expect(toggle.x + toggle.width).toBeLessThanOrEqual(side.x + side.width);
+  await page.locator(".node-hit", { hasText: "03" }).click();
+  await page.locator(".block").getByRole("button", { name: "Full details →" }).click();
+  const drawer = page.locator("aside.drawer");
+  await expect(drawer).toBeVisible();
+  expect((await drawer.boundingBox())!.height).toBeLessThanOrEqual(1000);
+  expect(await drawer.locator(".drawer-b").evaluate((el) => getComputedStyle(el).overflowY)).toBe("auto");
+  await shot(page, "17-stage-drawer");
+  await page.keyboard.press("Escape");
+
+  // ---- Switch account: sign out, the wallet's account picker opens, and the other account signs in ----
+  await page.locator(".user-chip").click();
+  await page.getByRole("menuitem", { name: "Switch account" }).click();
+  await expect(page.getByRole("heading", { name: "Sign in with your wallet" })).toBeVisible();
+  await expect(page.getByRole("checkbox", { name: /Choose which account/ })).toBeChecked();
+  await page.getByRole("button", { name: /Test Wallet/ }).click();
+  // a wallet with no site yet: it may create one or apply to join one
+  await expect(page.getByRole("heading", { name: /Create your site|Apply to join a site/ })).toBeVisible();
+  expect(wallet.picks.count).toBe(1);
+  await expect(page.getByText(new RegExp(wallet.otherAddress.slice(2, 6), "i")).first()).toBeVisible();
 });
