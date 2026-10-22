@@ -72,6 +72,75 @@ function ChainBanner({ v, onChange }: { v: ValidatorsView; onChange: () => Promi
   );
 }
 
+interface Credentials {
+  configured: boolean;
+  registered: boolean;
+  admins: string[];
+  missing: { userId: string; address: string; name: string | null; role: string; label: string }[];
+}
+
+/**
+ * Roles Ordo gave that OrdoTrust does not know yet: after a contract redeploy, or when a grant's signature could not be
+ * used. An administrator the contract knows signs each one again.
+ */
+function MissingCredentials({ registered }: { registered: boolean }) {
+  const { path, names, me } = useApp();
+  const sign = useSign();
+  const toast = useToast();
+  const [c, setC] = useState<Credentials | null>(null);
+  const load = useCallback(() => api.get<Credentials>(path("/chain/credentials")).then(setC).catch(() => setC(null)), [path]);
+  useEffect(() => {
+    void load();
+  }, [load, registered]);
+  if (!c?.configured || !c.registered || !c.missing.length) return null;
+  const canSign = c.admins.includes(me.user!.address);
+  return (
+    <section className="section card">
+      <div className="card-h">
+        <h2>Credentials missing on-chain</h2>
+        <span className="tag warn">{c.missing.length}</span>
+      </div>
+      <div className="card-b">
+        <p className="muted small">
+          These roles are granted in Ordo but OrdoTrust does not know them yet, so the contract refuses what they sign or stake.{" "}
+          {canSign ? "Sign each grant with your wallet." : `Only an administrator OrdoTrust knows can sign them: ${c.admins.map((a) => names.get(a) ?? shortAddr(a)).join(", ") || "nobody yet"}. Switch to that wallet.`}
+        </p>
+        <table className="t">
+          <tbody>
+            {c.missing.map((m) => (
+              <tr key={`${m.address}:${m.role}`}>
+                <td>
+                  <b>{m.name ?? names.get(m.address) ?? shortAddr(m.address)}</b>
+                  <div className="faint small mono">{m.address}</div>
+                </td>
+                <td>{m.label}</td>
+                <td className="r">
+                  <Action
+                    className="btn sm accent"
+                    disabled={!canSign}
+                    onClick={async () => {
+                      const r = await sign<{ status: string; error: string | null }>({
+                        title: `Record ${m.name ?? shortAddr(m.address)} as ${m.label} in OrdoTrust`,
+                        request: () => api.post<TypedSignature>(path("/chain/credentials/sign-request"), { address: m.address, role: m.role }),
+                        submit: (proof) => api.post(path("/chain/credentials/grant"), { address: m.address, role: m.role, ...proof }),
+                      });
+                      if (!r) return;
+                      toast(r.status === "done" ? "Credential recorded on-chain" : `Not recorded: ${r.error ?? r.status}`, r.status === "done" ? "ok" : "bad");
+                      await load();
+                    }}
+                  >
+                    Sign grant
+                  </Action>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
 export function Validators() {
   const { path, me, siteId, status, can, names } = useApp();
   const [v, setV] = useState<ValidatorsView | null>(null);
@@ -104,6 +173,7 @@ export function Validators() {
   return (
     <div>
       <ChainBanner v={v} onChange={load} />
+      {can("admin") && <MissingCredentials registered={"registered" in v.chain && Boolean(v.chain.registered)} />}
       <section className="section">
         <div className="section-h spread">
           <h2>Validators</h2>

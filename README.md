@@ -69,7 +69,7 @@ flowchart LR
 | Identity | Wallet sign-in (EIP-4361) | ENS primary names shown for team members |
 | Decisions | EIP-712 signatures verified server-side | ERC-1271 smart wallets via `AUTH_RPC_URL` |
 | Ledger anchor | Ed25519-signed checkpoint | Hedera Consensus Service topic, verified through the mirror node |
-| Roles and validators | Approved in-app by signed applications | `OrdoTrust`: credentials, validator stakes, release records, slashing (Hedera EVM or any EVM chain). Live on Hedera testnet at [`0x608c…b9e1`](https://hashscan.io/testnet/contract/0x608cba52976e34fa160fe64ff0499a8a5a4eb9e1) |
+| Roles and validators | Approved in-app by signed applications | `OrdoTrust`: credentials, validator stakes, release records, slashing (Hedera EVM or any EVM chain). Live on Hedera testnet at [`0xbb74…ffc0`](https://hashscan.io/testnet/contract/0xbb744b4a87aef7996537f5583e71ec14e093ffc0) |
 | Autonomy policies | Two plant managers' signatures to raise, recorded in the ledger | `OrdoPolicies`: the same rule enforced on-chain, each change published with its signatures |
 | Lot passports | Public page and QR code for every lot, in Ordo | HTS NFT per lot (`HEDERA_PASSPORT_TOKEN_ID`): minted at start, metadata updated on hold and completion (HIP-657), airdropped to the customer on a signed shipment |
 | Agent payments | Work orders assign a vendor, no money moves | `OrdoWorkOrders` via Hedera Agent Kit: per-site fund, admin-signed caps, credentialed vendors, escrow released by a maintenance lead's signature, refunds, kill switch |
@@ -108,7 +108,7 @@ Deployed on Hedera testnet for pay on proof:
 | What | Where |
 |---|---|
 | Ordo USD (OUSD), created with Stablecoin Studio's SDK and factory | token [0.0.11123629](https://hashscan.io/testnet/token/0.0.11123629) · proxy [0.0.11123628](https://hashscan.io/testnet/contract/0xacb80acbc65d73f4b544e2324fa2f5dcc38c8594) |
-| OrdoPayOnProof: pays a Stablecoin Studio hold only on a recorded quality release | [0xe9f1…a5e8](https://hashscan.io/testnet/contract/0xe9f1bea75738434d45be5b92d2108b88d515a5e8) |
+| OrdoPayOnProof: pays a Stablecoin Studio hold only on a recorded quality release | [0xcf92…9910](https://hashscan.io/testnet/contract/0xcf92535605b3a3f1edb2b539a87fc3d01ad19910) |
 
 Reproduce it with the **x402 demo** workflow (Actions tab): it opens a fresh buyer account and pays `https://aiwarriors.vercel.app/v1/x402/mcp` per tool call. Every sale is also listed at `GET /v1/x402`.
 

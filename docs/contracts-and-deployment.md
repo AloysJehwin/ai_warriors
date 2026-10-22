@@ -133,7 +133,7 @@ Every authorisation is an Ordo EIP-712 signature (`OrdoSignature`, domain `{name
 
 ### 4.1 `OrdoTrust` — who may decide what
 
-Per-site role bits (OPERATOR, SUPERVISOR, VALIDATOR, PLANT_MANAGER, ADMIN, VENDOR), granted and revoked with a site admin's signature. Validators stake; only an active staked validator's signature can be recorded as a release reviewer or approver. Slashing takes two other active validators and a plant manager, and pays the site's quality fund. Live at [`0x608cba52976e34fa160fe64ff0499a8a5a4eb9e1`](https://hashscan.io/testnet/contract/0x608cba52976e34fa160fe64ff0499a8a5a4eb9e1).
+Per-site role bits (OPERATOR, SUPERVISOR, VALIDATOR, PLANT_MANAGER, ADMIN, VENDOR), granted and revoked with a site admin's signature. Validators stake; only an active staked validator's signature can be recorded as a release reviewer or approver. Slashing takes two other active validators and a plant manager, and pays the site's quality fund. Live at [`0xbb744b4a87aef7996537f5583e71ec14e093ffc0`](https://hashscan.io/testnet/contract/0xbb744b4a87aef7996537f5583e71ec14e093ffc0).
 
 ### 4.2 `OrdoWorkOrders` — the agent can pay, but only within hard limits
 
