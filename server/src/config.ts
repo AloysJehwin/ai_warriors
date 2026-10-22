@@ -68,6 +68,14 @@ const Env = z.object({
   /** Claude (LLM_PROVIDER=claude): Anthropic's API, Claude Opus 5.5 unless CLAUDE_MODEL names another */
   ANTHROPIC_API_KEY: z.string().optional(),
   CLAUDE_MODEL: z.string().default("claude-opus-5-5"),
+  /** Or, with no API key: Workload Identity Federation from the Claude Console. On Vercel the identity token is the
+   *  deployment's OIDC token; elsewhere ANTHROPIC_IDENTITY_TOKEN_FILE (or ANTHROPIC_IDENTITY_TOKEN) supplies it. */
+  ANTHROPIC_FEDERATION_RULE_ID: z.string().regex(/^fdrl_\w+$/).optional(),
+  ANTHROPIC_ORGANIZATION_ID: z.string().uuid().optional(),
+  ANTHROPIC_SERVICE_ACCOUNT_ID: z.string().regex(/^svac_\w+$/).optional(),
+  ANTHROPIC_WORKSPACE_ID: z.string().regex(/^wrkspc_\w+$/).optional(),
+  ANTHROPIC_IDENTITY_TOKEN_FILE: z.string().optional(),
+  ANTHROPIC_IDENTITY_TOKEN: z.string().optional(),
   GEMINI_API_KEY: z.string().optional(),
   GEMINI_MODEL: z.string().default("gemini-flash-latest"),
   OPENAI_COMPAT_BASE_URL: z.string().optional(),

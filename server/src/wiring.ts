@@ -109,14 +109,27 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
 
   // ---- LLM ----
   let llm: LlmProvider = opts.llm ?? new OfflineLlm();
-  const provider = cfg.LLM_PROVIDER ?? (cfg.ANTHROPIC_API_KEY ? "claude" : "offline");
+  const federated = cfg.ANTHROPIC_FEDERATION_RULE_ID && cfg.ANTHROPIC_ORGANIZATION_ID && cfg.ANTHROPIC_SERVICE_ACCOUNT_ID;
+  const provider = cfg.LLM_PROVIDER ?? (cfg.ANTHROPIC_API_KEY || federated ? "claude" : "offline");
   if (!opts.llm && provider === "gemini") {
     if (cfg.GEMINI_API_KEY) llm = await geminiProvider(cfg.GEMINI_API_KEY, cfg.GEMINI_MODEL, cfg.LLM_TIMEOUT_MS);
     else warnings.push("LLM_PROVIDER=gemini but GEMINI_API_KEY is missing; agents use their deterministic offline reasoning");
   } else if (!opts.llm && provider === "claude") {
     // Claude thinks before it answers: 25 s a call, so a diagnosis and a recommendation fit in one 60 s function
-    if (cfg.ANTHROPIC_API_KEY) llm = (await import("./adapters/claude.js")).claudeProvider(cfg.ANTHROPIC_API_KEY, cfg.CLAUDE_MODEL, Math.max(cfg.LLM_TIMEOUT_MS, 25_000));
-    else warnings.push("LLM_PROVIDER=claude but ANTHROPIC_API_KEY is missing; agents use their deterministic offline reasoning");
+    const { claudeProvider } = await import("./adapters/claude.js");
+    const timeout = Math.max(cfg.LLM_TIMEOUT_MS, 25_000);
+    if (cfg.ANTHROPIC_API_KEY) llm = claudeProvider({ apiKey: cfg.ANTHROPIC_API_KEY }, cfg.CLAUDE_MODEL, timeout);
+    else if (federated) {
+      const { readFileSync } = await import("node:fs");
+      const { vercelOidcToken } = await import("./adapters/vercel-oidc.js");
+      const file = cfg.ANTHROPIC_IDENTITY_TOKEN_FILE;
+      const identityToken = file ? () => readFileSync(file, "utf8").trim() : cfg.ANTHROPIC_IDENTITY_TOKEN ? () => cfg.ANTHROPIC_IDENTITY_TOKEN! : vercelOidcToken;
+      llm = claudeProvider(
+        { federation: { ruleId: cfg.ANTHROPIC_FEDERATION_RULE_ID!, organizationId: cfg.ANTHROPIC_ORGANIZATION_ID!, serviceAccountId: cfg.ANTHROPIC_SERVICE_ACCOUNT_ID!, workspaceId: cfg.ANTHROPIC_WORKSPACE_ID, identityToken } },
+        cfg.CLAUDE_MODEL,
+        timeout,
+      );
+    } else warnings.push("LLM_PROVIDER=claude needs ANTHROPIC_API_KEY or Workload Identity Federation (ANTHROPIC_FEDERATION_RULE_ID, ANTHROPIC_ORGANIZATION_ID, ANTHROPIC_SERVICE_ACCOUNT_ID); agents use their deterministic offline reasoning");
   } else if (!opts.llm && provider === "openai_compat") {
     if (cfg.OPENAI_COMPAT_BASE_URL && cfg.OPENAI_COMPAT_MODEL)
       llm = openAiCompatProvider({

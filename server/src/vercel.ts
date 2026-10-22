@@ -6,6 +6,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { getRequestListener } from "@hono/node-server";
 import policyText from "../../policies/default.yaml";
+import { rememberVercelOidcToken } from "./adapters/vercel-oidc.js";
 import { loadConfig } from "./config.js";
 import { createApp } from "./http/app.js";
 import { buildSystem } from "./wiring.js";
@@ -34,6 +35,8 @@ async function init(): Promise<Listener> {
 }
 
 export default async function handler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  // the deployment's OIDC identity, for Workload Identity Federation with the Claude API
+  rememberVercelOidcToken(req.headers["x-vercel-oidc-token"]);
   ready ??= init().catch((e) => {
     ready = null; // retry on the next request, e.g. after the database wakes up
     throw e;
