@@ -1,4 +1,6 @@
 # What the "ENS setup" workflow does on its next run (edit and push to run it):
-#   key            generate the ENS owner key in the job (kept in Vercel, never printed); the log shows its address
-#   label <name>   register <name>.eth on ENSv2 (Sepolia) once that address holds Sepolia ETH
-# Done: owner 0x38e6C7622b2E9BdcB16821E88083274489625b74, ordo-mfg.eth registered (run 3). Kept empty so merges do not re-run it.
+#   key              generate the ENS owner key in the job (kept in Vercel, never printed); the log shows its address
+#   label <name>     register <name>.eth on ENSv2 (Sepolia) once that address holds Sepolia ETH
+#   contracts <url>  deploy OrdoEnsRoles, OrdoStageVerifier, OrdoSpecVerifier and OrdoLotResolver, lot names answered by Ordo at <url>
+# Done: owner 0x38e6C7622b2E9BdcB16821E88083274489625b74, ordo-mfg.eth registered (run 3).
+contracts https://aiwarriors.vercel.app
