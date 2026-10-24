@@ -3,4 +3,7 @@
 #   label <name>     register <name>.eth on ENSv2 (Sepolia) once that address holds Sepolia ETH
 #   contracts <url>  deploy OrdoEnsRoles, OrdoStageVerifier, OrdoSpecVerifier and OrdoLotResolver, lot names answered by Ordo at <url>
 # Done: owner 0x38e6C7622b2E9BdcB16821E88083274489625b74, ordo-mfg.eth registered (run 3).
-contracts https://aiwarriors.vercel.app
+# Done: contracts https://aiwarriors.vercel.app (24 Oct 2026): OrdoEnsRoles 0x100f40fbdec56c458d0aa350b9971040d83eab91,
+#       OrdoStageVerifier 0xadf064b185151dad607a86f48166c36df1333d22, OrdoSpecVerifier 0xd4c4b8438c6519d6830668365068560e0239ed17,
+#       OrdoLotResolver 0x83bcae34de88b862f9641a408d926e1964b25795; ENS_ROLES_ADDRESS and ENS_LOT_RESOLVER_ADDRESS set in Vercel.
+# Kept empty so merges do not re-run it.
