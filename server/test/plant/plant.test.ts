@@ -37,6 +37,31 @@ describe("plant registry and real data", () => {
     await db.close();
   });
 
+  it("aggregates one asset's signals over a stage window, good-quality points only", async () => {
+    const { db, plant, siteId, clock } = await setup();
+    const id = await plant.createAsset(siteId, { zoneId: null, name: "BR-01 Bioreactor", kind: "process_vessel", description: null, owningAgent: "process", source: { type: "manual" }, limits: {}, idealCycleS: null }, "usr_1");
+    const t0 = clock.t;
+    for (const v of [36.5, 37.2, 38.1]) {
+      clock.t += 60_000;
+      await plant.manualReading(siteId, id, { signal: "Temperature", value: v, text: null });
+    }
+    clock.t += 60_000;
+    await plant.manualReading(siteId, id, { signal: "od600", value: 0.7, text: null });
+    await db.query("INSERT INTO telemetry (asset_id, signal, ts, value, text_value, quality) VALUES ($1, 'temperature', $2, 99, NULL, 'bad')", [id, new Date(clock.t + 1000).toISOString()]);
+    const st = await plant.windowStats(id, ["temperature", "od600", "ph"], t0, clock.t + 120_000);
+    expect(st.temperature).toEqual({ last: 38.1, min: 36.5, max: 38.1, mean: expect.closeTo(37.27, 2), n: 3 });
+    expect(st.od600).toEqual({ last: 0.7, min: 0.7, max: 0.7, mean: 0.7, n: 1 });
+    expect(st.ph).toBeUndefined();
+    // only the window counts
+    expect((await plant.windowStats(id, ["temperature"], t0 + 90_000, clock.t)).temperature).toMatchObject({ min: 37.2, max: 38.1, last: 38.1, n: 2 });
+    expect(await plant.seriesBetween(id, "temperature", t0, clock.t + 120_000)).toEqual([
+      { ts: t0 + 60_000, value: 36.5 },
+      { ts: t0 + 120_000, value: 37.2 },
+      { ts: t0 + 180_000, value: 38.1 },
+    ]);
+    await db.close();
+  });
+
   it("ingests an MTConnect agent once per poll interval and derives status", async () => {
     const { db, plant, siteId, clock } = await setup();
     const fetchMock = vi.fn(async () => new Response(xml, { status: 200 }));

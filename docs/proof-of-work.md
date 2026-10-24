@@ -8,9 +8,11 @@ How Ordo proves that a lot's stages really ran, that their counts came from wher
 | --- | --- | --- |
 | A stage made N good and M scrap units between its start and end | The machine's **gateway**, with its own key (or the **operator**, for a manual stage) | An EIP-712 `OrdoReading` over `Poseidon(subject, good, scrap, startedAt, endedAt, salt)`. The counts stay private; the signature is public. |
 | Those counts meet the stage's criteria (yield, scrap, defects ppm, cycle time) | Ordo's server, as prover | A Groth16 proof from `circuits/stage_check.circom`, over the same commitment. Anyone can verify it: the server, a buyer's browser, or `OrdoStageVerifier` on-chain. |
+| An instrument measured a value for one bound of a stage's parameter (temperature stayed at least 35 °C, purity was at least 95 %) | The instrument's **gateway**, with its own key, from its own readings over the stage window | An EIP-712 `OrdoMeasurement` over `Poseidon(subject, value × 10⁴, salt)`, one per bound (`label`, and `label#max` for a range's upper bound). The value stays private. Ordo keeps the signed commitment only when the value is the one it measured itself (`matches`). |
+| That value meets the bound | Ordo's server, as prover | A Groth16 proof from `circuits/spec_check.circom` over the signed commitment; over Ordo's own commitment when nobody signed (a manual asset, an operator's reading, counts). Anyone can verify it: the server, a buyer's browser, or `OrdoSpecVerifier` on-chain. |
 | The signer is allowed to attest | The site, through ENS | The gateway owns a `member-<address>` name with `com.ordo.roles = device` (operators hold `operator`). `OrdoEnsRoles` reads it. |
 | The lot was released as signed | Performed by, Reviewed by, Approved by | Each signs an `OrdoRelease` that names the site, package, run, lot, content hash and **proof root**. All three sign the same statement. |
-| The release and the proofs agree | `OrdoLotResolver` (Sepolia) | At `recordRelease` it recovers every reading's signer, checks their ENS role, verifies every stage proof and folds them. The root it computes must equal the root the three signed. |
+| The release and the proofs agree | `OrdoLotResolver` (Sepolia) | At `recordRelease` it recovers every reading's and measurement's signer, checks their ENS role (device or operator), verifies every stage proof with `OrdoStageVerifier` and every source-signed parameter proof with `OrdoSpecVerifier`, and folds them: stages first, then parameters (`PARAM_LEAF`-marked leaves). The root it computes must equal the root the three signed. Parameters Ordo committed to itself are not in the root: no source stands behind them. |
 | The record has not been rewritten | Ordo's ledger and HCS | Every reading, proof and signature is in the hash-chained ledger. Each reading names the newest HCS anchor its signer had seen, so it cannot predate it. |
 
 ## Flow
@@ -42,12 +44,14 @@ How Ordo proves that a lot's stages really ran, that their counts came from wher
 - **Operator readings are weaker.** Ordo computes the operator's commitment, and the operator signs it. That attests "this person stood behind these counts", not machine data.
 - **The prover sees the counts.** Ordo's server holds counts and salts to prove. They are never published. A plant that does not want even that can run the prover on the gateway: the circuit and keys are the same.
 - **Replay.** Each gateway request is accepted once: the server remembers its nonce while its timestamp is fresh, ±2 minutes. That memory is per server instance.
-- **Criteria the circuit cannot prove** (OEE, anything not derived from counts and time) keep their per-criterion spec proofs (`spec_check`).
+- **Criteria the count circuit cannot prove** (OEE, measured signals, anything not derived from counts and time) keep their per-criterion spec proofs (`spec_check`): one Groth16 proof that a value meets its target without revealing it. A range or an envelope is two statements, one per bound; the upper bound is stored under `<label>#max` with its own salt, so the two proofs cannot be combined into the value. Values must be non-negative with at most four decimals.
+- **Who commits to a measured value.** Where the stage's asset has a gateway, the gateway signs the commitment (`OrdoMeasurement`) from its own readings, and that commitment is what the proof opens and the release folds; the passport shows "value signed by the instrument's gateway" and re-checks the signature. If the gateway's value is not the one Ordo measured (`matches` false), Ordo keeps the signed row but proves its own commitment, as it does for manual assets, operator readings and counts; the passport says "value committed by Ordo", and such proofs stay off the chain. A gateway that lies about a value can only prove a lie it signed; securing the instrument is the plant's job, as with counts.
+- **A new key re-proves everything.** Each `spec_proofs` row records the key it was proven for; after a new ceremony the server makes every proof again from the stored value and salt (`reconcile`). Commitments and ledger entries do not change.
 
 ## Trusted setup
 
 - **Phase 1** is the PSE Perpetual Powers of Tau: 80 public contributions, `ppot_0080_13.ptau`, sha256 `ccee2808…930f`. Ordo did not make it.
-- **Phase 2** is specific to `stage_check`. The setup is sound if any one contributor destroyed their randomness.
+- **Phase 2** is specific to each circuit, `stage_check` and `spec_check`, and the setup is sound if any one contributor destroyed their randomness. `scripts/zk-spec-setup.mjs` mirrors `zk-stage-setup.mjs` for the spec-check circuit and writes `server/zk/spec_check.ceremony.json`, served at `/v1/public/zk/spec-check`. Without a native `circom`, `CIRCOM` may point at a shim that runs `npx circom2`; the WebAssembly compiler needs circomlib's files copied in place of pnpm's symlinks.
 - `server/zk/stage_check.ceremony.json` lists every step.
 
 | Ceremony step | Status | How to do it |
@@ -57,7 +61,7 @@ How Ordo proves that a lot's stages really ran, that their counts came from wher
 | Close with a public beacon | Needed before a demo or production | `node scripts/zk-stage-setup.mjs beacon <future block hash>` |
 | Check the zkey | Anyone, at any time | `node scripts/zk-stage-setup.mjs verify`. It checks the zkey against the circuit and the public ptau. |
 
-Each step regenerates `src/OrdoStageVerifier.sol`, so after the last one, deploy the verifier and `OrdoLotResolver` again.
+The same steps apply to `spec_check` with `scripts/zk-spec-setup.mjs` (first contribution done in the Ordo build; further contributions and the beacon are still needed). Each step regenerates the verifier contract (`src/OrdoStageVerifier.sol` or `src/OrdoSpecVerifier.sol`), so after the last one, deploy the verifiers and `OrdoLotResolver` again.
 
 ## Redeploying
 
@@ -67,11 +71,12 @@ This change alters the contracts' interfaces. Redeploy:
 | --- | --- | --- |
 | `OrdoTrust` | The constructor takes a registrar: only it may register a site. | `TRUST_REGISTRAR` defaults to the deployer; set it to the relayer's address. Run `deploy:trust`, then `setup:hedera contracts` for `OrdoWorkOrders` and `OrdoPolicies`, which point at it. |
 | `OrdoEnsRoles`, `OrdoStageVerifier`, `OrdoLotResolver` | Device role and full-address member labels | `pnpm setup:ens-contracts` |
+| `OrdoSpecVerifier`, `OrdoLotResolver` | The resolver takes the spec verifier and `recordRelease` takes a fourth argument, the parameter proofs; the spec-check key comes from the public ceremony | `pnpm setup:ens-contracts` deploys both verifiers and the resolver; set the new `ENS_LOT_RESOLVER_ADDRESS`. Releases recorded with the old resolver stay where they are. |
 
 What else changes:
 
 - OrdoTrust's `OrdoSignature` domain is now version 2, with `chainId` and `verifyingContract`. A signature for one deployment cannot be replayed on another.
 - `OrdoWorkOrders`, `OrdoPolicies` and `OrdoAgentNFT` still use the version 1 domain.
-- Release and reading statements use `{name: "Ordo", version: "2"}`, with no chain. They are statements about a lot, so the same signature is checked on Hedera and on Sepolia.
+- Release, reading and measurement statements use `{name: "Ordo", version: "2"}`, with no chain. They are statements about a lot, so the same signature is checked on Hedera and on Sepolia.
 - Packages submitted before this change must be returned and signed again: their signatures are not release statements.
 - Existing `member-<6 hex>` names are revoked and reissued as `member-<40 hex>`.

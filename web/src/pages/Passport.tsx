@@ -4,6 +4,7 @@ import { dateTime, shortAddr } from "../lib/format";
 import { fromUnits } from "../lib/wallet";
 import type { PassportStatus, PublicPassport, SpecProof, StageWork } from "../types";
 import { QR } from "../ui/QR";
+import { SpecBand } from "../ui/SpecBand";
 
 const STATUS: Record<PassportStatus, [string, string]> = {
   in_production: ["In production", "warn"],
@@ -23,14 +24,42 @@ const Check = ({ ok, children }: { ok: boolean | null; children: React.ReactNode
 
 type BrowserCheck = { state: "idle" } | { state: "checking" } | { state: "done"; ok: number; of: number } | { state: "error"; message: string };
 
+const MEASUREMENT_TYPES = {
+  OrdoMeasurement: [
+    { name: "site", type: "string" },
+    { name: "runId", type: "string" },
+    { name: "stage", type: "string" },
+    { name: "asset", type: "string" },
+    { name: "criterion", type: "string" },
+    { name: "commitment", type: "uint256" },
+    { name: "anchor", type: "bytes32" },
+    { name: "signedAt", type: "uint64" },
+  ],
+} as const;
+
 /**
  * Re-check every proof here, with snarkjs and the published verification key, so a buyer need not trust Ordo's
- * server: each proof must verify, and its public signals must be the subject, target and commitment shown.
+ * server: each proof must verify for the commitment shown, and where the instrument's gateway (or the operator) signed
+ * that commitment as an OrdoMeasurement, the signature must recover the signer shown.
  */
 async function verifyInBrowser(proofs: SpecProof[]): Promise<{ ok: number; of: number }> {
-  const [{ groth16 }, key] = await Promise.all([import("snarkjs"), api.get<{ verificationKey: unknown }>("/v1/public/zk/spec-check")]);
+  const [{ groth16 }, { recoverTypedDataAddress }, key] = await Promise.all([import("snarkjs"), import("viem"), api.get<{ verificationKey: unknown }>("/v1/public/zk/spec-check")]);
   let ok = 0;
-  for (const z of proofs) if (z.publicSignals && (await groth16.verify(key.verificationKey, z.publicSignals, z.proof as never).catch(() => false))) ok++;
+  for (const z of proofs) {
+    if (!z.publicSignals) continue;
+    const m = z.measurement;
+    if (m) {
+      const signer = await recoverTypedDataAddress({
+        domain: { name: "Ordo", version: "2" },
+        types: MEASUREMENT_TYPES,
+        primaryType: "OrdoMeasurement",
+        message: { site: m.site, runId: m.runId, stage: m.stage, asset: m.asset, criterion: m.criterion, commitment: BigInt(m.commitment), anchor: m.anchor as `0x${string}`, signedAt: BigInt(m.signedAt) },
+        signature: m.signature as `0x${string}`,
+      }).catch(() => null);
+      if (signer?.toLowerCase() !== z.signer?.toLowerCase() || z.publicSignals[3] !== m.commitment) continue;
+    }
+    if (await groth16.verify(key.verificationKey, z.publicSignals, z.proof as never).catch(() => false)) ok++;
+  }
   return { ok, of: proofs.length };
 }
 
@@ -93,7 +122,8 @@ export function Passport({ runId }: { runId: string }) {
   const proof = x.proof;
   const criteria = x.stages.flatMap((s) => s.criteria);
   const met = criteria.filter((c) => c.ok === true);
-  const proven = met.flatMap((c) => (c.zk?.status === "proven" ? [c.zk] : []));
+  // a range or envelope carries two proofs, one per bound; both must verify
+  const proven = met.flatMap((c) => [c.zk, c.zkMax].flatMap((z) => (z?.status === "proven" ? [z] : [])));
   const runBrowserCheck = () => {
     setBrowser({ state: "checking" });
     verifyInBrowser(proven)
@@ -154,8 +184,9 @@ export function Passport({ runId }: { runId: string }) {
           )}
           {met.length > 0 && (
             <Check ok={proven.length === met.length && proven.every((z) => z.verified) ? true : proven.some((z) => z.verified === false) ? false : null}>
-              {proven.length} of {met.length} criteria met are proven in zero knowledge: each proof shows the measurement meets its target without revealing it, against a
-              commitment recorded in the ledger when the stage closed.{" "}
+              {proven.length} of {met.reduce((n, c) => n + (c.zkMax ? 2 : 1), 0)} bounds across {met.length} criteria met are proven in zero knowledge: each proof shows the measurement meets its target without
+              revealing it, against a commitment recorded in the ledger when the stage closed, signed by the instrument&apos;s gateway or the operator where the value was measured at the source. A range or envelope proves each bound
+              separately.{" "}
               {proven.length > 0 &&
                 (browser.state === "idle" ? (
                   <button type="button" className="link" onClick={runBrowserCheck}>
@@ -319,15 +350,31 @@ export function Passport({ runId }: { runId: string }) {
                     <b>{s.code}</b> {s.name}
                     <div className="faint small">{s.resource}</div>
                     {s.criteria.map((c) => (
-                      <div key={c.label} className="small">
-                        {c.ok === null ? "·" : c.ok ? "✓" : "✕"} {c.label} {c.target}
+                      <div key={c.label} className="small pp-crit">
+                        <span>
+                          {c.ok === null ? "·" : c.ok ? "✓" : "✕"} {c.label} {c.target}
+                        </span>
+                        {/* the acceptable band is public; where the measurement fell is not */}
+                        <SpecBand compact lo={c.band?.lo ?? null} hi={c.band?.hi ?? null} value={null} ok={c.ok} unit={c.unit} label={`${c.label} ${c.target}`} />
+                        {[c.zk, c.zkMax].map(
+                          (z, i) =>
+                            z && (
+                              <span key={i} className={`tag ${z.verified ? "ok" : z.status === "pending" ? "warn" : "bad"}`} title={z.detail}>
+                                {z.status === "proven" ? (z.verified ? "ZK proof verified" : "ZK proof invalid") : z.status === "pending" ? "ZK proof pending" : "no ZK proof"}
+                                {c.zkMax ? (i === 0 ? " · lower" : " · upper") : ""}
+                              </span>
+                            ),
+                        )}
                         {c.zk && (
-                          <>
-                            {" "}
-                            <span className={`tag ${c.zk.verified ? "ok" : c.zk.status === "pending" ? "warn" : "bad"}`} title={c.zk.detail}>
-                              {c.zk.status === "proven" ? (c.zk.verified ? "ZK proof verified" : "ZK proof invalid") : c.zk.status === "pending" ? "ZK proof pending" : "no ZK proof"}
-                            </span>
-                          </>
+                          <span className="faint pp-signer">
+                            {c.zk.signerKind === "ordo" ? (
+                              "value committed by Ordo"
+                            ) : (
+                              <>
+                                value signed by {c.zk.signerKind === "device" ? "the instrument's gateway" : "the operator"} <span className="mono">{c.zk.signerEns ?? shortAddr(c.zk.signer ?? "")}</span>
+                              </>
+                            )}
+                          </span>
                         )}
                       </div>
                     ))}

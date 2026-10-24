@@ -356,4 +356,25 @@ CREATE TABLE agent_memory_keys (memory_id TEXT NOT NULL REFERENCES agent_memorie
   sealed_key TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY (memory_id, site_id));
 `,
   },
+  {
+    version: 21,
+    name: "stage series",
+    sql: `
+CREATE TABLE stage_series (run_id TEXT NOT NULL REFERENCES runs(id), stage_code TEXT NOT NULL, signal TEXT NOT NULL, t_ms BIGINT NOT NULL,
+  value DOUBLE PRECISION NOT NULL, PRIMARY KEY (run_id, stage_code, signal, t_ms));
+`,
+  },
+  {
+    version: 22,
+    name: "source-signed measurements",
+    sql: `
+CREATE TABLE measurement_readings (run_id TEXT NOT NULL REFERENCES runs(id), stage_code TEXT NOT NULL, label TEXT NOT NULL, site_id TEXT NOT NULL, asset_id TEXT,
+  signer TEXT NOT NULL, signer_kind TEXT NOT NULL, value TEXT NOT NULL, salt TEXT NOT NULL, subject TEXT NOT NULL, commitment TEXT NOT NULL, anchor TEXT NOT NULL,
+  signed_at_s BIGINT NOT NULL, signature TEXT NOT NULL, matches BOOLEAN NOT NULL, ledger_seq INTEGER, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (run_id, stage_code, label));
+ALTER TABLE spec_proofs ADD COLUMN signer TEXT;
+ALTER TABLE spec_proofs ADD COLUMN signer_kind TEXT;
+ALTER TABLE spec_proofs ADD COLUMN vkey_sha256 TEXT;
+`,
+  },
 ];

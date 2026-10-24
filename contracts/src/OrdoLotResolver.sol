@@ -10,6 +10,11 @@ interface IStageVerifier {
     function verifyProof(uint256[2] calldata a, uint256[2][2] calldata b, uint256[2] calldata c, uint256[14] calldata signals) external view returns (bool);
 }
 
+/// The generated Groth16 verifier of circuits/spec_check.circom (OrdoSpecVerifier).
+interface ISpecVerifier {
+    function verifyProof(uint256[2] calldata a, uint256[2][2] calldata b, uint256[2] calldata c, uint256[4] calldata signals) external view returns (bool);
+}
+
 /// The gateway call a CCIP-Read client makes for an off-chain answer (EIP-3668, as in ENS's OffchainResolver).
 interface IResolverService {
     function resolve(bytes calldata name, bytes calldata data) external view returns (bytes memory result, uint64 expires, bytes memory sig);
@@ -25,8 +30,10 @@ interface IResolverService {
 ///      1. three people whose ENS member names carry the right roles (OrdoEnsRoles) signed an `OrdoRelease` naming this
 ///         site, package, run, lot, content hash and proof root (so revoking a name stops that person releasing), and
 ///      2. every stage proof checks: its reading was signed by a gateway holding DEVICE or an operator at the site,
-///         and its Groth16 proof (OrdoStageVerifier) shows the signed counts meet the stage's criteria, and the
-///         stages fold to the proof root the three people signed.
+///         and its Groth16 proof (OrdoStageVerifier) shows the signed counts meet the stage's criteria, and
+///      3. every parameter proof checks: its measurement was signed by such a gateway or operator, and its Groth16
+///         proof (OrdoSpecVerifier) shows the signed value meets the criterion's bound; and stages, then parameters,
+///         fold to the proof root the three people signed.
 ///    `com.ordo.release*` text records are answered from it directly.
 ///  - Everything else about the lot (passport URL, status, product…) comes from Ordo's ledger through CCIP-Read
 ///    (EIP-3668): the resolver reverts with OffchainLookup, the client asks Ordo's gateway, and `resolveWithProof`
@@ -38,6 +45,7 @@ contract OrdoLotResolver is OrdoSigned {
         bytes32 contentHash;
         bytes32 proofRoot;
         uint16 stagesProven;
+        uint16 paramsProven;
         address performedBy;
         address reviewedBy;
         address approvedBy;
@@ -47,6 +55,7 @@ contract OrdoLotResolver is OrdoSigned {
 
     OrdoEnsRoles public immutable credentials;
     IStageVerifier public immutable stageVerifier;
+    ISpecVerifier public immutable specVerifier;
     IExtendedResolver public immutable fallbackResolver;
     address public owner;
     address public signer;
@@ -59,6 +68,8 @@ contract OrdoLotResolver is OrdoSigned {
     event LotReleased(bytes32 indexed node, bytes32 indexed site, string lotLabel, string packageId, bytes32 contentHash, bytes32 proofRoot, address performedBy, address reviewedBy, address approvedBy);
     /// one stage of a released lot, proven: who signed its reading and the commitment the proof was checked against
     event StageProven(bytes32 indexed node, string stage, string asset, address indexed signer, uint256 commitment, bytes32 anchor);
+    /// one measured parameter of a released lot, proven: who signed its measurement and the commitment the proof was checked against
+    event ParameterProven(bytes32 indexed node, string stage, string criterion, address indexed signer, uint256 commitment, bytes32 anchor);
     event GatewayChanged(address signer, string[] urls);
 
     error OffchainLookup(address sender, string[] urls, bytes callData, bytes4 callbackFunction, bytes extraData);
@@ -70,14 +81,16 @@ contract OrdoLotResolver is OrdoSigned {
     error ExpiredAnswer();
     error BadAnswer();
     error BadProof(string stage);
+    error BadParamProof(string stage, string criterion);
     error WrongProofRoot();
     error NotAttester(address signer);
 
     bytes4 private constant TEXT = ITextResolver.text.selector;
 
-    constructor(OrdoEnsRoles _credentials, IStageVerifier _stageVerifier, IExtendedResolver _fallback, address _signer, string[] memory _gateways) {
+    constructor(OrdoEnsRoles _credentials, IStageVerifier _stageVerifier, ISpecVerifier _specVerifier, IExtendedResolver _fallback, address _signer, string[] memory _gateways) {
         credentials = _credentials;
         stageVerifier = _stageVerifier;
+        specVerifier = _specVerifier;
         fallbackResolver = _fallback;
         owner = msg.sender;
         signer = _signer;
@@ -104,16 +117,32 @@ contract OrdoLotResolver is OrdoSigned {
     /// Record that a lot was released, with its proof of work. sigs = [performed, reviewed, approved], each an
     /// `OrdoRelease` (OrdoProofs) for exactly this lot. Three different people: the performer must hold a role at the
     /// site, the reviewer VALIDATOR, the approver VALIDATOR and PLANT_MANAGER, all through their ENS member names.
-    /// `proofs` are the lot's proven stages, in the order they fold into `lot.proofRoot`.
-    function recordRelease(OrdoProofs.ReleaseLot calldata lot, OrdoProofs.ReleaseSig[3] calldata sigs, OrdoProofs.StageProof[] calldata proofs) external {
+    /// `proofs` are the lot's proven stages and `params` its proven measured parameters, in the order they fold into `lot.proofRoot`.
+    function recordRelease(OrdoProofs.ReleaseLot calldata lot, OrdoProofs.ReleaseSig[3] calldata sigs, OrdoProofs.StageProof[] calldata proofs, OrdoProofs.ParamProof[] calldata params) external {
         if (!_isLot(bytes(lot.lotLabel))) revert NotALot();
         bytes32 k = keccak256(bytes(lot.siteId));
+        bytes32 node = _lotNode(k, lot.lotLabel);
+        address[3] memory who = _signers(k, lot, sigs);
+        if (_proveAll(k, node, lot, proofs, params) != lot.proofRoot) revert WrongProofRoot();
+        _record(k, node, lot, who, uint16(proofs.length), uint16(params.length));
+    }
+
+    /// The lot's ENS node under its site's name.
+    function _lotNode(bytes32 k, string calldata lotLabel) internal view returns (bytes32) {
         string[] memory site = credentials.siteLabels(k);
         if (site.length == 0) revert UnknownSite();
-        address[3] memory who = _signers(k, lot, sigs);
-        bytes32 node = OrdoEnsName.namehash(OrdoEnsName.prepend(lot.lotLabel, site));
-        if (_proveStages(k, node, lot, proofs) != lot.proofRoot) revert WrongProofRoot();
-        latestRelease[node] = Release(k, lot.contentHash, lot.proofRoot, uint16(proofs.length), who[0], who[1], who[2], uint64(block.timestamp), lot.packageId);
+        return OrdoEnsName.namehash(OrdoEnsName.prepend(lotLabel, site));
+    }
+
+    /// Stages fold first, then parameters.
+    function _proveAll(bytes32 k, bytes32 node, OrdoProofs.ReleaseLot calldata lot, OrdoProofs.StageProof[] calldata proofs, OrdoProofs.ParamProof[] calldata params) internal returns (bytes32) {
+        bytes32 root = _proveStages(k, node, lot, proofs);
+        root = _proveParams(k, node, lot, params, root);
+        return root;
+    }
+
+    function _record(bytes32 k, bytes32 node, OrdoProofs.ReleaseLot calldata lot, address[3] memory who, uint16 stages, uint16 params) internal {
+        latestRelease[node] = Release(k, lot.contentHash, lot.proofRoot, stages, params, who[0], who[1], who[2], uint64(block.timestamp), lot.packageId);
         releaseCount[node] += 1;
         emit LotReleased(node, k, lot.lotLabel, lot.packageId, lot.contentHash, lot.proofRoot, who[0], who[1], who[2]);
     }
@@ -142,6 +171,22 @@ contract OrdoLotResolver is OrdoSigned {
             root = OrdoProofs.fold(root, subject, p, attester);
             emit StageProven(node, p.stage, p.asset, attester, p.commitment, p.anchor);
         }
+    }
+
+    /// Check every parameter proof and fold it after the stages: the measurement's signer must hold DEVICE or OPERATOR at
+    /// the site, and the spec-check proof must verify for this lot, stage and criterion with the signed commitment.
+    function _proveParams(bytes32 k, bytes32 node, OrdoProofs.ReleaseLot calldata lot, OrdoProofs.ParamProof[] calldata params, bytes32 root) internal returns (bytes32) {
+        uint8 attesters = credentials.DEVICE() | credentials.OPERATOR();
+        for (uint256 i = 0; i < params.length; i++) {
+            OrdoProofs.ParamProof calldata p = params[i];
+            address attester = OrdoProofs.recover(OrdoProofs.measurementDigest(lot.siteId, lot.runId, p), p.sig);
+            if (credentials.roles(k, attester) & attesters == 0) revert NotAttester(attester);
+            uint256 subject = OrdoProofs.specSubjectOf(lot.runId, p.stage, p.criterion);
+            if (!specVerifier.verifyProof(p.a, p.b, p.c, OrdoProofs.paramSignals(subject, p))) revert BadParamProof(p.stage, p.criterion);
+            root = OrdoProofs.foldParam(root, subject, p, attester);
+            emit ParameterProven(node, p.stage, p.criterion, attester, p.commitment, p.anchor);
+        }
+        return root;
     }
 
     /// needs = 0: any role at the site
@@ -195,7 +240,8 @@ contract OrdoLotResolver is OrdoSigned {
         if (k == keccak256("com.ordo.release.package")) return (true, r.packageId);
         if (k == keccak256("com.ordo.release.at")) return (true, _dec(r.releasedAt));
         if (k == keccak256("com.ordo.release.count")) return (true, _dec(releaseCount[node]));
-        if (k == keccak256("com.ordo.release.proofs")) return (true, string.concat(_dec(r.stagesProven), " stages proven, root ", _hex32(r.proofRoot)));
+        if (k == keccak256("com.ordo.release.proofs"))
+            return (true, string.concat(_dec(r.stagesProven), " stages and ", _dec(r.paramsProven), " parameters proven, root ", _hex32(r.proofRoot)));
         if (k == keccak256("com.ordo.release.signers"))
             return (true, string.concat(credentials.memberName(r.site, r.performedBy), ",", credentials.memberName(r.site, r.reviewedBy), ",", credentials.memberName(r.site, r.approvedBy)));
         return (false, "");

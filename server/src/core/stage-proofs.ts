@@ -6,7 +6,8 @@ import type { Groth16Proof } from "snarkjs";
 import { encodeAbiParameters, keccak256, recoverTypedDataAddress, type Address, type Hex } from "viem";
 import { PROOF_DOMAIN, READING_TYPES } from "../auth/auth.js";
 import type { Db } from "../db/db.js";
-import type { Criterion } from "../domain/types.js";
+import type { Criterion, CriterionKind } from "../domain/types.js";
+import { kindOf } from "../pipelines/criteria.js";
 import type { RunEngine } from "../pipelines/engine.js";
 import { snark } from "./spec-proofs.js";
 
@@ -49,11 +50,11 @@ export interface Slot {
   op: bigint;
   target: bigint;
 }
-/** Which criteria the circuit can prove, as slots; the rest (OEE, anything not from counts and times) it cannot. */
+/** Which criteria the circuit can prove, as slots; the rest (OEE, measured signals, anything not from counts and times) it cannot. A range is left to the spec proofs. */
 export function slotOf(c: Criterion): Slot | null {
-  const label = c.label.toLowerCase();
-  const kind = /yield/.test(label) ? 1n : /^scrap/.test(label) ? 2n : /^defects/.test(label) && c.unit === "ppm" ? 3n : /cycle time/.test(label) ? (c.unit === "s" ? 4n : 5n) : null;
-  if (kind === null || c.target < 0) return null;
+  const kinds: Partial<Record<CriterionKind, bigint>> = { yield: 1n, scrap_pct: 2n, defects_ppm: 3n, cycle_time: c.unit === "s" ? 4n : 5n };
+  const kind = kinds[kindOf(c)] ?? null;
+  if (kind === null || c.target < 0 || c.targetMax !== undefined) return null;
   const target = BigInt(Math.round(c.target * Number(SCALE)));
   if (Math.abs(c.target * Number(SCALE) - Number(target)) > 1e-6 || target >= 2n ** 64n) return null;
   return { label: c.label, kind, op: OPS[c.op], target };

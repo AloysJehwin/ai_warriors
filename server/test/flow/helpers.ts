@@ -18,6 +18,8 @@ export interface Client {
   call<T = any>(method: string, path: string, body?: unknown): Promise<{ status: number; json: T }>;
   sign(typed: any): Promise<`0x${string}`>;
   upload<T = any>(path: string, form: FormData): Promise<{ status: number; json: T }>;
+  /** a signed-in request whose body is not JSON (a stored evidence file) */
+  raw(method: string, path: string): Promise<Response>;
 }
 
 /** A browser-like client with its own wallet and session cookie. */
@@ -44,7 +46,8 @@ export async function wallet(app: ReturnType<typeof createApp>, key: `0x${string
     const res = await app.request(path, { method: "POST", body: form, headers: { host: "localhost", origin: "http://localhost", cookie } });
     return { status: res.status, json: await res.json() };
   };
-  return { account, address: account.address.toLowerCase(), call, upload, sign: (typed) => account.signTypedData(asTyped(typed)) };
+  const raw = async (method: string, path: string) => app.request(path, { method, headers: { host: "localhost", origin: "http://localhost", cookie } });
+  return { account, address: account.address.toLowerCase(), call, upload, raw, sign: (typed) => account.signTypedData(asTyped(typed)) };
 }
 
 /** Typed data as the server sends it (JSON): uint fields arrive as decimal strings, as the console converts them. */

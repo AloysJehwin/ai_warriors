@@ -9,6 +9,7 @@ import { QR } from "../ui/QR";
 import { DateTimePicker } from "../ui/Calendar";
 import { Action, Empty, Field, Loading, Modal, Segmented, useToast } from "../ui/kit";
 import { Select } from "../ui/Select";
+import { SpecBand } from "../ui/SpecBand";
 import { HoldModal, RecordModal, StageDrawer, useStageActions } from "./pipeline/StageParts";
 import { FlowView, GraphView, LedgerView } from "./pipeline/Views";
 
@@ -231,6 +232,19 @@ function RunScreen({ runId, runs, onNew }: { runId: string; runs: RunView[]; onN
                       {c.ok === false ? `Out of target: ${c.label} ${c.actual} (target ${c.target})` : `Not measured: ${c.label} (target ${c.target}), confirm before release`}
                     </li>
                   ))}
+              </ul>
+            )}
+            {s.criteriaResults.length > 0 && (
+              <ul className="band-list" aria-label="Parameters against their bands">
+                {s.criteriaResults.map((c) => (
+                  <li key={c.label}>
+                    <span className="bl-name" title={c.label}>
+                      {c.label}
+                    </span>
+                    <SpecBand compact lo={c.band?.lo ?? null} hi={c.band?.hi ?? null} value={c.measured?.value ?? null} valueMax={c.measuredMax?.value ?? null} ok={c.ok} unit={c.unit} label={c.label} />
+                    <span className={`bl-val ${c.ok === false ? "bad-text" : c.ok === null ? "faint" : ""}`}>{c.actual ?? "not measured"}</span>
+                  </li>
+                ))}
               </ul>
             )}
             <div className="metrics3">

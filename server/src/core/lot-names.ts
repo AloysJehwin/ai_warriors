@@ -10,6 +10,7 @@ import { personLabel } from "./names.js";
 import type { Passports } from "./passports.js";
 import type { Recorder } from "./recorder.js";
 import type { StageProofArg } from "./stage-proofs.js";
+import type { ParamProofArg } from "./spec-proofs.js";
 
 /** What LotNames needs from ENSv2 and Ordo's two ENS contracts (EnsV2 in production). */
 export interface LotRail {
@@ -20,7 +21,7 @@ export interface LotRail {
   resolverOf(registry: Address, label: string): Promise<Address>;
   sendUseLotResolver(label: string): Promise<Hex>;
   rolesOf(siteId: string, label: string, account: Address): Promise<number>;
-  sendRecordRelease(i: { lot: ReleaseLot; sigs: ReleaseSigArg[]; proofs: StageProofArg[] }): Promise<Hex>;
+  sendRecordRelease(i: { lot: ReleaseLot; sigs: ReleaseSigArg[]; proofs: StageProofArg[]; params: ParamProofArg[] }): Promise<Hex>;
   signAnswer(request: Hex, result: Hex, expires: bigint): Promise<Hex>;
   check(hashes: Hex[]): Promise<TxState>;
   txUrl(hash: string): string | null;
@@ -48,6 +49,8 @@ interface ReleasePayload {
   lot: ReleaseLot;
   sigs: ReleaseSigArg[];
   proofs: StageProofArg[];
+  /** source-signed parameter proofs, folded after the stages (absent on releases recorded before they existed) */
+  params?: ParamProofArg[];
   signers: { meaning: string; address: Address }[];
 }
 // payloads carry uint64/uint256 values: keep them exact through JSON
@@ -134,7 +137,7 @@ export class LotNames {
   }
 
   /** Queue a released package to be recorded against the signers' ENS credentials, with its stage proofs. */
-  async release(siteId: string, lot: ReleaseLot, proofs: StageProofArg[]) {
+  async release(siteId: string, lot: ReleaseLot, proofs: StageProofArg[], params: ParamProofArg[] = []) {
     if (!this.rail || !lot.runId) return;
     const packageId = lot.packageId;
     const rows = await this.db.query<{ meaning: string; address: string; typed_data: string; signature: string }>(
@@ -151,6 +154,7 @@ export class LotNames {
       lot,
       sigs: ordered.map((r) => releaseSigArg(JSON.parse(r.typed_data) as ReleaseTyped, r.signature)),
       proofs,
+      params,
       signers: ordered.map((r) => ({ meaning: r.meaning, address: r.address as Address })),
     };
     await this.db.query("INSERT INTO ens_lots (id, site_id, kind, ref, run_id, label, name, status, payload_json, next_try_at) VALUES ($1,$2,'release',$3,$4,'','','pending',$5,$6) ON CONFLICT DO NOTHING", [
@@ -208,7 +212,7 @@ export class LotNames {
       if (need.bits === 0 ? bits === 0 : (bits & need.bits) !== need.bits) throw new Error(`${s.address} (${s.meaning}) does not hold ${need.label} through an ENS member name at this site yet`);
     }
     if (lot.label !== p.lot.lotLabel) throw new Error(`The release was signed for ${p.lot.lotLabel}, but the lot's ENS name is ${lot.name}`);
-    const hash = await rail.sendRecordRelease({ lot: p.lot, sigs: p.sigs, proofs: p.proofs });
+    const hash = await rail.sendRecordRelease({ lot: p.lot, sigs: p.sigs, proofs: p.proofs, params: p.params ?? [] });
     await this.db.query("UPDATE ens_lots SET label = $1, name = $2 WHERE id = $3", [lot.label, lot.name, r.id]);
     await this.sent(r, [hash]);
   }
@@ -232,8 +236,9 @@ export class LotNames {
     else {
       const p = fromJson<ReleasePayload>(r.payload_json!);
       const lot = await this.row("lot", p.lot.runId);
-      const proven = p.proofs.length ? ` and ${p.proofs.length} stage proof${p.proofs.length === 1 ? "" : "s"} verified on-chain` : "";
-      await this.rec.decide(r.site_id, { agent: "system:ens", kind: "ens.lot_released", runId: p.lot.runId, summary: `Recorded the release on ${lot?.name ?? "the lot's ENS name"}, checked against the signers' ENS credentials${proven}`, data: { name: lot?.name ?? null, packageId: r.ref, proofRoot: p.lot.proofRoot, stagesProven: p.proofs.length, tx: last } });
+      const nParams = p.params?.length ?? 0;
+      const proven = p.proofs.length || nParams ? ` and ${p.proofs.length} stage proof${p.proofs.length === 1 ? "" : "s"}${nParams ? ` and ${nParams} parameter proof${nParams === 1 ? "" : "s"}` : ""} verified on-chain` : "";
+      await this.rec.decide(r.site_id, { agent: "system:ens", kind: "ens.lot_released", runId: p.lot.runId, summary: `Recorded the release on ${lot?.name ?? "the lot's ENS name"}, checked against the signers' ENS credentials${proven}`, data: { name: lot?.name ?? null, packageId: r.ref, proofRoot: p.lot.proofRoot, stagesProven: p.proofs.length, paramsProven: nParams, tx: last } });
     }
   }
 

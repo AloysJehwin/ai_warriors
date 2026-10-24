@@ -107,9 +107,9 @@ describe("assets and real readings", () => {
 
 describe("pipelines", () => {
   let versionId = "";
-  it("ships the 15 library templates", async () => {
+  it("ships the 16 library templates", async () => {
     const t = await admin.call("GET", `${S()}/templates`);
-    expect(t.json.filter((x: any) => x.origin === "library")).toHaveLength(15);
+    expect(t.json.filter((x: any) => x.origin === "library")).toHaveLength(16);
   });
 
   it("publishes a custom template from the builder", async () => {

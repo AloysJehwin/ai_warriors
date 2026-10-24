@@ -6,7 +6,8 @@ import type { Recorder } from "../core/recorder.js";
 import type { Templates } from "../core/templates.js";
 import type { Inbox } from "../core/inbox.js";
 import type { Schedules } from "../core/schedules.js";
-import { evaluateCriteria } from "./criteria.js";
+import { evaluateCriteria, reshape, signalsOf, type SignalStats, type StageMeasurements } from "./criteria.js";
+import type { StageSeries } from "./stage-series.js";
 import { predecessors } from "./graph.js";
 
 const RUN_ID_LOCK = 4243;
@@ -25,6 +26,8 @@ interface StageData {
   confirmedBy?: string;
   /** when the work finished: the end of the window a signed reading covers */
   workDoneAt?: string;
+  /** parameter values an operator recorded for a stage with no asset to hold them as telemetry */
+  readings?: Record<string, { value: number; ts: string }>;
 }
 interface StageRow {
   run_id: string;
@@ -67,6 +70,8 @@ export class RunEngine {
   inbox!: Inbox;
   /** Set when stage timeouts run on Hedera's Schedule Service */
   timeouts: Pick<Schedules, "stageTimeout"> | null = null;
+  /** Set when the signals a stage's criteria read are snapshotted with the run as its work finishes */
+  series: StageSeries | null = null;
   constructor(
     private db: Db,
     private plant: PlantService,
@@ -127,8 +132,8 @@ export class RunEngine {
   }
 
   // ---------------- Operator actions ----------------
-  /** Record units for a stage (manual stages, or assets without a part counter). */
-  async record(siteId: string, actor: string, runId: string, code: string, input: { good: number; scrap: number; complete: boolean; note?: string }) {
+  /** Record units for a stage (manual stages, or assets without a part counter), and the parameter values its criteria need. */
+  async record(siteId: string, actor: string, runId: string, code: string, input: { good: number; scrap: number; complete: boolean; note?: string; readings?: { signal: string; value: number }[] }) {
     const ctx = await this.context(siteId, runId);
     const row = this.row(ctx, code);
     if (row.state !== "running") throw new HttpError(409, `Stage ${code} is ${row.state.replace("_", " ")}`);
@@ -136,6 +141,17 @@ export class RunEngine {
     const spec = this.spec(ctx.tpl, code);
     const good = hasCounter && spec.mode !== "manual" ? Number(row.units_good) : Math.max(0, Math.round(input.good));
     await this.db.query("UPDATE stage_runs SET units_good = $1, units_scrap = $2 WHERE run_id = $3 AND code = $4", [good, Math.max(0, Math.round(input.scrap)), runId, code]);
+    if (input.readings?.length) {
+      // measured on the stage's asset when it has one (the same path a manual data source uses), else kept with the stage
+      const readings = input.readings.map((r) => ({ signal: r.signal.trim().toLowerCase().replace(/\s+/g, "_"), value: r.value }));
+      if (row.asset_id) for (const r of readings) await this.plant.manualReading(siteId, row.asset_id, { signal: r.signal, value: r.value, text: null });
+      else {
+        const data = JSON.parse(row.data_json) as StageData;
+        const ts = new Date(this.now()).toISOString();
+        await this.patchData(runId, code, { readings: { ...(data.readings ?? {}), ...Object.fromEntries(readings.map((r) => [r.signal, { value: r.value, ts }])) } });
+      }
+      await this.rec.decide(siteId, { agent: actor, kind: "stage.parameters_recorded", runId, stageCode: code, summary: `Recorded ${readings.length} parameter reading(s) for ${code} ${spec.name}`, data: { readings } });
+    }
     await this.rec.decide(siteId, {
       agent: actor,
       kind: "stage.recorded",
@@ -233,8 +249,15 @@ export class RunEngine {
           }
         }
       }
+      // a batch process may close on its phase signal instead of its counts; the whole order counts as made when it does
+      const phase = spec.completeOn && asset ? asset.latest[spec.completeOn.signal] : undefined;
+      const phaseReached = Boolean(spec.completeOn && phase && (!row.started_at || Date.parse(phase.ts) >= Date.parse(row.started_at)) && String(phase.text ?? phase.value ?? "").toLowerCase() === spec.completeOn.equals.toLowerCase());
+      if (phaseReached && good + scrap === 0) {
+        good = ctx.run.quantity;
+        await this.db.query("UPDATE stage_runs SET units_good = $1 WHERE run_id = $2 AND code = $3", [good, runId, row.code]);
+      }
       const total = good + scrap;
-      const workDone = data.workDone || (spec.mode !== "manual" && spec.resourceKind !== "system" && total >= ctx.run.quantity && total > 0);
+      const workDone = data.workDone || (spec.mode !== "manual" && spec.resourceKind !== "system" && (spec.completeOn ? phaseReached : total >= ctx.run.quantity && total > 0));
       if (workDone) {
         await this.finishWork(ctx, { ...row, units_good: good, units_scrap: scrap }, spec);
         continue;
@@ -357,7 +380,7 @@ export class RunEngine {
     const startedAt = row.started_at ? Date.parse(row.started_at) : this.now();
     const durationMin = (this.now() - startedAt) / 60_000;
     const asset = row.asset_id ? ctx.assets.get(row.asset_id) : undefined;
-    const criteria = evaluateCriteria(spec.criteria, { good, scrap, durationMin, activeOee: asset?.oee ?? null });
+    const criteria = evaluateCriteria(spec.criteria, await this.measurements(row, spec, { good, scrap, durationMin, activeOee: asset?.oee ?? null }, startedAt, true));
     const failed = criteria.filter((c) => c.ok === false);
     const unknown = criteria.filter((c) => c.ok === null);
     const total = good + scrap;
@@ -365,6 +388,8 @@ export class RunEngine {
     const outcome = `${good} good · ${scrap} scrap · ${yieldTxt} in ${Math.round(durationMin)} min${asset ? ` on ${asset.name}` : ""}`;
     await this.db.query("UPDATE stage_runs SET outcome = $1 WHERE run_id = $2 AND code = $3", [outcome, runId, row.code]);
     await this.patchData(runId, row.code, { workDone: true, criteria, workDoneAt: new Date(this.now()).toISOString() });
+    const signals = signalsOf(spec.criteria);
+    if (this.series && signals.length && row.asset_id) await this.series.capture(runId, row.code, row.asset_id, signals, startedAt, this.now()).catch((e) => console.error(`[ordo] stage series ${runId}/${row.code}`, e));
     const rework = ctx.tpl.spec.rework;
     if (rework && rework.from === row.code && scrap > 0) {
       await this.patchData(runId, rework.to, { reworkUnits: scrap });
@@ -398,7 +423,7 @@ export class RunEngine {
       const open = await this.db.query("SELECT 1 FROM inbox_items WHERE id = $1 AND status = 'pending'", [data.gateItemId]);
       if (open.rows.length) return;
     }
-    const criteria = g.criteria ?? data.criteria ?? [];
+    const criteria = reshape(spec.criteria, g.criteria ?? data.criteria ?? []);
     const failed = criteria.filter((c) => c.ok === false);
     const options: InboxOption[] = [{ label: g.held ? `Release ${row.code}` : `Approve ${row.code}`, detail: g.held ? "Lift the hold and continue the run" : "Release this stage's output to the next stage", action: { tool: "release_gate", args: { runId, stageCode: row.code } } }];
     if (!g.held) options.push({ label: `Hold ${row.code}`, detail: "Keep the output at the gate and pause downstream scheduling", action: { tool: "hold_stage", args: { runId, stageCode: row.code, reason: g.reason ?? "Held at quality gate" } } });
@@ -419,7 +444,11 @@ export class RunEngine {
       metrics: [
         { label: "Good / scrap", value: `${row.units_good} / ${row.units_scrap}` },
         { label: "Yield", value: total ? `${((Number(row.units_good) / total) * 100).toFixed(1)}%` : "—" },
-        ...criteria.map((c) => ({ label: c.label, value: `${c.actual ?? "not measured"} · target ${c.target}${c.ok === false ? " ▲" : ""}` })),
+        ...criteria.map((c) => ({
+          label: c.label,
+          value: `${c.actual ?? "not measured"} · target ${c.target}${c.ok === false ? " ▲" : ""}`,
+          band: { lo: c.band.lo, hi: c.band.hi, value: c.measured?.value ?? null, valueMax: c.measuredMax?.value ?? null, ok: c.ok, unit: c.unit },
+        })),
       ],
       options,
       recommended,
@@ -435,11 +464,12 @@ export class RunEngine {
     const r = await this.db.query<{ id: string }>(`SELECT id FROM runs WHERE site_id = $1 AND (started_at >= $2 OR status = 'running') ${f.status ? "AND status = $3" : ""} ORDER BY started_at DESC LIMIT 200`, f.status ? [siteId, since, f.status] : [siteId, since]);
     const assets = await this.assetMap(siteId);
     const out: RunView[] = [];
-    for (const x of r.rows) out.push(await this.view(siteId, x.id, assets));
+    for (const x of r.rows) out.push(await this.view(siteId, x.id, assets, false));
     return out;
   }
 
-  async view(siteId: string, runId: string, assetsIn?: Map<string, AssetView>): Promise<RunView> {
+  /** One run with every stage. `live` reads the telemetry behind a running stage's measured-signal criteria; the list view skips that. */
+  async view(siteId: string, runId: string, assetsIn?: Map<string, AssetView>, live = true): Promise<RunView> {
     const run = await this.runRow(siteId, runId);
     const tpl = await this.templates.version(run.template_version_id);
     const rows = await this.rowsOf(runId);
@@ -450,7 +480,8 @@ export class RunEngine {
     const items = await this.db.query<{ status: string; n: string }>("SELECT status, COUNT(*)::text n FROM inbox_items WHERE run_id = $1 GROUP BY status", [runId]);
     const escalated = items.rows.reduce((a, c) => a + Number(c.n), 0);
     const now = this.now();
-    const stages: StageRunView[] = tpl.spec.stages.map((s) => {
+    const stages: StageRunView[] = [];
+    for (const s of tpl.spec.stages) {
       const row = rows.find((r) => r.code === s.code)!;
       const data = JSON.parse(row.data_json) as StageData;
       const good = Number(row.units_good);
@@ -460,7 +491,10 @@ export class RunEngine {
       const end = row.ended_at ? Date.parse(row.ended_at) : null;
       const durationMin = start ? ((end ?? now) - start) / 60_000 : null;
       const asset = row.asset_id ? assets.get(row.asset_id) : undefined;
-      return {
+      const criteriaResults = data.criteria
+        ? reshape(s.criteria, data.criteria)
+        : evaluateCriteria(s.criteria, await this.measurements(row, s, { good, scrap, durationMin, activeOee: asset?.oee ?? null }, start ?? now, live && start !== null));
+      stages.push({
         ...s,
         state: row.state,
         assetId: row.asset_id,
@@ -475,14 +509,14 @@ export class RunEngine {
         progress: DONE.includes(row.state) ? 1 : Math.min(1, total / run.quantity),
         outcome: row.outcome,
         deviation: Boolean(row.deviation),
-        criteriaResults: data.criteria ?? evaluateCriteria(s.criteria, { good, scrap, durationMin, activeOee: asset?.oee ?? null }),
+        criteriaResults,
         decisions: perStage.get(s.code) ?? 0,
         gateItemId: data.gateItemId ?? null,
         waitingReason: data.waitingReason ?? null,
         reworkUnits: data.reworkUnits ?? 0,
         workDoneAt: data.workDoneAt ?? null,
-      } as StageRunView;
-    });
+      } as StageRunView);
+    }
     const completed = stages.filter((s) => DONE.includes(s.state)).length;
     const measured = stages.filter((s) => s.unitsGood + s.unitsScrap > 0 && s.resourceKind !== "system");
     const rolledYield = measured.length ? measured.reduce((p, s) => p * (s.unitsGood / (s.unitsGood + s.unitsScrap)), 1) : null;
@@ -524,6 +558,15 @@ export class RunEngine {
   }
 
   // ---------------- helpers ----------------
+  /** What a stage's criteria are judged on: its counts and time, its asset's OEE, and the signals its criteria read over the stage window. */
+  private async measurements(row: StageRow, spec: StageSpec, base: Omit<StageMeasurements, "signals">, startedAt: number, live: boolean): Promise<StageMeasurements> {
+    const wanted = signalsOf(spec.criteria);
+    if (!wanted.length || !live) return base;
+    const signals: Record<string, SignalStats> = row.asset_id ? await this.plant.windowStats(row.asset_id, wanted, startedAt, this.now()) : {};
+    const data = JSON.parse(row.data_json) as StageData;
+    for (const [signal, r] of Object.entries(data.readings ?? {})) if (!signals[signal]?.n) signals[signal] = { last: r.value, min: r.value, max: r.value, mean: r.value, n: 1 };
+    return { ...base, signals };
+  }
   private async line(siteId: string, lineId: string | null) {
     const r = await this.db.query<{ id: string; name: string; autonomy: AutonomyLevel }>(`SELECT id, name, autonomy FROM lines WHERE site_id = $1 ${lineId ? "AND id = $2" : ""} ORDER BY created_at LIMIT 1`, lineId ? [siteId, lineId] : [siteId]);
     if (!r.rows[0]) throw new HttpError(404, "Line not found");

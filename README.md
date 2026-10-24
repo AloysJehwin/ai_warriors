@@ -114,7 +114,8 @@ Reproduce it with the **x402 demo** workflow (Actions tab): it opens a fresh buy
 
 ## What is real
 
-- Everything in the console comes from what you connect or record. There is no simulator and no sample data.
+- Everything in the console comes from what you connect or record. There is no simulator and no sample data in the console. For demos, the edge gateway can simulate a machine or an instrument profile (`SIM_PROFILE`), and a simulated expression run ships as a CSV fixture; see [docs/data-sources.md](docs/data-sources.md).
+- A stage's criteria are measured parameters: counts and time, or an instrument's signals over the stage window, judged against bands and proven per bound in zero knowledge. Where the instrument has a gateway, the gateway signs the measurement commitment and the lot's on-chain release re-verifies the proof; values a person or the server recorded are proven on the passport only.
 - Not included yet: OPC UA connectivity, ERP/MES integration, file storage outside Postgres (evidence is stored hashed in the database, up to 4 MB per file).
 - Compliance features are designed to support 21 CFR Part 11-style records; Ordo is not a certified system.
 

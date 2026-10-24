@@ -37,6 +37,7 @@ import { LedgerStore } from "./db/ledger-store.js";
 import { loadPolicy } from "./domain/policy.js";
 import { HttpError } from "./engine/errors.js";
 import { RunEngine } from "./pipelines/engine.js";
+import { StageSeries } from "./pipelines/stage-series.js";
 import { PlantService, newId } from "./plant/plant.js";
 
 export interface RailStatus {
@@ -67,6 +68,7 @@ export interface System {
   plant: PlantService;
   templates: Templates;
   engine: RunEngine;
+  series: StageSeries;
   inbox: Inbox;
   monitor: Monitor;
   proof: Proof;
@@ -177,6 +179,8 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
   const templates = new Templates(db, rec);
   await templates.ensureLibrary();
   const engine = new RunEngine(db, plant, templates, rec, now);
+  const series = new StageSeries(db, plant, now);
+  engine.series = series;
   const inbox = new Inbox(db, rec, sigs, engine, plant, templates, cfg.SIGNATURE_CHAIN_ID);
   engine.inbox = inbox;
   const agents = new Agents(llm);
@@ -214,6 +218,7 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
     warnings.push("World ID needs WORLD_ID_APP_ID, WORLD_ID_RP_ID and WORLD_ID_SIGNING_KEY together; validators are not checked for one person per seat");
   }
   const validation = new Validation(db, rec, ledger, sigs, engine, inbox, cfg.SIGNATURE_CHAIN_ID, trust);
+  validation.series = series;
   // ---- Evidence copies on 0G Storage ----
   if (opts.blobStore || cfg.EVIDENCE_STORE === "0g") {
     try {
@@ -355,6 +360,8 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
   const stageProofs = new StageProofs(db, engine, now);
   const readings = new Readings(db, engine, plant, rec, now);
   validation.stageProofs = stageProofs;
+  validation.specProofs = passports.specs;
+  readings.specProofs = passports.specs;
   passports.stages = stageProofs;
   if (!stageProofs.enabled) warnings.push("The stage-check circuit (server/zk) is missing: signed stage readings are kept but not proven");
   if (!passports.specs.enabled) warnings.push("The spec-check circuit (server/zk) is missing: public passports show criteria without zero-knowledge proofs");
@@ -513,6 +520,7 @@ export async function buildSystem(cfg: Config, opts: { now?: () => number; polic
     auth,
     sigs,
     plant,
+    series,
     templates,
     engine,
     inbox,

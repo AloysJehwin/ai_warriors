@@ -211,8 +211,10 @@ export function createApp(sys: System, opts: AppOptions = {}) {
       system: "groth16-bn254",
       publicSignals: ["subject", "target", "op", "commitment"],
       statement: "The prover knows value and salt with Poseidon(subject, value, salt) = commitment and value ≥ target (op 0), ≤ target (op 1) or = target (op 2), fixed point ×10⁴.",
-      subject: "sha256('ordo:spec:<runId>:<stageCode>:<criterion label>') mod the BN254 scalar field",
+      subject: "sha256('ordo:spec:<runId>:<stageCode>:<criterion label>') mod the BN254 scalar field. A range criterion proves twice over that subject: its lower bound (op 0), and its upper bound listed as '<label>#max' (op 1).",
+      measurement: "When the instrument's gateway (or the operator) measured the value, the commitment is the one it signed as an OrdoMeasurement (EIP-712, domain {name: Ordo, version: 2}); the passport carries that signature. Otherwise Ordo's server committed to the value it recorded.",
       verificationKey: vkey,
+      ceremony: sys.passports.specs?.ceremony() ?? null,
     });
   });
 
@@ -260,6 +262,29 @@ export function createApp(sys: System, opts: AppOptions = {}) {
   app.post("/v1/edge/readings", async (c) => {
     const e = await edge(c);
     return c.json(await sys.readings.submitFromDevice(e.device, ReadingBody.parse(e.json())));
+  });
+  const MeasurementsBody = z.object({
+    runId: z.string().min(1).max(64),
+    stage: z.string().min(1).max(32),
+    measurements: z
+      .array(
+        z.object({
+          criterion: z.string().min(1).max(90),
+          value: z.string().regex(/^\d{1,20}$/),
+          salt: z.string().regex(/^\d{1,80}$/),
+          commitment: z.string().regex(/^\d{1,80}$/),
+          anchor: z.string().regex(/^0x[0-9a-fA-F]{64}$/).transform((x) => x as `0x${string}`),
+          signedAt: z.number().int().positive(),
+          signature: Hex,
+        }),
+      )
+      .min(1)
+      .max(40),
+  });
+  app.post("/v1/edge/measurements", async (c) => {
+    const e = await edge(c);
+    const b = MeasurementsBody.parse(e.json());
+    return c.json(await sys.readings.submitMeasurementsFromDevice(e.device, b.runId, b.stage, b.measurements));
   });
 
   // ---------------- Running pipelines: public, no sign-in, so a newcomer can see what a site runs and apply for a role ----------------
@@ -545,7 +570,17 @@ export function createApp(sys: System, opts: AppOptions = {}) {
   });
   site.post("/runs/:runId/stages/:code/record", async (c) => {
     need(c, "operator");
-    const b = await body(c, z.object({ good: z.number().int().min(0), scrap: z.number().int().min(0), complete: z.boolean().default(false), note: z.string().max(300).optional() }));
+    const b = await body(
+      c,
+      z.object({
+        good: z.number().int().min(0),
+        scrap: z.number().int().min(0),
+        complete: z.boolean().default(false),
+        note: z.string().max(300).optional(),
+        // the stage's measured parameters, when a person reads them off an instrument
+        readings: z.array(z.object({ signal: z.string().regex(/^[\w.:-]{1,40}$/), value: z.number().finite() })).max(20).optional(),
+      }),
+    );
     await sys.engine.record(sid(c), actor(c), c.req.param("runId"), c.req.param("code"), b);
     return c.json(await sys.engine.view(sid(c), c.req.param("runId")));
   });
@@ -559,6 +594,14 @@ export function createApp(sys: System, opts: AppOptions = {}) {
     need(c, "operator");
     const b = await body(c, ReadingBody.omit({ runId: true, stage: true }));
     return c.json(await sys.readings.submitFromOperator(sid(c), me(c).user, { ...b, runId: c.req.param("runId"), stage: c.req.param("code") }));
+  });
+  // the series behind a stage's measured parameters (values: signed-in users only; the public passport shows bands and proofs)
+  site.get("/runs/:runId/stages/:code/series", async (c) => {
+    need(c, "operator");
+    const run = await sys.engine.view(sid(c), c.req.param("runId"));
+    const stage = run.stages.find((s) => s.code === c.req.param("code"));
+    if (!stage) throw new HttpError(404, "Stage not found");
+    return c.json(await sys.series.read(run.id, stage));
   });
   site.get("/runs/:runId/proofs", async (c) => {
     const [run, stages] = await Promise.all([sys.engine.view(sid(c), c.req.param("runId")), sys.stageProofs.forRun(c.req.param("runId"))]);

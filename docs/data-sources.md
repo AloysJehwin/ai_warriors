@@ -14,6 +14,16 @@ Only the MTConnect demo agent was confirmed serving live data during this resear
 | L3 Data platform | MQTT broker, Kafka, time-series DB, cloud IoT services (section 4) |
 | Planning & Supply agents | Metals, energy, freight, supplier-risk and macro feeds (section 5) |
 
+## Ordo's own gateway and fixtures
+
+The console has no simulator. For a demo without a machine, the edge gateway (`server/scripts/gateway.ts`) can stand in for one:
+
+- `SIM_CYCLE_S` simulates a machine making a part every n seconds (the default).
+- `SIM_PROFILE=bioreactor|fplc|plate_reader` simulates an instrument running a profile: its signals (temperature, OD600, dissolved oxygen and pH for the bioreactor; pressure, purity and yield for the FPLC; activity, aggregates, endotoxin for the plate reader) follow a drift and a swing, and it counts one batch (`SIM_BATCH_UNITS`, default 1) every `SIM_STAGE_S` seconds (default 180). The gateway signs the finished stage's counts as it would for any machine.
+- `server/fixtures/replays/protein-expression.csv` is a simulated one-hour expression run in long format (time, signal, value), accepted by the asset's **Replay a dataset** upload for sites without a gateway.
+
+**Which signals are stored.** Ingest keeps a standard set of machine signals (execution, part count, scrap, load, spindle speed, temperature and so on), any signal the asset has a limit for, and any signal a measured-parameter criterion of an active stage on that asset reads. Everything else is dropped, so an instrument's data before its stage starts is not kept unless the asset has a limit for it. Start the gateway before the run; the demo does.
+
 ---
 
 ## 1. Free public live and test sources (usable for a demo today)

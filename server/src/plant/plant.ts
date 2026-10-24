@@ -19,6 +19,17 @@ import { parseCurrent, readCurrent } from "./mtconnect.js";
 export const newId = (p: string) => `${p}_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
 const KEEP_SIGNALS = new Set(["execution", "part_count", "availability", "controller_mode", "emergency_stop", "spindle_speed", "load_pct", "temperature", "program", "feed_override", "vibration", "state", "good", "scrap"]);
 const RETENTION_DAYS = 7;
+/** A signal is stored when it is one Ordo computes from, has a limit on the asset, or a measured-signal criterion of an active stage reads it. */
+const keep = (signal: string, limits: Record<string, SignalLimit>, wanted: Set<string> | undefined) => KEEP_SIGNALS.has(signal) || signal.startsWith("condition.") || Boolean(limits[signal]) || Boolean(wanted?.has(signal));
+
+/** Aggregates of one signal over a window: what a stage's measured-signal criteria read. */
+export interface SignalStats {
+  last: number | null;
+  min: number | null;
+  max: number | null;
+  mean: number | null;
+  n: number;
+}
 
 export interface AssetRow {
   id: string;
@@ -234,9 +245,11 @@ export class PlantService {
   /** Observations a machine's gateway pushed (its request is signed with the gateway's key; Readings checks that). */
   async gatewayObservations(assetId: string, rows: { signal: string; ts: string; value: number | null; text: string | null }[]) {
     const now = this.now();
+    const limits = (await this.assets()).find((a) => a.id === assetId)?.limits ?? {};
+    const wanted = (await this.wantedSignals(assetId)).get(assetId);
     const clean = rows
       .map((r) => ({ signal: r.signal.trim().toLowerCase().replace(/\s+/g, "_"), ts: new Date(r.ts).toISOString(), value: r.value, text: r.text, quality: "good" as Quality }))
-      .filter((r) => KEEP_SIGNALS.has(r.signal) && Math.abs(Date.parse(r.ts) - now) < 86_400_000);
+      .filter((r) => keep(r.signal, limits, wanted) && Math.abs(Date.parse(r.ts) - now) < 86_400_000);
     const inserted = await this.store(assetId, clean);
     await this.saveState(assetId, { polled: true, ok: true, error: null, latest: this.toLatest(clean) });
     return inserted;
@@ -260,6 +273,48 @@ export class PlantService {
       [assetId, signal, since],
     );
     return r.rows.map((x) => ({ ts: Date.parse(x.ts), value: x.value === null ? null : Number(x.value), text: x.text_value, quality: x.quality })).sort((a, b) => a.ts - b.ts);
+  }
+
+  /** Numeric good-quality points of one signal inside a window, oldest first. */
+  async seriesBetween(assetId: string, signal: string, fromMs: number, toMs: number): Promise<{ ts: number; value: number }[]> {
+    const r = await this.db.query<{ ts: string; value: number }>(
+      "SELECT ts::text, value FROM telemetry WHERE asset_id = $1 AND signal = $2 AND ts >= $3 AND ts <= $4 AND value IS NOT NULL AND quality = 'good' ORDER BY ts LIMIT 5000",
+      [assetId, signal, new Date(fromMs).toISOString(), new Date(toMs).toISOString()],
+    );
+    return r.rows.map((x) => ({ ts: Date.parse(x.ts), value: Number(x.value) }));
+  }
+
+  /** Aggregates of named signals on one asset over a window: what a stage's measured-signal criteria are judged on. */
+  async windowStats(assetId: string, signals: string[], fromMs: number, toMs: number): Promise<Record<string, SignalStats>> {
+    const out: Record<string, SignalStats> = {};
+    if (!signals.length) return out;
+    const params = [assetId, new Date(fromMs).toISOString(), new Date(toMs).toISOString(), ...signals];
+    const list = signals.map((_, i) => `$${i + 4}`).join(",");
+    const where = `asset_id = $1 AND ts >= $2 AND ts <= $3 AND value IS NOT NULL AND quality = 'good' AND signal IN (${list})`;
+    const agg = await this.db.query<{ signal: string; n: string; min: number; max: number; mean: number }>(`SELECT signal, COUNT(*)::text n, MIN(value) min, MAX(value) max, AVG(value) mean FROM telemetry WHERE ${where} GROUP BY signal`, params);
+    const last = await this.db.query<{ signal: string; value: number }>(`SELECT DISTINCT ON (signal) signal, value FROM telemetry WHERE ${where} ORDER BY signal, ts DESC`, params);
+    for (const r of agg.rows) out[r.signal] = { last: null, min: Number(r.min), max: Number(r.max), mean: Number(r.mean), n: Number(r.n) };
+    for (const r of last.rows) if (out[r.signal]) out[r.signal]!.last = Number(r.value);
+    return out;
+  }
+
+  /** The signals measured-signal criteria of active stages read, per asset: ingest keeps them even when they are not on the allow-list. */
+  async wantedSignals(assetId?: string): Promise<Map<string, Set<string>>> {
+    const r = await this.db.query<{ asset_id: string; code: string; spec_json: string }>(
+      `SELECT sr.asset_id, sr.code, tv.spec_json FROM stage_runs sr JOIN runs r ON r.id = sr.run_id JOIN template_versions tv ON tv.id = r.template_version_id
+       WHERE r.status = 'running' AND sr.state IN ('running','awaiting_approval','held') AND sr.asset_id IS NOT NULL ${assetId ? "AND sr.asset_id = $1" : ""}`,
+      assetId ? [assetId] : [],
+    );
+    const out = new Map<string, Set<string>>();
+    for (const row of r.rows) {
+      const spec = JSON.parse(row.spec_json) as { stages: { code: string; criteria?: { kind?: string; signal?: string }[] }[] };
+      for (const c of spec.stages.find((st) => st.code === row.code)?.criteria ?? []) {
+        if (c.kind !== "signal" || !c.signal) continue;
+        if (!out.has(row.asset_id)) out.set(row.asset_id, new Set());
+        out.get(row.asset_id)!.add(c.signal);
+      }
+    }
+    return out;
   }
 
   // ---------------- CSV replay of a real dataset ----------------
@@ -357,6 +412,7 @@ export class PlantService {
     try {
       const assets = await this.assets();
       const now = this.now();
+      const wanted = await this.wantedSignals();
       // MTConnect: one /current per agent URL, shared by its devices
       const due = new Map<string, AssetRow[]>();
       for (const a of assets) {
@@ -382,7 +438,7 @@ export class PlantService {
           }
           try {
             const device = (a.source as { device: string }).device;
-            const obs = parseCurrent(doc, device).filter((o) => KEEP_SIGNALS.has(o.signal) || o.signal.startsWith("condition.") || a.limits[o.signal]);
+            const obs = parseCurrent(doc, device).filter((o) => keep(o.signal, a.limits, wanted.get(a.id)));
             inserted += await this.store(a.id, obs.map((o) => ({ signal: o.signal, ts: o.ts, value: o.value, text: o.text, quality: o.quality })));
             await this.saveState(a.id, { polled: true, ok: true, error: null, latest: this.toLatest(obs.map((o) => ({ ...o, text: o.text }))) });
           } catch (e) {
