@@ -19,7 +19,7 @@ Markdown versions of the Ordo product, architecture and validation documentation
 | [data-model.md](data-model.md) | Entities, fields and relationships |
 | [integrations-api.md](integrations-api.md) | Enterprise and shop-floor systems, REST endpoints and events |
 | [security-compliance.md](security-compliance.md) | Identity, e-signatures, records, network and safety |
-| [pipeline-templates.md](pipeline-templates.md) | All 15 templates with every stage, owning agent, resource and gate |
+| [pipeline-templates.md](pipeline-templates.md) | All 16 templates with every stage, owning agent, resource, gate and parameters |
 | [data-sources.md](data-sources.md) | Real-time industrial data providers, demo endpoints and datasets |
 | [glossary.md](glossary.md) | Terms and abbreviations |
 

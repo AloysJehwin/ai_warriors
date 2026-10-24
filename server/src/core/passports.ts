@@ -231,6 +231,11 @@ export class Passports {
     const agents = decisions.filter((d) => !d.agent.startsWith("user:")).length;
     const releases = await this.releases(p.site_id, runId, ens);
     const zk = (await this.specs?.forRun(runId)) ?? new Map();
+    // a parameter proof names who committed to the value: the instrument's gateway, the operator, or Ordo
+    const zkView = (key: string) => {
+      const v = zk.get(key);
+      return v ? { ...v, signerEns: v.signer ? ens.get(v.signer.toLowerCase()) ?? null : null } : null;
+    };
     const work = (await this.stages?.forRun(runId)) ?? new Map();
     const lastSeq = Math.max(0, ...decisions.map((d) => d.ledgerSeq ?? 0), ...[...zk.values()].map((z) => z.ledgerSeq ?? 0));
     const view = { ...this.view(p), ens: (await this.lots?.ofLot(runId)) ?? null };
@@ -260,7 +265,8 @@ export class Passports {
           resource: s.assetName ?? s.resourceKind,
           startedAt: s.startedAt,
           endedAt: s.endedAt,
-          criteria: s.criteriaResults.map((c) => ({ label: c.label, target: c.target, ok: c.ok, zk: zk.get(`${s.code}|${c.label}`) ?? null })),
+          // the target and whether it was met; the value stays private. A range proves twice: its lower bound, and its upper under `#max`
+          criteria: s.criteriaResults.map((c) => ({ label: c.label, target: c.target, ok: c.ok, band: c.band ?? { lo: null, hi: null }, unit: c.unit ?? "", zk: zkView(`${s.code}|${c.label}`), zkMax: zkView(`${s.code}|${c.label}#max`) })),
           deviation: s.deviation,
           // who signed the stage's counts where they were made, and the proof they meet its criteria; never the counts
           work: work.has(s.code) ? { ...work.get(s.code)!, signerEns: ens.get(work.get(s.code)!.signer.toLowerCase()) ?? null } : null,

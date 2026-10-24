@@ -8,6 +8,7 @@ import type { PackageDetail, PackageSummary, RunView, TypedSignature } from "../
 import { DateTimePicker } from "../ui/Calendar";
 import { Action, Empty, Field, Loading, Modal, Segmented, useToast } from "../ui/kit";
 import { Select } from "../ui/Select";
+import { SpecBand } from "../ui/SpecBand";
 
 type Filter = "all" | "mine" | "review" | "closed";
 const STEPS = ["Draft", "Agent pre-check", "Submitted", "QE review", "Approval", "Released"];
@@ -278,6 +279,7 @@ function PackageView({ id }: { id: string }) {
                 <th>Criterion</th>
                 <th>Method</th>
                 <th>Target</th>
+                <th>Band</th>
                 <th>Result</th>
                 <th>Source</th>
                 <th className="r">Status</th>
@@ -289,6 +291,12 @@ function PackageView({ id }: { id: string }) {
                   <td>{c.criterion}</td>
                   <td className="muted">{c.method}</td>
                   <td>{c.target}</td>
+                  <td className="band-cell">
+                    {(() => {
+                      const r = p.parameters?.find((x) => x.label === c.criterion);
+                      return r ? <SpecBand compact lo={r.band?.lo ?? null} hi={r.band?.hi ?? null} value={r.measured?.value ?? null} valueMax={r.measuredMax?.value ?? null} ok={r.ok} unit={r.unit} label={c.criterion} /> : <span className="faint">—</span>;
+                    })()}
+                  </td>
                   <td>{c.result ?? "—"}</td>
                   <td>
                     <span className={`tag ${c.auto ? "accent" : ""}`}>{c.auto ? "Agent" : "Manual"}</span>

@@ -1485,6 +1485,110 @@
      "timeoutMin": 120
     }
    ]
+  },
+  {
+   "key": "protein-synthesis",
+   "name": "Protein synthesis",
+   "category": "Regulated",
+   "description": "Recombinant protein from batch record to fill and finish. Expression, purification and characterisation are judged on measured instrument parameters, each proven in zero knowledge; QC release is a quality engineer's gate. One unit is one batch.",
+   "rework": null,
+   "stages": [
+    {
+     "code": "01",
+     "column": 1,
+     "name": "Batch record issue",
+     "agent": "planning",
+     "resourceKind": "system",
+     "mode": "auto",
+     "escalationRole": "supervisor",
+     "timeoutMin": 60,
+     "criteria": []
+    },
+    {
+     "code": "02",
+     "column": 2,
+     "name": "Expression (bioreactor)",
+     "agent": "process",
+     "resourceKind": "process_vessel",
+     "mode": "auto",
+     "escalationRole": "process_engineer",
+     "timeoutMin": 1440,
+     "criteria": [
+      { "label": "Culture temperature", "kind": "signal", "signal": "temperature", "agg": "envelope", "op": ">=", "target": 35, "targetMax": 39, "unit": "°C" },
+      { "label": "Cell density OD600", "kind": "signal", "signal": "od600", "agg": "last", "op": ">=", "target": 0.6, "unit": "" },
+      { "label": "Dissolved oxygen", "kind": "signal", "signal": "dissolved_oxygen", "agg": "min", "op": ">=", "target": 30, "unit": "%" }
+     ]
+    },
+    {
+     "code": "03",
+     "column": 3,
+     "name": "Harvest and lysis",
+     "agent": "line",
+     "resourceKind": "robot",
+     "mode": "auto",
+     "escalationRole": "supervisor",
+     "timeoutMin": 240,
+     "criteria": [
+      { "label": "Yield", "kind": "yield", "op": ">=", "target": 95, "unit": "%" }
+     ]
+    },
+    {
+     "code": "04",
+     "column": 4,
+     "name": "Purification (FPLC)",
+     "agent": "process",
+     "resourceKind": "process_vessel",
+     "mode": "auto",
+     "escalationRole": "process_engineer",
+     "timeoutMin": 480,
+     "criteria": [
+      { "label": "Protein yield", "kind": "signal", "signal": "yield_mg_l", "agg": "last", "op": ">=", "target": 10, "unit": "mg/L" },
+      { "label": "Purity", "kind": "signal", "signal": "purity_pct", "agg": "last", "op": ">=", "target": 95, "unit": "%" },
+      { "label": "Column pressure", "kind": "signal", "signal": "pressure_bar", "agg": "max", "op": "<=", "target": 3, "unit": "bar" }
+     ]
+    },
+    {
+     "code": "05",
+     "column": 5,
+     "name": "Characterisation",
+     "agent": "vision_qa",
+     "resourceKind": "inspection",
+     "mode": "auto",
+     "escalationRole": "quality_engineer",
+     "timeoutMin": 240,
+     "criteria": [
+      { "label": "Specific activity", "kind": "signal", "signal": "specific_activity", "agg": "last", "op": ">=", "target": 50, "unit": "U/mg" },
+      { "label": "Aggregates", "kind": "signal", "signal": "aggregate_pct", "agg": "max", "op": "<=", "target": 5, "unit": "%" }
+     ]
+    },
+    {
+     "code": "06",
+     "column": 6,
+     "name": "QC release",
+     "agent": "vision_qa",
+     "resourceKind": "manual_station",
+     "mode": "approve",
+     "escalationRole": "quality_engineer",
+     "timeoutMin": 480,
+     "criteria": [
+      { "label": "Endotoxin", "kind": "signal", "signal": "endotoxin_eu_mg", "agg": "last", "op": "<=", "target": 0.5, "unit": "EU/mg" },
+      { "label": "Bioburden", "kind": "signal", "signal": "bioburden_cfu", "agg": "last", "op": "==", "target": 0, "unit": "CFU" }
+     ]
+    },
+    {
+     "code": "07",
+     "column": 7,
+     "name": "Fill and finish",
+     "agent": "logistics",
+     "resourceKind": "pack_line",
+     "mode": "auto",
+     "escalationRole": "supervisor",
+     "timeoutMin": 240,
+     "criteria": [
+      { "label": "Fill yield", "kind": "yield", "op": ">=", "target": 99, "unit": "%" }
+     ]
+    }
+   ]
   }
  ],
  "criteriaByAgent": {

@@ -29,7 +29,7 @@ stateDiagram-v2
 ```
 
 1. **Draft.** The process engineer defines objective, acceptance criteria, sample plan and trial window. Checks are seeded from the stage's success criteria.
-2. **Agent pre-check.** The owning agent fills in every automated check from run data by comparing each measured value with its target, attaches generated evidence (logs, SPC charts, reports), and writes an assessment with key figures and confidence.
+2. **Agent pre-check.** The owning agent fills in every automated check from run data by comparing each measured value with its target, attaches generated evidence (the run record, and a parameter chart that draws each parameter against its band with the signal's trend over the stage), and writes an assessment with key figures and confidence.
 3. **Submit.** The engineer records manual checks (Pass / Fail), attaches required evidence and signs as **Performed by**.
 4. **QE review.** The quality engineer signs as **Reviewed by**, or requests changes / rejects with a mandatory comment.
 5. **Approval.** The plant manager signs as **Approved by**.
@@ -61,7 +61,7 @@ stateDiagram-v2
 | No failed checks | No check is marked Fail | ▲ 1 failed check, if any |
 | Required evidence | Every evidence slot marked *Required* has a file | Required evidence 2/2 |
 
-Agent-generated evidence (logs, SPC charts, genealogy records) is attached automatically when the pre-check runs. Optional evidence never blocks submission.
+Agent-generated evidence (the run record, the parameter chart) is attached automatically when the pre-check runs. Optional evidence never blocks submission.
 
 ## Who sees what
 

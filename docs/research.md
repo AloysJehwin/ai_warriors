@@ -37,9 +37,9 @@ AI-run labs such as SAMPLE and Coscientist already design and run experiments wi
 
 | Ordo today | In the lab |
 | --- | --- |
-| Pipeline and run | Experiment protocol: express, purify, characterise, QC |
-| Assets and data sources | Instruments: bioreactor, FPLC or HPLC, plate reader, mass spectrometer |
-| Stage criteria | Acceptance criteria: yield (mg/L), purity (at least 95%), activity, endotoxin |
+| Pipeline and run; the **Protein synthesis** library template ([pipeline-templates.md](pipeline-templates.md#protein-synthesis)) | Experiment protocol: batch record, express, harvest, purify, characterise, QC release, fill |
+| Assets and data sources; the gateway's instrument profiles (`SIM_PROFILE`) for demos | Instruments: bioreactor, FPLC or HPLC, plate reader, mass spectrometer |
+| Stage parameters: measured signals over the stage window, judged against bands and ranges, drawn on the flow and the passport | Acceptance criteria: temperature held 35–39 °C, OD600, dissolved oxygen, yield (mg/L), purity (at least 95%), column pressure, activity, aggregates, endotoxin, bioburden |
 | Validators: performed by, reviewed by, approved by | Bench scientist performs, peer reviewer reviews, PI or QA approves |
 | World ID, one person per seat | One verified human scientist per reviewer seat |
 | Zero-knowledge proofs of criteria | Proof that a batch met spec without revealing proprietary data |

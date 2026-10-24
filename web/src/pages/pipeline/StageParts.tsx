@@ -5,8 +5,10 @@ import { useApp } from "../../lib/app";
 import { actorLabel, AGENT_LABEL, computeProof, dur, num, STATE_LABEL, time } from "../../lib/format";
 import { go } from "../../lib/router";
 import { signTyped } from "../../lib/wallet";
+import { kindOf, signalsOf, targetText } from "../../lib/criteria";
 import type { DecisionView, InboxItemView, ReadingTyped, RunView, StageRunView } from "../../types";
 import { Action, Drawer, Field, Modal, useToast } from "../../ui/kit";
+import { ParamCard, useStageSeries } from "./ParamCard";
 
 export function useStageActions(run: RunView, inbox: InboxItemView[], reload: () => Promise<void>) {
   const { path, can, refresh } = useApp();
@@ -38,7 +40,7 @@ export function useStageActions(run: RunView, inbox: InboxItemView[], reload: ()
         type: "stage_validation",
         title: `${s.name} · ${run.id}`,
         objective: `Prove stage ${s.code} ${s.name} on ${run.id} meets its success criteria.`,
-        acceptance: s.criteria.map((c) => `${c.label} ${c.op} ${c.target}${c.unit ? ` ${c.unit}` : ""}`).join("; "),
+        acceptance: s.criteria.map((c) => `${c.label} ${targetText(c)}`).join("; "),
         runId: run.id,
         stageCode: s.code,
       });
@@ -71,9 +73,13 @@ export function RecordModal({ run, stage, onClose, onDone }: { run: RunView; sta
   const [scrap, setScrap] = useState("0");
   const [complete, setComplete] = useState(true);
   const [note, setNote] = useState("");
+  const [readings, setReadings] = useState<Record<string, string>>({});
   const toast = useToast();
   if (!stage) return null;
   const left = run.quantity - stage.unitsGood - stage.unitsScrap;
+  // the stage's measured parameters: what a person reads off the instrument, judged against the band like any signal
+  const params = stage.criteria.filter((c) => kindOf(c) === "signal" && c.signal);
+  const entered = params.flatMap((c) => (readings[c.signal!] !== undefined && readings[c.signal!] !== "" && Number.isFinite(Number(readings[c.signal!])) ? [{ signal: c.signal!, value: Number(readings[c.signal!]) }] : []));
   return (
     <Modal
       open
@@ -89,7 +95,7 @@ export function RecordModal({ run, stage, onClose, onDone }: { run: RunView; sta
             className="btn accent"
             disabled={good === "" || Number(good) < 0}
             onClick={async () => {
-              await api.post(path(`/runs/${run.id}/stages/${stage.code}/record`), { good: Number(good), scrap: Number(scrap || 0), complete, note: note || undefined });
+              await api.post(path(`/runs/${run.id}/stages/${stage.code}/record`), { good: Number(good), scrap: Number(scrap || 0), complete, note: note || undefined, readings: entered.length ? entered : undefined });
               let signed = false;
               if (complete && sign && me.user) {
                 try {
@@ -119,6 +125,20 @@ export function RecordModal({ run, stage, onClose, onDone }: { run: RunView; sta
           <input className="input" type="number" min={0} value={scrap} onChange={(e) => setScrap(e.target.value)} />
         </Field>
       </div>
+      {params.length > 0 && (
+        <>
+          <div className="section-h">
+            <span className="field-l">Parameters</span>
+          </div>
+          <div className="form-grid two">
+            {params.map((c) => (
+              <Field key={c.signal} label={`${c.label}${c.unit ? ` (${c.unit})` : ""}`} hint={`target ${targetText(c)} · signal ${c.signal}`}>
+                <input className="input" type="number" step="any" value={readings[c.signal!] ?? ""} onChange={(e) => setReadings({ ...readings, [c.signal!]: e.target.value })} />
+              </Field>
+            ))}
+          </div>
+        </>
+      )}
       <Field label="Note (optional)">
         <textarea value={note} onChange={(e) => setNote(e.target.value)} maxLength={300} />
       </Field>
@@ -173,6 +193,7 @@ export function StageDrawer(props: {
 }) {
   const { names } = useApp();
   const s = props.stage;
+  const series = useStageSeries(props.run.id, s?.code ?? null, Boolean(s && signalsOf(s.criteria).length));
   if (!s) return null;
   const a = props.actions;
   const gate = a.gateItem(s);
@@ -249,24 +270,19 @@ export function StageDrawer(props: {
         </div>
       </section>
       <section className="dsec">
-        <h3>Quality against targets</h3>
+        <h3>Parameters</h3>
         {s.criteriaResults.length === 0 ? (
           <p className="faint">This stage has no success criteria.</p>
         ) : (
-          <table className="t compact">
-            <tbody>
-              {s.criteriaResults.map((c) => (
-                <tr key={c.label}>
-                  <td>{c.label}</td>
-                  <td className="faint">{c.target}</td>
-                  <td className={`r ${c.ok === false ? "bad-text" : ""}`}>
-                    {c.actual ?? <span className="faint">not measured</span>}
-                    {c.ok === false && " ▲"}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <>
+            <p className="muted small">
+              {s.criteriaResults.filter((c) => c.ok === true).length} of {s.criteriaResults.length} in spec
+              {s.criteriaResults.some((c) => c.ok === null) ? ` · ${s.criteriaResults.filter((c) => c.ok === null).length} not measured` : ""}
+            </p>
+            {s.criteriaResults.map((c) => (
+              <ParamCard key={c.label} c={c} series={c.signal ? series?.signals[c.signal] : undefined} window={series?.window} live={series?.live} />
+            ))}
+          </>
         )}
       </section>
       <section className="dsec">

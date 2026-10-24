@@ -80,7 +80,7 @@ A lot's public passport says whether each acceptance criterion was met but never
 The circuit's keys live in `server/zk`. Rebuild them after changing the circuit (needs the [circom 2](https://docs.circom.io/getting-started/installation/) compiler; the trusted setup is a local single-party ceremony, fine for a demo, not for production):
 
 ```bash
-cd contracts && CIRCOM=/path/to/circom node scripts/zk-setup.mjs
+cd contracts && CIRCOM=/path/to/circom node scripts/zk-spec-setup.mjs setup "Your name"
 ```
 
 ## Zero-knowledge stage proofs (proof of work)

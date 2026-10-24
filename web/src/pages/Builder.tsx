@@ -2,10 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import { useApp } from "../lib/app";
 import { AGENT_LABEL } from "../lib/format";
+import { AGG_LABEL, AGGS, bandOf, KIND_LABEL as CRIT_KIND_LABEL, KINDS, kindOf, targetText } from "../lib/criteria";
 import { go, useRoute } from "../lib/router";
-import type { AgentKey, AssetKind, Criterion, Role, StageSpec, TemplateView } from "../types";
+import type { AgentKey, AssetKind, Criterion, CriterionKind, Role, SignalAgg, StageSpec, TemplateView } from "../types";
 import { Action, Field, Loading, Modal, Segmented, useToast } from "../ui/kit";
 import { Select } from "../ui/Select";
+import { SpecBand } from "../ui/SpecBand";
 
 interface Draft extends Omit<StageSpec, "code"> {
   key: number;
@@ -23,7 +25,7 @@ const KIND_LABEL: Record<AssetKind, string> = {
   maintenance_crew: "Maintenance crew",
   system: "ERP / MES link",
 };
-const PALETTE: { name: string; agent: AgentKey; resourceKind: AssetKind; mode: Mode; escalationRole: Role }[] = [
+const PALETTE: { name: string; agent: AgentKey; resourceKind: AssetKind; mode: Mode; escalationRole: Role; criteria?: Criterion[] }[] = [
   { name: "Order intake", agent: "planning", resourceKind: "system", mode: "auto", escalationRole: "supervisor" },
   { name: "Material sourcing", agent: "supply", resourceKind: "agv", mode: "auto", escalationRole: "supervisor" },
   { name: "Machining", agent: "scheduler", resourceKind: "cnc", mode: "auto", escalationRole: "supervisor" },
@@ -35,6 +37,41 @@ const PALETTE: { name: string; agent: AgentKey; resourceKind: AssetKind; mode: M
   { name: "Packaging", agent: "logistics", resourceKind: "pack_line", mode: "auto", escalationRole: "supervisor" },
   { name: "Dispatch", agent: "logistics", resourceKind: "agv", mode: "auto", escalationRole: "supervisor" },
   { name: "Maintenance check", agent: "maintenance", resourceKind: "maintenance_crew", mode: "manual", escalationRole: "maintenance_lead" },
+  // lab stages: judged on measured instrument parameters rather than counts
+  {
+    name: "Bioreactor expression",
+    agent: "process",
+    resourceKind: "process_vessel",
+    mode: "auto",
+    escalationRole: "process_engineer",
+    criteria: [
+      { label: "Culture temperature", kind: "signal", signal: "temperature", agg: "envelope", op: ">=", target: 35, targetMax: 39, unit: "°C" },
+      { label: "Cell density OD600", kind: "signal", signal: "od600", agg: "last", op: ">=", target: 0.6, unit: "" },
+    ],
+  },
+  {
+    name: "Purification (FPLC)",
+    agent: "process",
+    resourceKind: "process_vessel",
+    mode: "auto",
+    escalationRole: "process_engineer",
+    criteria: [
+      { label: "Purity", kind: "signal", signal: "purity_pct", agg: "last", op: ">=", target: 95, unit: "%" },
+      { label: "Protein yield", kind: "signal", signal: "yield_mg_l", agg: "last", op: ">=", target: 10, unit: "mg/L" },
+      { label: "Column pressure", kind: "signal", signal: "pressure_bar", agg: "max", op: "<=", target: 3, unit: "bar" },
+    ],
+  },
+  {
+    name: "QC release",
+    agent: "vision_qa",
+    resourceKind: "manual_station",
+    mode: "approve",
+    escalationRole: "quality_engineer",
+    criteria: [
+      { label: "Endotoxin", kind: "signal", signal: "endotoxin_eu_mg", agg: "last", op: "<=", target: 0.5, unit: "EU/mg" },
+      { label: "Bioburden", kind: "signal", signal: "bioburden_cfu", agg: "last", op: "==", target: 0, unit: "CFU" },
+    ],
+  },
 ];
 
 /** Codes from columns: one stage → "05", several → "05a", "05b". */
@@ -50,8 +87,10 @@ function withCodes(stages: Draft[]): (Draft & { code: string })[] {
 const fromSpec = (t: TemplateView): Draft[] => t.spec.stages.map((s) => ({ ...s, key: seq++ }));
 
 export function Builder() {
-  const { path, can, meta } = useApp();
+  const { path, can, meta, live } = useApp();
   const route = useRoute();
+  // signals the site's assets have reported, offered when naming a measured signal
+  const seenSignals = useMemo(() => [...new Set((live?.assets ?? []).flatMap((a) => Object.keys(a.latest)))].sort(), [live?.assets]);
   const toast = useToast();
   const [templates, setTemplates] = useState<TemplateView[] | null>(null);
   const [base, setBase] = useState<TemplateView | null>(null);
@@ -103,9 +142,10 @@ export function Builder() {
 
   const add = (p: (typeof PALETTE)[number]) => {
     const key = seq++;
-    // criteria seeded from the library defaults for that agent (taken from any template that uses it)
-    const crit = templates?.flatMap((t) => t.spec.stages).find((s) => s.agent === p.agent)?.criteria ?? [];
-    setStages([...stages, { ...p, key, column: maxCol + 1, timeoutMin: 60, criteria: crit }]);
+    // criteria from the palette entry, else seeded from the library defaults for that agent (taken from any template that uses it)
+    const { criteria: own, ...rest } = p;
+    const crit = own ?? templates?.flatMap((t) => t.spec.stages).find((s) => s.agent === p.agent)?.criteria ?? [];
+    setStages([...stages, { ...rest, key, column: maxCol + 1, timeoutMin: 60, criteria: crit }]);
     setSelected(key);
   };
   // Move a stage one column left/right; "parallel" puts it in the same column as its neighbour.
@@ -142,6 +182,8 @@ export function Builder() {
   });
   const errors: string[] = [];
   if (!stages.length) errors.push("Add at least one stage");
+  if (stages.some((s) => s.criteria.some((c) => kindOf(c) === "signal" && !c.signal))) errors.push("Every measured-signal criterion names the signal it reads");
+  if (stages.some((s) => s.criteria.some((c) => c.targetMax !== undefined && c.targetMax < c.target))) errors.push("A range's upper bound must be at least its lower bound");
   if (rework) {
     const f = coded.find((c) => c.key === rework.from);
     const t = coded.find((c) => c.key === rework.to);
@@ -186,6 +228,11 @@ export function Builder() {
         </aside>
         <div className="b-canvas">
           <p className="muted small">Columns run left to right; stages stacked in a column run in parallel. Equal lane counts continue lane by lane, otherwise lanes split or merge.</p>
+          <datalist id="ordo-signals">
+            {seenSignals.map((sig) => (
+              <option key={sig} value={sig} />
+            ))}
+          </datalist>
           <div className="b-cols">
             {columns.map(([col, list], i) => (
               <div key={col} className="b-colwrap">
@@ -330,30 +377,87 @@ function StageInspector(props: { s: Draft & { code: string }; editable: boolean;
           />
         </Field>
         <div className="section-h spread">
-          <span className="field-l">Success criteria</span>
+          <span className="field-l">Parameters (success criteria)</span>
           {editable && (
-            <button type="button" className="link" onClick={() => props.onChange({ criteria: [...s.criteria, { label: "Yield", op: ">=", target: 98, unit: "%" }] })}>
+            <button type="button" className="link" onClick={() => props.onChange({ criteria: [...s.criteria, { label: "Yield", kind: "yield", op: ">=", target: 98, unit: "%" }] })}>
               + Add
             </button>
           )}
         </div>
-        {s.criteria.map((c, i) => (
-          <div key={i} className="crit">
-            <input className="input sm" value={c.label} onChange={(e) => setCrit(i, { label: e.target.value })} />
-            <Select size="sm" width={58} value={c.op} onChange={(v) => setCrit(i, { op: v as Criterion["op"] })} options={[">=", "<=", "=="].map((o) => ({ value: o, label: o === ">=" ? "≥" : o === "<=" ? "≤" : "=" }))} searchable={false} disabled={!editable} />
-            <input className="input sm num" type="number" value={c.target} onChange={(e) => setCrit(i, { target: Number(e.target.value) })} />
-            <input className="input sm unit" value={c.unit} onChange={(e) => setCrit(i, { unit: e.target.value })} />
-            {editable && (
-              <button type="button" className="icon-btn" aria-label="Remove" onClick={() => props.onChange({ criteria: s.criteria.filter((_, j) => j !== i) })}>
-                ×
-              </button>
-            )}
-          </div>
-        ))}
-        <p className="faint small">Yield, scrap, defects (ppm), cycle time and OEE are measured automatically. Other criteria need a person to confirm them at the gate.</p>
+        {s.criteria.map((c, i) => {
+          const kind = kindOf(c);
+          const range = c.targetMax !== undefined;
+          const band = bandOf(c);
+          return (
+            <div key={i} className="crit2">
+              <div className="crit">
+                <Select<CriterionKind>
+                  size="sm"
+                  width={150}
+                  value={kind}
+                  onChange={(k) => setCrit(i, { kind: k, ...(k === "signal" ? { signal: c.signal ?? "", agg: c.agg ?? "last" } : { signal: undefined, agg: undefined }), ...(k !== "signal" && c.agg === "envelope" ? { targetMax: undefined } : {}) })}
+                  options={KINDS.map((k) => ({ value: k, label: CRIT_KIND_LABEL[k] }))}
+                  searchable={false}
+                  disabled={!editable}
+                />
+                <input className="input sm" value={c.label} placeholder="Name" onChange={(e) => setCrit(i, { label: e.target.value })} />
+                {editable && (
+                  <button type="button" className="icon-btn" aria-label="Remove" onClick={() => props.onChange({ criteria: s.criteria.filter((_, j) => j !== i) })}>
+                    ×
+                  </button>
+                )}
+              </div>
+              {kind === "signal" && (
+                <div className="crit">
+                  <input className="input sm sig" list="ordo-signals" value={c.signal ?? ""} placeholder="signal, as the asset reports it" aria-label="Signal" onChange={(e) => setCrit(i, { signal: e.target.value.trim().toLowerCase().replace(/\s+/g, "_") })} />
+                  <Select<SignalAgg> size="sm" width={124} value={c.agg ?? "last"} onChange={(a) => setCrit(i, { agg: a, ...(a === "envelope" ? { op: ">=", targetMax: c.targetMax ?? c.target, abs: undefined } : {}) })} options={AGGS.map((a) => ({ value: a, label: AGG_LABEL[a] }))} searchable={false} disabled={!editable} />
+                </div>
+              )}
+              <div className="crit">
+                {range ? <span className="faint small">from</span> : <Select size="sm" width={58} value={c.op} onChange={(v) => setCrit(i, { op: v as Criterion["op"] })} options={[">=", "<=", "=="].map((o) => ({ value: o, label: o === ">=" ? "≥" : o === "<=" ? "≤" : "=" }))} searchable={false} disabled={!editable} />}
+                <input className="input sm num" type="number" step="any" value={c.target} aria-label={range ? "Lower bound" : "Target"} onChange={(e) => setCrit(i, { target: Number(e.target.value) })} />
+                {range && (
+                  <>
+                    <span className="faint small">to</span>
+                    <input className="input sm num" type="number" step="any" value={c.targetMax} aria-label="Upper bound" onChange={(e) => setCrit(i, { targetMax: Number(e.target.value) })} />
+                  </>
+                )}
+                <input className="input sm unit" value={c.unit} placeholder="unit" aria-label="Unit" onChange={(e) => setCrit(i, { unit: e.target.value })} />
+                {editable && c.agg !== "envelope" && (
+                  <button type="button" className="link small" title={range ? "Back to a single target" : "A range: lower and upper bound"} onClick={() => setCrit(i, range ? { targetMax: undefined } : { targetMax: c.target, op: ">=", abs: undefined })}>
+                    {range ? "single" : "range"}
+                  </button>
+                )}
+              </div>
+              <SpecBand lo={band.lo} hi={band.hi} value={null} ok={null} unit={c.unit} label={`${c.label || CRIT_KIND_LABEL[kind]} ${targetText(c)}`} />
+            </div>
+          );
+        })}
+        <p className="faint small">
+          Yield, scrap, defects (ppm), cycle time and OEE come from the stage&apos;s counts and time. A measured signal is read from the stage&apos;s asset over the stage window: its final value, minimum, maximum or mean, or it must stay within a range. &quot;Confirmed by a person&quot;
+          always stops at the gate. Every measured parameter the stage meets is proven in zero knowledge on the lot passport.
+        </p>
         <div className="form-grid two">
           <Field label="Timeout (min)">
             <input className="input" type="number" min={1} value={s.timeoutMin} onChange={(e) => props.onChange({ timeoutMin: Math.max(1, Number(e.target.value)) })} />
+          </Field>
+          <Field label="Completes when (optional)" hint="A batch process closes on its phase signal instead of its counts, e.g. execution = COMPLETE. The whole order then counts as made.">
+            <div className="crit">
+              <input
+                className="input sm sig"
+                list="ordo-signals"
+                placeholder="signal"
+                aria-label="Completion signal"
+                value={s.completeOn?.signal ?? ""}
+                disabled={!editable}
+                onChange={(e) => {
+                  const sig = e.target.value.trim().toLowerCase().replace(/\s+/g, "_");
+                  props.onChange({ completeOn: sig ? { signal: sig, equals: s.completeOn?.equals ?? "COMPLETE" } : undefined });
+                }}
+              />
+              <span className="faint small">=</span>
+              <input className="input sm" placeholder="value" aria-label="Completion value" value={s.completeOn?.equals ?? ""} disabled={!editable || !s.completeOn} onChange={(e) => props.onChange({ completeOn: s.completeOn ? { ...s.completeOn, equals: e.target.value } : undefined })} />
+            </div>
           </Field>
           <Field label="Escalate to">
             <Select<Role> value={s.escalationRole} onChange={(v) => props.onChange({ escalationRole: v })} options={meta.roles.filter((r) => r.key !== "admin").map((r) => ({ value: r.key, label: r.label }))} disabled={!editable} />

@@ -55,7 +55,8 @@ export class Templates {
       const id = `tpl_${t.key}`;
       const exists = await this.db.query("SELECT 1 FROM templates WHERE id = $1", [id]);
       if (exists.rows.length) continue;
-      const stages: StageSpec[] = t.stages.map((s) => ({ ...(s as Omit<StageSpec, "criteria">), criteria: CRITERIA_BY_AGENT[s.agent as AgentKey] ?? [] }));
+      // a stage may carry its own criteria (the lab templates do); otherwise it takes its agent's
+      const stages: StageSpec[] = t.stages.map((s) => ({ ...(s as Omit<StageSpec, "criteria">), criteria: (s as { criteria?: Criterion[] }).criteria ?? CRITERIA_BY_AGENT[s.agent as AgentKey] ?? [] }));
       const spec = TemplateSpec.parse({ stages, rework: t.rework });
       await this.db.tx(async (q) => {
         await q.query("INSERT INTO templates (id, site_id, key, name, category, description, origin) VALUES ($1, NULL, $2, $3, $4, $5, 'library')", [id, t.key, t.name, t.category, t.description]);

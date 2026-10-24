@@ -1,11 +1,14 @@
 import { createHash, randomBytes } from "node:crypto";
 import { recoverMessageAddress, recoverTypedDataAddress, type Address, type Hex } from "viem";
-import { PROOF_DOMAIN, READING_TYPES, type User } from "../auth/auth.js";
+import { MEASUREMENT_TYPES, PROOF_DOMAIN, READING_TYPES, type User } from "../auth/auth.js";
 import type { Db } from "../db/db.js";
+import type { Criterion, CriterionResult } from "../domain/types.js";
 import { HttpError } from "../engine/errors.js";
+import { kindOf } from "../pipelines/criteria.js";
 import type { RunEngine } from "../pipelines/engine.js";
 import type { PlantService } from "../plant/plant.js";
 import type { Recorder } from "./recorder.js";
+import { baseLabel, MAX_SUFFIX, scaled, specCommitment, subjectOf as specSubject, type SpecProofs } from "./spec-proofs.js";
 import { FIELD, readingCommitment, stageSubject, ZERO_ROOT } from "./stage-proofs.js";
 
 /** How far a gateway's clock and its signed requests may drift from Ordo's */
@@ -35,6 +38,28 @@ export interface ReadingSubmission {
   signedAt: number;
   signature: Hex;
 }
+/** One bound of a measured parameter a gateway signs: which signal, reduced how over the stage window, against what. */
+export interface EdgeParameter {
+  /** the criterion's label, or `label#max` for the upper bound of a range */
+  criterion: string;
+  label: string;
+  signal: string;
+  agg: "last" | "min" | "max" | "mean";
+  op: Criterion["op"];
+  target: number;
+  unit: string;
+  subject: string;
+}
+/** One signed measurement: the bound it is for, the value × 10⁴ and salt committed to (kept private by Ordo), and the signature. */
+export interface MeasurementSubmission {
+  criterion: string;
+  value: string;
+  salt: string;
+  commitment: string;
+  anchor: Hex;
+  signedAt: number;
+  signature: Hex;
+}
 /** A stage a gateway can sign: the window its counts must cover, and what the signature binds. */
 export interface EdgeStage {
   site: string;
@@ -50,6 +75,23 @@ export interface EdgeStage {
   /** the newest HCS ledger anchor: sign it, so the reading cannot be older */
   anchor: Hex;
   signed: boolean;
+  /** the stage's measured parameters, one entry per bound, for the gateway to sign from its own readings */
+  parameters: EdgeParameter[];
+  measurementsSigned: boolean;
+}
+
+/** The bounds a stage's measured-signal criteria ask a gateway to sign: a range or envelope is two. */
+export function parametersOf(runId: string, stage: string, criteria: Criterion[]): EdgeParameter[] {
+  const out: EdgeParameter[] = [];
+  for (const c of criteria) {
+    if (kindOf(c) !== "signal" || !c.signal) continue;
+    const subject = specSubject(runId, stage, c.label).toString();
+    const envelope = c.agg === "envelope";
+    const agg: EdgeParameter["agg"] = c.agg === "envelope" ? "min" : (c.agg ?? "last");
+    out.push({ criterion: c.label, label: c.label, signal: c.signal, agg, op: c.targetMax !== undefined ? ">=" : c.op, target: c.target, unit: c.unit, subject });
+    if (c.targetMax !== undefined) out.push({ criterion: `${c.label}${MAX_SUFFIX}`, label: c.label, signal: c.signal, agg: envelope ? "max" : agg, op: "<=", target: c.targetMax, unit: c.unit, subject });
+  }
+  return out;
 }
 
 const sec = (iso: string) => Math.floor(Date.parse(iso) / 1000);
@@ -68,6 +110,8 @@ const anchorHex = (h: string) => `0x${h.replace(/^sha256:/, "").replace(/^0x/, "
  */
 export class Readings {
   private seen = new Map<string, number>();
+  /** Set when criteria are proven: a source-signed measurement replaces Ordo's own commitment to the same value */
+  specProofs: SpecProofs | null = null;
 
   constructor(
     private db: Db,
@@ -125,6 +169,7 @@ export class Readings {
         const st = (await this.engine.view(a.site_id, r.run_id)).stages.find((s) => s.code === r.code);
         if (!st?.startedAt || st.assetId !== a.id) continue;
         const signed = (await this.db.query("SELECT 1 FROM stage_readings WHERE run_id = $1 AND stage_code = $2", [r.run_id, r.code])).rows.length > 0;
+        const measurementsSigned = (await this.db.query("SELECT 1 FROM measurement_readings WHERE run_id = $1 AND stage_code = $2 LIMIT 1", [r.run_id, r.code])).rows.length > 0;
         out.push({
           site: a.site_id,
           runId: r.run_id,
@@ -136,10 +181,78 @@ export class Readings {
           subject: stageSubject(a.site_id, r.run_id, r.code).toString(),
           anchor,
           signed,
+          parameters: parametersOf(r.run_id, r.code, st.criteria),
+          measurementsSigned,
         });
       }
     }
     return out;
+  }
+
+  /** A gateway signs the measured parameters of a finished stage on one of its instruments. */
+  async submitMeasurementsFromDevice(device: Address, runId: string, stage: string, ms: MeasurementSubmission[]) {
+    const run = await this.db.query<{ site_id: string }>("SELECT site_id FROM runs WHERE id = $1", [runId]);
+    const siteId = run.rows[0]?.site_id;
+    if (!siteId) throw new HttpError(404, "Run not found");
+    const st = (await this.engine.view(siteId, runId)).stages.find((x) => x.code === stage);
+    if (!st?.assetId || !(await this.assetsOf(device)).some((a) => a.id === st.assetId)) throw new HttpError(403, "This gateway is not the data source of that stage's machine");
+    return this.acceptMeasurements(siteId, runId, st, { signer: device, kind: "device" }, ms);
+  }
+
+  /**
+   * Check and keep signed measurements: each commitment must open to the value and salt sent for this lot, stage and
+   * criterion, the signature must be the signer's, and the anchor known. A value that is the one Ordo measured
+   * (`matches`) becomes the commitment the criterion is proven from.
+   */
+  private async acceptMeasurements(siteId: string, runId: string, st: { code: string; assetId: string | null; startedAt: string | null; workDoneAt: string | null; criteria: Criterion[]; criteriaResults: CriterionResult[] }, who: { signer: Address; kind: "device" | "operator" }, ms: MeasurementSubmission[]) {
+    this.windowOf(st);
+    const params = parametersOf(runId, st.code, st.criteria);
+    const results: { criterion: string; matches: boolean; stored: boolean }[] = [];
+    for (const m of ms) {
+      const p = params.find((x) => x.criterion === m.criterion);
+      if (!p) throw new HttpError(400, `${m.criterion} is not a measured parameter of ${st.code}`);
+      if (!/^\d{1,20}$/.test(m.value)) throw new HttpError(400, "value is the measurement × 10⁴, a non-negative whole number");
+      if (Math.abs(m.signedAt - this.now() / 1000) > SKEW_S * 5) throw new HttpError(400, "signedAt is too far from Ordo's clock");
+      if (!(await this.knownAnchor(m.anchor))) throw new HttpError(400, "Unknown anchor: sign the newest ledger anchor Ordo gave you");
+      let salt: bigint;
+      try {
+        salt = BigInt(m.salt);
+      } catch {
+        throw new HttpError(400, "salt is a field element");
+      }
+      if (salt <= 0n || salt >= FIELD) throw new HttpError(400, "salt is a field element");
+      const subject = BigInt(p.subject);
+      const commitment = await specCommitment(subject, BigInt(m.value), salt);
+      if (commitment.toString() !== m.commitment) throw new HttpError(400, `The commitment for ${m.criterion} is not Poseidon(subject, value, salt)`);
+      const message = { site: siteId, runId, stage: st.code, asset: st.assetId ?? "", criterion: m.criterion, commitment, anchor: m.anchor, signedAt: BigInt(m.signedAt) };
+      const signer = await recoverTypedDataAddress({ domain: PROOF_DOMAIN, types: MEASUREMENT_TYPES, primaryType: "OrdoMeasurement", message, signature: m.signature }).catch(() => null);
+      if (signer?.toLowerCase() !== who.signer) throw new HttpError(401, `The signature for ${m.criterion} is not the signer's`);
+      // Ordo's own value for the same bound, from the criteria as the stage closed
+      const c = st.criteriaResults.find((x) => x.label === baseLabel(m.criterion));
+      const mine = m.criterion.endsWith(MAX_SUFFIX) ? c?.measuredMax?.value : c?.measured?.value;
+      const matches = mine !== undefined && scaled(mine)?.toString() === m.value;
+      const ins = await this.db.query(
+        `INSERT INTO measurement_readings (run_id, stage_code, label, site_id, asset_id, signer, signer_kind, value, salt, subject, commitment, anchor, signed_at_s, signature, matches)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) ON CONFLICT DO NOTHING RETURNING run_id`,
+        [runId, st.code, m.criterion, siteId, st.assetId, who.signer, who.kind, m.value, salt.toString(), p.subject, commitment.toString(), m.anchor, m.signedAt, m.signature, matches],
+      );
+      results.push({ criterion: m.criterion, matches, stored: ins.rows.length > 0 });
+    }
+    const stored = results.filter((r) => r.stored);
+    if (!stored.length) throw new HttpError(409, "These measurements are already signed");
+    // the ledger gets the commitments and who signed them, never the values
+    const d = await this.rec.decide(siteId, {
+      agent: who.kind === "device" ? `device:${who.signer}` : `user:${who.signer}`,
+      kind: "stage.measurements_signed",
+      runId,
+      stageCode: st.code,
+      assetId: st.assetId,
+      summary: `${who.kind === "device" ? "The instrument's gateway" : "The operator"} signed ${stored.length} measured parameter${stored.length === 1 ? "" : "s"} of ${st.code}${stored.every((r) => r.matches) ? "" : ", some differing from the values Ordo recorded"}`,
+      data: { signer: who.signer, signerKind: who.kind, measurements: stored.map((r) => ({ criterion: r.criterion, commitment: ms.find((m) => m.criterion === r.criterion)!.commitment, matches: r.matches })) },
+    });
+    await this.db.query("UPDATE measurement_readings SET ledger_seq = $1 WHERE run_id = $2 AND stage_code = $3 AND ledger_seq IS NULL", [d.ledgerSeq ?? null, runId, st.code]);
+    for (const r of stored) if (r.matches) await this.specProofs?.adoptSigned(runId, st.code, r.criterion);
+    return { runId, stage: st.code, signer: who.signer, measurements: stored.map(({ criterion, matches }) => ({ criterion, matches })) };
   }
 
   async submitFromDevice(device: Address, s: ReadingSubmission) {

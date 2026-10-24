@@ -6,6 +6,9 @@ export type {
   AssetView,
   AutonomyLevel,
   Criterion,
+  CriterionBand,
+  CriterionKind,
+  CriterionResult,
   DataSource,
   DecisionView,
   InboxItemView,
@@ -15,6 +18,7 @@ export type {
   Role,
   RunStatus,
   RunView,
+  SignalAgg,
   SignalLimit,
   StageMode,
   StageRunView,
@@ -23,7 +27,7 @@ export type {
   TemplateSpec,
   TemplateView,
 } from "../../server/src/domain/types";
-import type { AgentKey, AutonomyLevel, Role, StageMode } from "../../server/src/domain/types";
+import type { AgentKey, AutonomyLevel, CriterionResult, Role, StageMode } from "../../server/src/domain/types";
 export type StageModeT = typeof StageMode extends { options: readonly (infer X)[] } ? X : never;
 
 export interface Me {
@@ -293,6 +297,8 @@ export interface PackageDetail extends Omit<PackageSummary, "owner" | "waitingOn
   returnedComment: string | null;
   assessment: { ranAt: string; agent: string; summary: string; figures: { label: string; value: string }[]; confidence: number | null } | null;
   checks: { id: string; criterion: string; method: string; target: string; source: string; result: string | null; actual: string | null; status: "pending" | "pass" | "fail"; auto: boolean; recordedBy: string | null; recordedAt: string | null }[];
+  /** the linked stage's parameters as judged, so each automated check can be drawn against its band */
+  parameters: CriterionResult[];
   evidence: { id: string; name: string; requirement: string; required: boolean; filename: string | null; mime: string | null; size: number | null; sha256: string | null; uploadedBy: string | null; uploadedAt: string | null; origin: string; version: number; removedAt: string | null; zeroG: { status: "pending" | "done" | "failed"; root: string | null; url: string | null; error: string | null } | null }[];
   chain: { meaning: string; label: string; role: Role; roleLabel: string; state: "signed" | "awaiting" | "pending" | "returned"; signer: { address: string; name: string | null } | null; signedAt: string | null; signature: string | null; comment: string | null }[];
   readiness: { ready: boolean; items: { label: string; ok: boolean }[] };
@@ -380,6 +386,13 @@ export interface AutonomyProposalView {
   onchain: RelayView | null;
 }
 
+/** The series behind a stage's measured parameters: a snapshot once its work is done, live telemetry before that. */
+export interface StageSeriesView {
+  window: { from: string; to: string } | null;
+  live: boolean;
+  signals: Record<string, { ts: number; value: number }[]>;
+}
+
 // ---------------- Lot passports ----------------
 export type PassportStatus = "in_production" | "held" | "completed" | "aborted" | "shipped";
 export interface PassportView {
@@ -393,6 +406,12 @@ export interface PassportView {
 }
 export interface SpecProof {
   status: "proven" | "pending" | "failed";
+  /** who committed to the measured value: the instrument's gateway, the operator, or Ordo's server */
+  signer: string | null;
+  signerKind: "device" | "operator" | "ordo";
+  signerEns?: string | null;
+  /** the signed OrdoMeasurement when the source committed, so its signer can be recovered here */
+  measurement: { site: string; runId: string; stage: string; asset: string; criterion: string; commitment: string; anchor: string; signedAt: string; signature: string } | null;
   system: "groth16-bn254";
   circuit: "spec_check";
   /** [subject, target × 10⁴, op, commitment] */
@@ -442,8 +461,8 @@ export interface PublicPassport {
       resource: string;
       startedAt: string | null;
       endedAt: string | null;
-      /** whether each criterion was met; the measurement stays private, with a zero-knowledge proof where it was met */
-      criteria: { label: string; target: string; ok: boolean | null; zk: SpecProof | null }[];
+      /** whether each criterion was met and its acceptable band; the measurement stays private, with a zero-knowledge proof where it was met (a range proves its upper bound separately) */
+      criteria: { label: string; target: string; ok: boolean | null; band: { lo: number | null; hi: number | null }; unit: string; zk: SpecProof | null; zkMax: SpecProof | null }[];
       deviation: boolean;
       /** proof of work: who signed the stage's counts where they were made, and the proof they meet its criteria */
       work: StageWork | null;

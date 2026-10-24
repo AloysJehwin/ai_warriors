@@ -1,6 +1,6 @@
 # Pipeline template library
 
-Ordo ships 15 templates. Parallel stages share a column and are joined with **+**; numbers follow the console (`02a`, `02b` for parallel lanes). The summary table lists each rework loop (where a later stage sends units back to an earlier one). Gates are stages owned by the Vision QA agent (default execution mode *Approve*).
+Ordo ships 16 templates. Parallel stages share a column and are joined with **+**; numbers follow the console (`02a`, `02b` for parallel lanes). The summary table lists each rework loop (where a later stage sends units back to an earlier one). Gates are stages owned by the Vision QA agent (default execution mode *Approve*).
 
 ## Summary
 
@@ -21,6 +21,7 @@ Ordo ships 15 templates. Parallel stages share a column and are joined with **+*
 | Engineer-to-order | Lifecycle | 12 | 3 | — |
 | New product introduction | Lifecycle | 6 | 2 | stage 04 → 03 |
 | Rework & recall | Quality | 8 | 5 | stage 05 → 04 |
+| Protein synthesis | Regulated | 7 | 1 | — |
 
 ## Discrete assembly
 
@@ -296,6 +297,44 @@ Ordo ships 15 templates. Parallel stages share a column and are joined with **+*
 | 04 | Rework | Line agent | Robot cell R-3 | Line supervisor | Auto |
 | 05 | Re-inspection | Vision QA agent | Vision station VS-02 | Quality engineer | Approve |
 | 06 | Close-out | Vision QA agent | Vision station VS-02 | Quality engineer | Approve |
+
+## Protein synthesis
+
+*Regulated.* Expression of a recombinant protein, purification, characterisation and QC release, the autonomous-lab example from [research.md](research.md). The order quantity is the number of batches (1 for a single expression). Most of its criteria are **measured parameters**: an instrument's signal over the stage window, judged against a band, rather than unit counts. See [Parameters](#parameters-success-criteria) below.
+
+**Flow:** Batch record issue → Expression (bioreactor) → Harvest and lysis → Purification (FPLC) → Characterisation → QC release → Fill and finish  
+**Rework loop:** none.
+
+| # | Stage | Owning agent | Default resource | Gate role | Default mode | Parameters |
+| --- | --- | --- | --- | --- | --- | --- |
+| 01 | Batch record issue | Planning agent | System | Line supervisor | Auto | — |
+| 02 | Expression (bioreactor) | Process agent | Process vessel | Process engineer | Auto | Culture temperature (temperature, stays within) 35–39 °C; Cell density OD600 (od600, final value) ≥ 0.6; Dissolved oxygen (dissolved_oxygen, minimum) ≥ 30 % |
+| 03 | Harvest and lysis | Line agent | Robot cell | Line supervisor | Auto | Yield ≥ 95 % |
+| 04 | Purification (FPLC) | Process agent | Process vessel | Process engineer | Auto | Protein yield (yield_mg_l, final value) ≥ 10 mg/L; Purity (purity_pct, final value) ≥ 95 %; Column pressure (pressure_bar, maximum) ≤ 3 bar |
+| 05 | Characterisation | Vision QA agent | Inspection station | Quality engineer | Auto | Specific activity (specific_activity, final value) ≥ 50 U/mg; Aggregates (aggregate_pct, maximum) ≤ 5 % |
+| 06 | QC release | Vision QA agent | Manual station | Quality engineer | Approve | Endotoxin (endotoxin_eu_mg, final value) ≤ 0.5 EU/mg; Bioburden (bioburden_cfu, final value) = 0 CFU |
+| 07 | Fill and finish | Logistics agent | Pack line | Line supervisor | Auto | Fill yield ≥ 99 % |
+
+## Parameters (success criteria)
+
+A stage's success criteria are its **parameters**. Each is judged from measured data only; a parameter nobody measured is never assumed to pass, it stops the stage at a gate for a person to confirm. A criterion names what it measures (`kind`):
+
+| Kind | Measured from | Example |
+| --- | --- | --- |
+| Yield %, Scrap %, Defects ppm | the stage's good and scrap counts | Yield ≥ 95 % |
+| Cycle time | counts and the stage's elapsed time | Cycle time ≤ 62 s |
+| OEE % | the stage's asset, over the stage window | OEE ≥ 80 % |
+| Measured signal | one signal of the stage's asset over the stage window, reduced by an aggregate: **final value**, **minimum**, **maximum**, **mean**, or **stays within** (the window's minimum and maximum must both be inside a range) | Culture temperature (temperature, stays within) 35–39 °C |
+| Confirmed by a person | nothing automatic; a person confirms it at the gate | Cpk ≥ 1.33 |
+
+Older templates carry no `kind`; the label says what it is (yield, scrap, defects ppm, cycle time, OEE), anything else is confirmed by a person.
+
+- **Ranges.** A criterion with a lower and an upper bound (`target` and `targetMax`) renders as `35–39 °C` and passes when the value is inside. It is two statements, one per bound, so each bound gets its own zero-knowledge proof on the lot passport.
+- **Where the signal comes from.** A measured signal is read from telemetry the stage's asset reported during the stage: a gateway, an MTConnect agent, a CSV replay, or readings a person records (on the asset, or in the stage's **Record units** dialog, which stores them with the stage when it has no asset). Ordo keeps a signal an active stage reads even when it is not a standard machine signal; see [data-sources.md](data-sources.md).
+- **What is kept.** When a stage's work finishes, the series its parameters read are snapshotted with the run (`stage_series`, at most 120 points per signal), so the chart survives telemetry retention. Live telemetry serves the same view while the stage runs.
+- **What is shown.** The console draws every parameter against its band (the acceptable region, the measured value as a marker: ● pass, ▲ out of spec, ○ not measured) on the flow node, the stage popover, the stage drawer with the signal's trend, the approval, the validation package (which attaches the chart as evidence) and the public passport, where the band and the proof status are public and the value is not.
+- **What is proven.** Each parameter a stage met is proven in zero knowledge (`spec_check`) from a commitment recorded when the stage closed: the instrument's gateway's own signed commitment where it measured the value, Ordo's otherwise. Count parameters are additionally proven from the source-signed counts (`stage_check`). Source-signed parameter proofs are re-verified on-chain when the lot is released. See [proof-of-work.md](proof-of-work.md).
+- **Completion by phase.** A stage may set `completeOn: { signal, equals }` (in the builder, "Completes when"), for example `execution = COMPLETE`: the stage's work is done when its asset reports that phase after the stage started, rather than when counts reach the order quantity, and the order then counts as made. Without it, a batch process uses the order quantity as its batch count.
 
 ## Default success criteria by agent
 

@@ -3,7 +3,7 @@ import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { foundry } from "viem/chains";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { dnsEncode } from "../../src/chain/ensv2.js";
-import { ORDO_ENS_ROLES_ABI, ORDO_ENS_ROLES_BYTECODE, ORDO_LOT_RESOLVER_ABI, ORDO_LOT_RESOLVER_BYTECODE, ORDO_STAGE_VERIFIER_ABI, ORDO_STAGE_VERIFIER_BYTECODE } from "../../src/chain/ordo-ens-abi.js";
+import { ORDO_ENS_ROLES_ABI, ORDO_ENS_ROLES_BYTECODE, ORDO_LOT_RESOLVER_ABI, ORDO_LOT_RESOLVER_BYTECODE, ORDO_STAGE_VERIFIER_ABI, ORDO_SPEC_VERIFIER_ABI, ORDO_SPEC_VERIFIER_BYTECODE, ORDO_STAGE_VERIFIER_BYTECODE } from "../../src/chain/ordo-ens-abi.js";
 import { PROOF_DOMAIN, READING_TYPES, RELEASE_TYPES } from "../../src/auth/auth.js";
 import { personLabel } from "../../src/core/names.js";
 import { edgeMessage } from "../../src/core/readings.js";
@@ -69,7 +69,8 @@ run("ENS credentials and lot names", () => {
     d = deployer(anvil.url);
     roles = await d.deploy({ abi: ORDO_ENS_ROLES_ABI, bytecode: ORDO_ENS_ROLES_BYTECODE }, [stack.parentRegistry, "ordo-test.eth"]);
     const verifier = await d.deploy({ abi: ORDO_STAGE_VERIFIER_ABI, bytecode: ORDO_STAGE_VERIFIER_BYTECODE }, []);
-    lots = await d.deploy({ abi: ORDO_LOT_RESOLVER_ABI, bytecode: ORDO_LOT_RESOLVER_BYTECODE }, [roles, verifier, stack.resolver, d.account.address, ["https://ordo.example/v1/public/ens/{sender}/{data}.json"]]);
+    const specVerifier = await d.deploy({ abi: ORDO_SPEC_VERIFIER_ABI, bytecode: ORDO_SPEC_VERIFIER_BYTECODE }, []);
+    lots = await d.deploy({ abi: ORDO_LOT_RESOLVER_ABI, bytecode: ORDO_LOT_RESOLVER_BYTECODE }, [roles, verifier, specVerifier, stack.resolver, d.account.address, ["https://ordo.example/v1/public/ens/{sender}/{data}.json"]]);
     ({ sys, app } = await boot({
       ENS_PARENT_NAME: "ordo-test.eth",
       ENS_REGISTRY_ADDRESS: stack.parentRegistry,
@@ -245,7 +246,7 @@ run("ENS credentials and lot names", () => {
     expect(await onchainText(LOT, "com.ordo.release")).toMatch(/^0x[0-9a-f]{64}$/);
     expect(await onchainText(LOT, "com.ordo.release.package")).toBe(id);
     expect(proofRoot).not.toBe(`0x${"00".repeat(32)}`);
-    expect(await onchainText(LOT, "com.ordo.release.proofs")).toBe(`1 stages proven, root ${proofRoot}`);
+    expect(await onchainText(LOT, "com.ordo.release.proofs")).toBe(`1 stages and 0 parameters proven, root ${proofRoot}`);
     expect(await onchainText(LOT, "com.ordo.release.signers")).toBe([admin, qe, pm].map((c) => `${personLabel(c.address)}.${SITE}`).join(","));
     const decisions = (await admin.call("GET", `${S()}/decisions?limit=100`)).json;
     expect(decisions.some((x: any) => x.kind === "ens.lot_released")).toBe(true);
@@ -261,7 +262,7 @@ run("ENS credentials and lot names", () => {
         return { ...message, signature };
       }),
     );
-    await expect(d.pub.simulateContract({ address: lots, abi: ORDO_LOT_RESOLVER_ABI as Abi, functionName: "recordRelease", args: [lot, sigs, []], account: d.account })).rejects.toThrow(/NotCredentialed/);
+    await expect(d.pub.simulateContract({ address: lots, abi: ORDO_LOT_RESOLVER_ABI as Abi, functionName: "recordRelease", args: [lot, sigs, [], []], account: d.account })).rejects.toThrow(/NotCredentialed/);
   }, 180_000);
 
   it("revoking a member name revokes the role everywhere", async () => {

@@ -478,7 +478,7 @@ svg.flow { display: block; margin: 0 auto; overflow: visible; }
 .signal { background: var(--surface); border: 1px solid var(--divider); border-radius: var(--radius); padding: 8px 10px; }
 .sig-h { display: flex; justify-content: space-between; gap: 6px; font-size: 13px; }
 .spark { width: 100%; height: 56px; display: block; margin: 4px 0; }
-.sp-line { fill: none; stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.sp-line { fill: none; stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
 .sp-warn { stroke: var(--warn); stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; }
 .sp-alarm { stroke: var(--bad); stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; }
 .spark-empty { padding: 10px 0; }
@@ -721,3 +721,54 @@ body:has(.op) .theme-float { display: none; }
   .pp-qr { align-self: center; }
   .pp-modal { grid-template-columns: 1fr; justify-items: start; }
 }
+
+/* ---------- Parameters: spec bands, parameter cards, criteria ring ---------- */
+/* a band is a neutral region with its bounds ticked; the state sits on the marker, by shape as well as colour */
+.specband { display: block; width: 100%; max-width: 260px; height: 40px; overflow: visible; }
+.specband.compact { width: 120px; height: 14px; max-width: none; vertical-align: middle; }
+.sb-axis { stroke: var(--divider); stroke-width: 1; }
+.sb-band { fill: color-mix(in srgb, var(--text) 9%, transparent); }
+.sb-tick { stroke: var(--muted); stroke-width: 1.5; }
+.sb-tick-l, .sb-val { font-size: 9px; fill: var(--muted); font-family: var(--mono); }
+.sb-val { fill: var(--text); font-weight: 500; }
+.sb-ring { fill: var(--surface); }
+.sb-mark.ok { fill: var(--ok); }
+.sb-mark.bad { fill: var(--bad); }
+.sb-mark.na { fill: none; stroke: var(--faint); stroke-width: 1.5; stroke-dasharray: 2 1.5; }
+.sb-span { stroke-width: 2.5; }
+.sb-span.ok { stroke: var(--ok); }
+.sb-span.bad { stroke: var(--bad); }
+.band-list { list-style: none; margin: 0 0 10px; padding: 0; display: grid; gap: 4px; }
+.band-list li { display: grid; grid-template-columns: minmax(0, 1fr) 120px auto; align-items: center; gap: 8px; font-size: 12.5px; }
+.bl-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bl-val { font-family: var(--mono); font-size: 12px; white-space: nowrap; }
+.band-cell { display: flex; flex-direction: column; gap: 2px; min-width: 124px; }
+.pp-crit { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 2px 0; }
+
+.param-card { border: 1px solid var(--divider); border-left: 3px solid var(--faint); border-radius: var(--radius); padding: 8px 10px; margin-bottom: 8px; background: var(--surface); }
+.param-card.s-ok { border-left-color: var(--ok); }
+.param-card.s-bad { border-left-color: var(--bad); }
+.pc-h { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 4px; font-size: 13.5px; }
+.pc-meta { margin: 2px 0 4px; }
+.sp-band { fill: color-mix(in srgb, var(--text) 8%, transparent); }
+.sp-lim { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 2 2; vector-effect: non-scaling-stroke; }
+.sp-mark { fill: none; stroke-width: 9; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.sp-mark.ok { stroke: var(--ok); }
+.sp-mark.bad { stroke: var(--bad); }
+.sp-mark.na { stroke: var(--faint); }
+
+/* one arc per parameter around a flow node: solid pass, solid with an outward tick for out of spec, dashed unmeasured */
+.cring path { fill: none; stroke-width: 2.5; stroke-linecap: butt; }
+.cring .cr-ok { stroke: var(--ok); }
+.cring .cr-bad { stroke: var(--bad); }
+.cring .cr-na { stroke: var(--faint); stroke-dasharray: 2.5 2.5; }
+.cring .cr-tick { stroke: var(--bad); stroke-width: 2; }
+
+/* builder: a parameter is several rows (kind and name, signal and aggregate, bounds) plus its band preview */
+.crit2 { border: 1px solid var(--divider); border-radius: var(--radius); padding: 8px; margin-bottom: 8px; background: var(--surface); }
+.crit2 .crit { margin-bottom: 6px; }
+.crit2 .crit:has(+ .specband) { margin-bottom: 2px; }
+.crit .input.sig { flex: 1; min-width: 0; font-family: var(--mono); }
+.crit .link.small { font-size: 12px; white-space: nowrap; }
+
+.pp-signer { font-size: 11.5px; }

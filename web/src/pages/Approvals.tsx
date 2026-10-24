@@ -6,6 +6,7 @@ import { actorLabel, dateTime, time } from "../lib/format";
 import { go, href, useRoute } from "../lib/router";
 import type { InboxItemView } from "../types";
 import { Action, Empty, Field, Loading, Segmented } from "../ui/kit";
+import { SpecBand } from "../ui/SpecBand";
 
 type Filter = "pending" | "approved" | "rejected" | "all";
 
@@ -82,6 +83,7 @@ function Detail({ item }: { item: InboxItemView }) {
             <div key={m.label}>
               <span className="label">{m.label}</span>
               <b>{m.value}</b>
+              {m.band && <SpecBand compact lo={m.band.lo} hi={m.band.hi} value={m.band.value} valueMax={m.band.valueMax ?? null} ok={m.band.ok} unit={m.band.unit} label={m.label} />}
             </div>
           ))}
         </div>

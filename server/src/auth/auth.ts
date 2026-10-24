@@ -207,6 +207,23 @@ export const READING_TYPES = {
     { name: "signedAt", type: "uint64" },
   ],
 } as const;
+/**
+ * What the source of a measured parameter (an instrument's gateway, or the operator) signs: a commitment to the value,
+ * Poseidon(subject, value × 10⁴, salt), exactly what the spec-check circuit hashes, never the value. `criterion` is the
+ * criterion's label, or `label#max` for the upper bound of a range.
+ */
+export const MEASUREMENT_TYPES = {
+  OrdoMeasurement: [
+    { name: "site", type: "string" },
+    { name: "runId", type: "string" },
+    { name: "stage", type: "string" },
+    { name: "asset", type: "string" },
+    { name: "criterion", type: "string" },
+    { name: "commitment", type: "uint256" },
+    { name: "anchor", type: "bytes32" },
+    { name: "signedAt", type: "uint64" },
+  ],
+} as const;
 export const PROOF_DOMAIN = { name: "Ordo", version: "2" } as const;
 export interface ReleaseMessage {
   site: string;

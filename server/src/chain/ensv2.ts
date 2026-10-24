@@ -257,8 +257,8 @@ export class EnsV2 {
   async rolesOf(siteId: string, label: string, account: Address): Promise<number> {
     return Number(await this.read<number>(this.need(this.cfg.credentials, "ENS_ROLES_ADDRESS"), "rolesOf", [keccak256(stringToBytes(siteId)), label, account], ORDO_ENS_ROLES_ABI as Abi));
   }
-  sendRecordRelease(i: { lot: unknown; sigs: unknown[]; proofs: unknown[] }): Promise<Hex> {
-    return this.send(this.need(this.cfg.lotResolver, "ENS_LOT_RESOLVER_ADDRESS"), "recordRelease", [i.lot, i.sigs, i.proofs], ORDO_LOT_RESOLVER_ABI as Abi);
+  sendRecordRelease(i: { lot: unknown; sigs: unknown[]; proofs: unknown[]; params: unknown[] }): Promise<Hex> {
+    return this.send(this.need(this.cfg.lotResolver, "ENS_LOT_RESOLVER_ADDRESS"), "recordRelease", [i.lot, i.sigs, i.proofs, i.params], ORDO_LOT_RESOLVER_ABI as Abi);
   }
   /** Sign a CCIP-Read answer the way OrdoLotResolver.resolveWithProof checks it. */
   signAnswer(request: Hex, result: Hex, expires: bigint): Promise<Hex> {

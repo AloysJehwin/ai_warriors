@@ -98,8 +98,71 @@ export interface AssetView {
 // ---------- Templates ----------
 export const STAGE_MODES = ["auto", "approve", "manual"] as const;
 export const StageMode = z.enum(STAGE_MODES);
-export const Criterion = z.object({ label: z.string(), op: z.enum([">=", "<=", "=="]), target: z.number(), unit: z.string().default(""), abs: z.boolean().optional() });
+/** What a criterion measures. Absent on older specs: inferred from the label (yield, scrap, defects ppm, cycle time, OEE), else manual. */
+export const CRITERION_KINDS = ["yield", "scrap_pct", "defects_ppm", "cycle_time", "oee", "signal", "manual"] as const;
+export const CriterionKind = z.enum(CRITERION_KINDS);
+export type CriterionKind = z.infer<typeof CriterionKind>;
+export const CRITERION_KIND_LABEL: Record<CriterionKind, string> = {
+  yield: "Yield %",
+  scrap_pct: "Scrap %",
+  defects_ppm: "Defects ppm",
+  cycle_time: "Cycle time",
+  oee: "OEE %",
+  signal: "Measured signal",
+  manual: "Confirmed by a person",
+};
+/** How a measured signal becomes one value over the stage window. `envelope` keeps both ends: min ≥ target and max ≤ targetMax. */
+export const SIGNAL_AGGS = ["last", "min", "max", "mean", "envelope"] as const;
+export const SignalAgg = z.enum(SIGNAL_AGGS);
+export type SignalAgg = z.infer<typeof SignalAgg>;
+export const SIGNAL_AGG_LABEL: Record<SignalAgg, string> = { last: "Final value", min: "Minimum", max: "Maximum", mean: "Mean", envelope: "Stays within" };
+export const CRITERION_OPS = [">=", "<=", "=="] as const;
+export const Criterion = z
+  .object({
+    label: z.string(),
+    op: z.enum(CRITERION_OPS),
+    target: z.number(),
+    unit: z.string().default(""),
+    abs: z.boolean().optional(),
+    kind: CriterionKind.optional(),
+    /** the telemetry signal a `signal` criterion reads on the stage's asset (the name as the asset reports it) */
+    signal: z.string().regex(/^[\w.:-]{1,40}$/).optional(),
+    /** default `last` */
+    agg: SignalAgg.optional(),
+    /** a range: `target` is the lower bound (op ≥) and this the upper */
+    targetMax: z.number().optional(),
+  })
+  .superRefine((c, ctx) => {
+    if (c.kind === "signal" && !c.signal) ctx.addIssue({ code: "custom", message: "A measured-signal criterion names the signal it reads", path: ["signal"] });
+    if (c.agg === "envelope" && c.targetMax === undefined) ctx.addIssue({ code: "custom", message: "A 'stays within' criterion needs an upper bound", path: ["targetMax"] });
+    if (c.targetMax !== undefined) {
+      if (c.op !== ">=") ctx.addIssue({ code: "custom", message: "A range uses ≥ for its lower bound", path: ["op"] });
+      if (c.abs) ctx.addIssue({ code: "custom", message: "A range cannot be absolute", path: ["abs"] });
+      if (c.targetMax < c.target) ctx.addIssue({ code: "custom", message: "The upper bound must be at least the lower bound", path: ["targetMax"] });
+    }
+  });
 export type Criterion = z.infer<typeof Criterion>;
+/** One criterion judged against what was measured. `actual`, `measured` and `measuredMax` carry the values: they stay on authenticated routes. */
+export interface CriterionResult {
+  label: string;
+  kind: CriterionKind;
+  signal?: string;
+  agg?: SignalAgg;
+  unit: string;
+  /** the target as shown: "≥ 95 %", "35–39 °C" */
+  target: string;
+  actual: string | null;
+  /** null: not measured; a person confirms it, it is never assumed to pass */
+  ok: boolean | null;
+  /** the acceptable region, for drawing; an open end is null */
+  band: { lo: number | null; hi: number | null };
+  /** how many samples the value came from (signal criteria) */
+  n?: number;
+  /** the number compared against the target (after `abs`): what a zero-knowledge proof of the result commits to */
+  measured?: { value: number; op: Criterion["op"]; target: number };
+  /** the upper half of a range (the window maximum for `envelope`): a second proof, under `label#max` */
+  measuredMax?: { value: number; op: "<="; target: number };
+}
 export const StageSpec = z.object({
   code: z.string().regex(/^\d{2}[a-z]?$/),
   column: z.number().int().min(1),
@@ -110,6 +173,8 @@ export const StageSpec = z.object({
   escalationRole: Role,
   timeoutMin: z.number().int().min(1).max(7 * 24 * 60),
   criteria: z.array(Criterion).default([]),
+  /** work is done when the asset reports this signal with this value (a batch process's phase, e.g. execution = COMPLETE) instead of when the counts reach the quantity */
+  completeOn: z.object({ signal: z.string().regex(/^[\w.:-]{1,40}$/), equals: z.string().trim().min(1).max(40) }).optional(),
 });
 export type StageSpec = z.infer<typeof StageSpec>;
 export const TemplateSpec = z.object({
@@ -152,7 +217,7 @@ export interface StageRunView extends StageSpec {
   progress: number;
   outcome: string | null;
   deviation: boolean;
-  criteriaResults: { label: string; target: string; actual: string | null; ok: boolean | null; measured?: { value: number; op: Criterion["op"]; target: number } }[];
+  criteriaResults: CriterionResult[];
   decisions: number;
   gateItemId: string | null;
   /** why the stage waits on a person (no counter, manual mode, no asset registered) */
@@ -194,6 +259,16 @@ export interface RunView {
 }
 
 // ---------- Decisions, inbox, incidents ----------
+/** A criterion drawn as a band: the acceptable region and where the value fell (null when not measured) */
+export interface CriterionBand {
+  lo: number | null;
+  hi: number | null;
+  value: number | null;
+  /** the upper value of an envelope (its minimum is `value`) */
+  valueMax?: number | null;
+  ok: boolean | null;
+  unit: string;
+}
 export interface DecisionView {
   id: string;
   agent: string;
@@ -228,7 +303,7 @@ export interface InboxItemView {
   stageCode: string | null;
   assetId: string | null;
   incidentId: string | null;
-  metrics: { label: string; value: string }[];
+  metrics: { label: string; value: string; band?: CriterionBand }[];
   options: InboxOption[];
   recommended: number | null;
   confidence: number | null;

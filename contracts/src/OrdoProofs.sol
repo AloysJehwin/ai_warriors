@@ -7,8 +7,12 @@ pragma solidity ^0.8.24;
 ///    for one stage: Poseidon(subject, good, scrap, startedAt, endedAt, salt). The counts stay private; the stage-check
 ///    circuit proves from the same commitment that they meet the stage's criteria. `anchor` is the newest HCS ledger
 ///    anchor the signer had seen, so the reading cannot predate it.
+///  - `OrdoMeasurement`: the source of a measured parameter (an instrument's gateway, or the operator) signs a commitment
+///    to the value it measured for one stage's criterion: Poseidon(subject, value × 10⁴, salt), exactly what the
+///    spec-check circuit hashes, so the same commitment proves the value meets the criterion's bound. The upper bound
+///    of a range is a second statement, with criterion `label#max`, over the same subject.
 ///  - `OrdoRelease`: each of the three people who release a package (performed, reviewed, approved) signs exactly what
-///    is released: the site, package, run and lot, the content hash and the root of the stage proofs.
+///    is released: the site, package, run and lot, the content hash and the root of the stage and parameter proofs.
 /// The domain has no chain id: both are statements about a lot, not instructions to one contract. Replaying one can
 /// only state the same thing again, and each contract burns nonces and checks the release deadline.
 library OrdoProofs {
@@ -19,6 +23,10 @@ library OrdoProofs {
         );
     bytes32 internal constant READING_TYPEHASH =
         keccak256("OrdoReading(string site,string runId,string stage,string asset,uint256 commitment,bytes32 anchor,uint64 signedAt)");
+    bytes32 internal constant MEASUREMENT_TYPEHASH =
+        keccak256("OrdoMeasurement(string site,string runId,string stage,string asset,string criterion,uint256 commitment,bytes32 anchor,uint64 signedAt)");
+    /// marks a parameter leaf in the proof root, so it can never be read as a stage leaf
+    bytes32 internal constant PARAM_LEAF = keccak256("ordo:param");
     /// the BN254 scalar field, where the circuit's inputs live
     uint256 internal constant FIELD = 21888242871839275222246405745257275088548364400416034343698204186575808495617;
 
@@ -63,6 +71,26 @@ library OrdoProofs {
         uint256[4] targets;
     }
 
+    /// One parameter's proof: the source-signed measurement commitment and the Groth16 proof (spec_check) that the
+    /// committed value meets the criterion's bound. `criterion` is the criterion's label, or `label#max` for the upper
+    /// bound of a range; both bounds share one subject.
+    struct ParamProof {
+        string stage;
+        string asset;
+        string criterion;
+        uint256 commitment;
+        bytes32 anchor;
+        uint64 signedAt;
+        bytes sig;
+        uint256[2] a;
+        uint256[2][2] b;
+        uint256[2] c;
+        /// 0 at least, 1 at most, 2 exactly
+        uint256 op;
+        /// the bound × 10⁴
+        uint256 target;
+    }
+
     error BadSignature();
     error WrongRelease();
     error WrongMeaning();
@@ -103,6 +131,51 @@ library OrdoProofs {
             abi.encode(READING_TYPEHASH, keccak256(bytes(site)), keccak256(bytes(runId)), keccak256(bytes(p.stage)), keccak256(bytes(p.asset)), p.commitment, p.anchor, p.signedAt)
         );
         return keccak256(abi.encodePacked("\x19\x01", domainSeparator(), h));
+    }
+
+    function measurementDigest(string calldata site, string calldata runId, ParamProof calldata p) internal pure returns (bytes32) {
+        bytes32 h = keccak256(
+            abi.encode(
+                MEASUREMENT_TYPEHASH,
+                keccak256(bytes(site)),
+                keccak256(bytes(runId)),
+                keccak256(bytes(p.stage)),
+                keccak256(bytes(p.asset)),
+                keccak256(bytes(p.criterion)),
+                p.commitment,
+                p.anchor,
+                p.signedAt
+            )
+        );
+        return keccak256(abi.encodePacked("\x19\x01", domainSeparator(), h));
+    }
+
+    /// The field element a parameter proof is bound to: this run (lot), this stage, this criterion. Both bounds of a
+    /// range share it (`label#max` names the same criterion as `label`).
+    function specSubjectOf(string calldata runId, string calldata stage, string calldata criterion) internal pure returns (uint256) {
+        return uint256(sha256(bytes(string.concat("ordo:spec:", runId, ":", stage, ":", baseLabel(criterion))))) % FIELD;
+    }
+
+    /// `label#max` is the upper bound of `label`.
+    function baseLabel(string calldata criterion) internal pure returns (string memory) {
+        bytes calldata b = bytes(criterion);
+        uint256 n = b.length;
+        if (n > 4 && b[n - 4] == "#" && b[n - 3] == "m" && b[n - 2] == "a" && b[n - 1] == "x") return string(b[0:n - 4]);
+        return criterion;
+    }
+
+    /// The spec-check circuit's public signals: [subject, target, op, commitment].
+    function paramSignals(uint256 subject, ParamProof calldata p) internal pure returns (uint256[4] memory s) {
+        s[0] = subject;
+        s[1] = p.target;
+        s[2] = p.op;
+        s[3] = p.commitment;
+    }
+
+    /// Parameter proofs fold after the stages: root = keccak256(root, keccak256(PARAM_LEAF, subject, commitment, op, target, signer)).
+    function foldParam(bytes32 root, uint256 subject, ParamProof calldata p, address signer) internal pure returns (bytes32) {
+        bytes32 leaf = keccak256(abi.encode(PARAM_LEAF, subject, p.commitment, p.op, p.target, signer));
+        return keccak256(abi.encode(root, leaf));
     }
 
     /// The field element a stage proof is bound to: this site, this run (lot), this stage.

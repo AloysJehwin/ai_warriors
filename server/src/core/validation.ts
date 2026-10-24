@@ -7,15 +7,19 @@ import type { Signatures, User } from "../auth/auth.js";
 import type { Db } from "../db/db.js";
 import type { LedgerStore } from "../db/ledger-store.js";
 import { canApproveAny } from "../domain/policy.js";
-import { ROLE_LABEL, type PackageType, type Role } from "../domain/types.js";
+import { ROLE_LABEL, SIGNAL_AGG_LABEL, type PackageType, type Role } from "../domain/types.js";
 import { HttpError } from "../engine/errors.js";
+import { kindOf, targetText } from "../pipelines/criteria.js";
 import type { RunEngine } from "../pipelines/engine.js";
+import { renderParameterChart } from "../pipelines/param-chart.js";
+import type { StageSeries } from "../pipelines/stage-series.js";
 import { newId } from "../plant/plant.js";
 import type { Inbox } from "./inbox.js";
 import type { LotNames } from "./lot-names.js";
 import type { Replicas, ReplicaView } from "./replicas.js";
 import type { Trust } from "./trust.js";
 import type { Recorder } from "./recorder.js";
+import type { SpecProofs } from "./spec-proofs.js";
 import { ZERO_ROOT, type StageProofs } from "./stage-proofs.js";
 
 export const PACKAGE_LABEL: Record<PackageType, string> = {
@@ -77,6 +81,8 @@ interface ReleaseStatement {
   proofRoot: Hex;
   /** the stages folded into proofRoot, in order */
   stages: string[];
+  /** the source-signed parameters folded after them, keyed `stage|label` */
+  params?: string[];
 }
 
 export class Validation {
@@ -96,6 +102,10 @@ export class Validation {
   lots: LotNames | null = null;
   /** Zero-knowledge proofs of each stage's signed counts: their root is part of what a release signs */
   stageProofs: StageProofs | null = null;
+  /** Zero-knowledge proofs of each measured parameter: the source-signed ones fold into the same root, after the stages */
+  specProofs: SpecProofs | null = null;
+  /** Set when stage series are kept: the agent pre-check then attaches a parameter chart as evidence */
+  series: StageSeries | null = null;
 
   /** The release statement as it stands now. The content is the package's checks and evidence, which are locked once Performed by is signed. */
   private async statementOf(siteId: string, p: PkgRow): Promise<ReleaseStatement> {
@@ -103,7 +113,8 @@ export class Validation {
     const content = { packageId: p.id, type: p.type, title: p.title, checks: full.checks.map((c) => [c.criterion, c.target, c.status, c.actual]), evidence: full.evidence.filter((e) => e.sha256 && !e.removedAt).map((e) => e.sha256) };
     const runId = p.run_id ?? "";
     const proofs = runId && this.stageProofs ? await this.stageProofs.bundle(runId) : { root: ZERO_ROOT, stages: [] };
-    return { runId, lot: runId ? await this.lotLabel(siteId, runId) : "", contentHash: `0x${hashOf(content).replace("sha256:", "")}` as Hex, proofRoot: proofs.root, stages: proofs.stages.map((s) => s.stage) };
+    const params = runId && this.specProofs ? await this.specProofs.bundle(runId, proofs.root) : { root: proofs.root, keys: [] };
+    return { runId, lot: runId ? await this.lotLabel(siteId, runId) : "", contentHash: `0x${hashOf(content).replace("sha256:", "")}` as Hex, proofRoot: params.root, stages: proofs.stages.map((s) => s.stage), params: params.keys };
   }
   /** The lot's ENS label, which the release signatures name, so OrdoLotResolver records it under the same name. */
   private async lotLabel(siteId: string, runId: string): Promise<string> {
@@ -136,7 +147,7 @@ export class Validation {
       const run = await this.engine.view(siteId, input.runId);
       const st = run.stages.find((s) => s.code === input.stageCode);
       if (!st) throw new HttpError(404, "Stage not found");
-      checks = st.criteria.map((c) => ({ criterion: c.label, method: "Measured from run data", target: `${c.op === ">=" ? "≥" : c.op === "<=" ? "≤" : "="} ${c.abs ? "±" : ""}${c.target}${c.unit ? ` ${c.unit}` : ""}`, auto: true }));
+      checks = st.criteria.map((c) => ({ criterion: c.label, method: kindOf(c) === "signal" ? `Measured: ${c.signal} (${SIGNAL_AGG_LABEL[c.agg ?? "last"].toLowerCase()}) over the stage` : kindOf(c) === "manual" ? "Confirmed by a person" : "Measured from run data", target: targetText(c), auto: true }));
     }
     await this.db.tx(async (q) => {
       await q.query(
@@ -216,6 +227,12 @@ export class Validation {
       const decisions = await this.rec.decisions(siteId, { runId: p.run_id, limit: 500 });
       const record = { run: { id: run.id, template: `${run.templateName} v${run.templateVersion}`, order: run.orderRef, quantity: run.quantity }, stage: st, decisions: decisions.filter((d) => d.stageCode === p.stage_code) };
       await this.storeEvidence(id, { name: `Run record ${run.id} · ${st.code}`, filename: `${run.id}-${st.code}-record.json`, mime: "application/json", bytes: new TextEncoder().encode(JSON.stringify(record, null, 2)), origin: "agent", by: agent });
+      // the parameter chart: each criterion against its band, with the signal's trend over the stage window (values stay behind this authenticated route)
+      if (st.criteriaResults.length) {
+        const series = this.series ? await this.series.read(run.id, st) : null;
+        const svg = renderParameterChart({ title: `${run.id} · ${st.code} ${st.name}`, subtitle: `${run.templateName} v${run.templateVersion} · ${run.orderRef}${st.assetName ? ` · ${st.assetName}` : ""}`, criteria: st.criteriaResults, series });
+        await this.storeEvidence(id, { name: `Parameter chart ${run.id} · ${st.code}`, filename: `${run.id}-${st.code}-parameters.svg`, mime: "image/svg+xml", bytes: new TextEncoder().encode(svg), origin: "agent", by: agent });
+      }
     }
     const auto = checks.filter((c) => c.auto).length;
     const confidence = auto ? Math.round((measured / auto) * (passed / Math.max(1, measured)) * 100) / 100 : null;
@@ -431,9 +448,10 @@ export class Validation {
     const st = await this.signedStatement(p.id);
     const lot: ReleaseLot = { siteId, lotLabel: st.lot, packageId: p.id, runId: st.runId, contentHash: st.contentHash, proofRoot: st.proofRoot };
     const relay = await this.trust.recordRelease(siteId, lot);
-    // OrdoLotResolver re-checks every stage proof the root folds before it records the release
-    const proofs = st.stages.length && this.stageProofs ? (await this.stageProofs.bundle(st.runId, st.stages)).proofs : [];
-    if (st.runId) await this.lots?.release(siteId, lot, proofs).catch((e: unknown) => console.error("[ordo] ens release", e));
+    // OrdoLotResolver re-checks every stage and parameter proof the root folds before it records the release
+    const stages = st.stages.length && this.stageProofs ? await this.stageProofs.bundle(st.runId, st.stages) : { root: ZERO_ROOT, proofs: [] };
+    const params = st.params?.length && this.specProofs ? (await this.specProofs.bundle(st.runId, stages.root, st.params)).params : [];
+    if (st.runId) await this.lots?.release(siteId, lot, stages.proofs, params).catch((e: unknown) => console.error("[ordo] ens release", e));
     if (relay) await this.audit(siteId, "system:relayer", p.id, relay.status === "done" ? "recorded_onchain" : "onchain_failed", { txHash: relay.txHash, error: relay.error });
   }
 
@@ -511,6 +529,8 @@ export class Validation {
     });
     const audit = (await this.ledger.latest(300, id)).reverse().map((e) => ({ seq: e.seq, ts: e.ts, actor: e.actor, type: e.type.replace("validation.", ""), payload: e.payload, entryHash: e.entryHash }));
     const live = evidence.filter((e) => !e.removedAt);
+    // the linked stage's parameters as judged, so each automated check can be drawn against its band
+    const parameters = p.run_id && p.stage_code ? ((await this.engine.view(siteId, p.run_id).catch(() => null))?.stages.find((s) => s.code === p.stage_code)?.criteriaResults ?? []) : [];
     return {
       id: p.id,
       number: p.number,
@@ -535,6 +555,7 @@ export class Validation {
       returnedComment: p.returned_comment,
       assessment: p.precheck_json ? JSON.parse(p.precheck_json) : null,
       checks,
+      parameters,
       evidence,
       chain,
       readiness: this.readiness(p, checks, live, p.run_id && this.stageProofs && p.status !== "released" ? await this.stageProofs.pendingStages(p.run_id) : []),
