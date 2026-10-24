@@ -71,7 +71,7 @@ This change alters the contracts' interfaces. Redeploy:
 | --- | --- | --- |
 | `OrdoTrust` | The constructor takes a registrar: only it may register a site. | `TRUST_REGISTRAR` defaults to the deployer; set it to the relayer's address. Run `deploy:trust`, then `setup:hedera contracts` for `OrdoWorkOrders` and `OrdoPolicies`, which point at it. |
 | `OrdoEnsRoles`, `OrdoStageVerifier`, `OrdoLotResolver` | Device role and full-address member labels | `pnpm setup:ens-contracts` |
-| `OrdoSpecVerifier`, `OrdoLotResolver` | The resolver takes the spec verifier and `recordRelease` takes a fourth argument, the parameter proofs; the spec-check key comes from the public ceremony | `pnpm setup:ens-contracts` deploys both verifiers and the resolver; set the new `ENS_LOT_RESOLVER_ADDRESS`. Releases recorded with the old resolver stay where they are. |
+| `OrdoSpecVerifier`, `OrdoLotResolver` | The resolver takes the spec verifier and `recordRelease` takes a fourth argument, the parameter proofs; the spec-check key comes from the public ceremony | Done 24 Oct 2026 by the ENS setup workflow: `OrdoLotResolver` [`0x83bc…5795`](https://sepolia.etherscan.io/address/0x83bcae34de88b862f9641a408d926e1964b25795), `OrdoSpecVerifier` [`0xd4c4…ed17`](https://sepolia.etherscan.io/address/0xd4c4b8438c6519d6830668365068560e0239ed17); `ENS_ROLES_ADDRESS` and `ENS_LOT_RESOLVER_ADDRESS` set in Vercel. A later spec-check contribution regenerates `OrdoSpecVerifier` and needs the same run again. |
 
 What else changes:
 
